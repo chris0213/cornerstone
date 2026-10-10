@@ -22,4 +22,4 @@ class Backup(Base):
     duration_ms = Column(Integer)  # 采集耗时
     size = Column(Float)  # bytes
     note = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)

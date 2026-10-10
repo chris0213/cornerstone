@@ -6,22 +6,33 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from sqlalchemy import delete as sa_delete
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from src.database import get_db
 from src.models.report import MonthlyReport
 from src.models.user import User
 from src.api.auth import get_current_active_user
 from src.api.dependencies import require_super_admin
-from src.services.report_generator import (
-    collect_report_data,
-    generate_report_pdf,
-    get_report_filename,
-    REPORT_DIR
+from src.services.report_schedule_service import (
+    ReportError,
+    generate_report,
+    get_schedule,
+    save_schedule,
 )
 
 router = APIRouter(tags=["reports"])
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+class ScheduleConfig(BaseModel):
+    """定时推送配置"""
+    enabled: bool
+    day: int        # 每月 1-28 号
+    hour: int       # 0-23
+    minute: int     # 0-59
+    email_to: str = ""  # 留空只生成不发送
 
 
 def _require_manager_or_admin(current_user: User):
@@ -70,65 +81,47 @@ async def generate_monthly_report(
     """生成指定月份的月报 PDF"""
     _require_manager_or_admin(current_user)
 
-    # DB 用 UTC 时区感知时间
-    now = datetime.now(timezone.utc)
     # 用北京时间确定年月
-    beijing_tz = timezone(timedelta(hours=8))
-    bj_now = datetime.now(beijing_tz)
+    bj_now = datetime.now(BEIJING_TZ)
     if not year:
         year = bj_now.year
     if not month:
         month = bj_now.month
 
-    # 收集数据
-    data = await collect_report_data(year, month, db)
-
-    # 确保目录存在
-    report_dir = REPORT_DIR / str(year)
-    report_dir.mkdir(parents=True, exist_ok=True)
-
-    # 生成文件名
-    filename = get_report_filename(data)
-    output_path = str(report_dir / filename)
-
-    # 生成前先删除该月份所有旧记录（不管成功失败），只保留最新一次
-    await db.execute(
-        sa_delete(MonthlyReport).where(
-            MonthlyReport.year == year,
-            MonthlyReport.month == month
-        )
-    )
-    await db.commit()
-
-    # 生成 PDF
     try:
-        print(f"开始生成PDF... year={year}, month={month}")
-        generate_report_pdf(data, output_path)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        # 生成失败：删除已删除旧记录后不再新增失败记录，列表保持干净
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        raise HTTPException(status_code=500, detail=f"月报生成失败: {str(e)}")
-
-    file_size = os.path.getsize(output_path)
-
-    # 保存成功记录
-    report_record = MonthlyReport(
-        year=year, month=month,
-        file_path=output_path, file_size=file_size,
-        status="done", generated_by=current_user.username,
-        generated_at=now
-    )
-    db.add(report_record)
-    await db.commit()
+        result = await generate_report(db, year, month, current_user.username)
+    except ReportError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "message": "月报生成成功",
-        "filename": filename,
-        "file_size": file_size,
+        "filename": result["filename"],
+        "file_size": result["file_size"],
     }
+
+
+@router.get("/schedule")
+async def get_report_schedule(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取月报定时推送配置"""
+    _require_manager_or_admin(current_user)
+    return await get_schedule(db)
+
+
+@router.put("/schedule")
+async def update_report_schedule(
+    config: ScheduleConfig,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """更新月报定时推送配置（保存后下一分钟内生效）"""
+    _require_manager_or_admin(current_user)
+    try:
+        return await save_schedule(db, config.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/monthly/download/{year}/{month}")

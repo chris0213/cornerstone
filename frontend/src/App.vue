@@ -5,8 +5,11 @@ import { useAuthStore } from './store/auth'
 import { useBrandStore } from './store/brand'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import GlobalSearch from './components/GlobalSearch.vue'
+import AIAssistant from './components/AIAssistant.vue'
 import { useGlobalShortcut } from './lib/shortcuts'
 import api from './api/axios'
+import { ElMessage } from 'element-plus'
+import { startAlertSocket, onNewAlert } from './lib/alertSocket'
 import { useI18n } from 'vue-i18n'
 import { menuConfig } from './config/menuConfig'
 import { 
@@ -21,12 +24,9 @@ import {
   ArrowUp,
   User,
   TrendCharts,
-  Search
+  Search,
+  ChatDotRound
 } from '@element-plus/icons-vue'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
-
-const { Shield } = ElementPlusIconsVue
-
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -38,8 +38,10 @@ const ipamMenuOpen = ref(false)
 const backupMenuOpen = ref(false)
 const topologyMenuOpen = ref(false)
 const sidebarCollapsed = ref(false)
+const mobileSidebarOpen = ref(false)
 const activeTooltip = ref('')
 const globalSearchRef = ref<InstanceType<typeof GlobalSearch> | null>(null)
+const aiAssistantRef = ref<InstanceType<typeof AIAssistant> | null>(null)
 let hideTimer: ReturnType<typeof setTimeout> | null = null
 const isRouteReady = ref(false)
 
@@ -83,6 +85,16 @@ onMounted(() => {
   if (authStore.isLoggedIn) {
     authStore.fetchUser().catch(() => {
       // fetchUser 失败（token 过期等），axios 拦截器已处理跳转，这里静默即可
+    })
+    // 告警实时推送：新告警产生时全局弹出通知
+    startAlertSocket()
+    onNewAlert((alert) => {
+      const type = alert.severity === 'critical'
+        ? 'error'
+        : alert.severity === 'warning'
+          ? 'warning'
+          : 'info'
+      ElMessage({ message: alert.message, type, duration: 6000, showClose: true })
     })
   }
   loadLogo()
@@ -149,9 +161,6 @@ const iconMap: Record<string, any> = {
   TrendCharts,
   Search,
 }
-
-// 从 ElementPlusIconsVue 中动态获取 Shield
-iconMap.Shield = ElementPlusIconsVue.Shield
 
 const menuItems = computed((): Array<{ group: string; items: MenuItem[] }> => {
   return menuConfig.map((group) => ({
@@ -229,6 +238,14 @@ async function handleLogout() {
   await authStore.logout()
   await router.push('/login')
 }
+
+// 移动端底部Tab导航配置
+const mobileTabs = [
+  { path: '/', nameKey: 'nav.dashboard', icon: DataBoard },
+  { path: '/circuits', nameKey: 'nav.circuits', icon: Connection },
+  { path: '/alerts', nameKey: 'nav.alerts', icon: Bell },
+  { path: '/profile', nameKey: 'nav.profile', icon: User }
+]
 </script>
 
 <template>
@@ -238,7 +255,9 @@ async function handleLogout() {
   </div>
   
   <div v-else class="enterprise-shell">
-    <aside class="enterprise-sidebar" :class="{ collapsed: sidebarCollapsed }">
+    <!-- 移动端侧边栏遮罩 -->
+    <div v-if="mobileSidebarOpen" class="mobile-sidebar-overlay" @click="mobileSidebarOpen = false"></div>
+    <aside class="enterprise-sidebar" :class="{ collapsed: sidebarCollapsed, 'mobile-expanded': mobileSidebarOpen }">
       <div class="enterprise-brand">
         <div v-if="companyLogo" class="enterprise-brand-logo">
           <img :src="companyLogo" alt="Logo" class="brand-logo-image" />
@@ -262,6 +281,7 @@ async function handleLogout() {
                 :to="item.path" 
                 class="enterprise-nav-item" 
                 active-class="active"
+                @click="mobileSidebarOpen = false"
                 @mouseenter="showTooltip(item.name)"
                 @mouseleave="hideTooltip"
               >
@@ -355,8 +375,8 @@ async function handleLogout() {
         <div class="enterprise-topbar-left">
           <button
             class="mobile-menu-btn"
-            @click="sidebarCollapsed = !sidebarCollapsed"
-            :aria-label="sidebarCollapsed ? t('common.expandSidebar') : t('common.collapseSidebar')"
+            @click="mobileSidebarOpen = !mobileSidebarOpen"
+            :aria-label="mobileSidebarOpen ? t('common.collapseSidebar') : t('common.expandSidebar')"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18M3 12h18M3 18h18"/>
@@ -368,6 +388,15 @@ async function handleLogout() {
           </h1>
         </div>
         <div class="enterprise-topbar-right">
+          <button
+            class="ai-assistant-btn"
+            @click="aiAssistantRef?.open()"
+            :title="t('aiAssistant.title')"
+            :aria-label="t('aiAssistant.title')"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+            <span class="ai-assistant-text">{{ t('aiAssistant.title') }}</span>
+          </button>
           <button 
             class="global-search-btn" 
             @click="globalSearchRef?.open()"
@@ -394,8 +423,23 @@ async function handleLogout() {
         <RouterView />
       </section>
     </main>
+
   </div>
+  <!-- 移动端底部Tab导航（移到 enterprise-shell 外部，避免 flex 布局影响） -->
+  <nav class="mobile-bottom-tabs" v-if="!isLoginPage">
+    <RouterLink
+      v-for="tab in mobileTabs"
+      :key="tab.path"
+      :to="tab.path"
+      class="mobile-tab-item"
+      :class="{ active: route.path === tab.path }"
+    >
+      <el-icon><component :is="tab.icon" /></el-icon>
+      <span>{{ t(tab.nameKey) }}</span>
+    </RouterLink>
+  </nav>
   <GlobalSearch ref="globalSearchRef" />
+  <AIAssistant ref="aiAssistantRef" />
 </template>
 
 <style scoped>
@@ -446,6 +490,7 @@ async function handleLogout() {
 .enterprise-workspace {
   margin-left: 220px;
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -492,6 +537,9 @@ async function handleLogout() {
   color: #262626;
   margin: 0;
   min-height: 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .enterprise-page-title .page-title-loading {
@@ -568,6 +616,30 @@ async function handleLogout() {
   background: #fff;
 }
 
+.ai-assistant-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #1890ff;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.ai-assistant-btn:hover {
+  box-shadow: 0 4px 14px rgba(24, 144, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+.ai-assistant-btn .el-icon {
+  font-size: 16px;
+}
+
 .enterprise-search-wrapper {
   display: flex;
   align-items: center;
@@ -598,7 +670,9 @@ async function handleLogout() {
 .enterprise-content {
   flex: 1;
   padding: 24px;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
 .logout-text {
@@ -935,33 +1009,60 @@ async function handleLogout() {
 
 @media (max-width: 768px) {
   .enterprise-sidebar {
-    width: 0;
-    overflow-x: hidden;
-    box-shadow: none;
-    transition: width 0.3s ease;
+    position: fixed;
+    left: -240px;
+    width: 240px;
+    transition: left 0.3s ease;
   }
 
-  .enterprise-sidebar:not(.collapsed) {
-    width: 240px;
+  /* 移动端：只有手动展开时才显示 */
+  .enterprise-sidebar.mobile-expanded {
+    left: 0;
     box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
     z-index: 1500;
   }
 
-  .enterprise-sidebar.collapsed {
-    width: 0;
+  /* 移动端侧边栏遮罩 */
+  .mobile-sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1400;
   }
 
   .enterprise-workspace {
     margin-left: 0 !important;
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 
   .enterprise-topbar {
     padding: 0 12px;
     height: 56px;
+    min-width: 0;
+  }
+
+  .enterprise-topbar-left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .enterprise-topbar-right {
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .enterprise-page-title {
+    font-size: 16px;
+    max-width: 120px;
   }
 
   .enterprise-content {
     padding: 12px;
+    overflow-x: hidden;
   }
 
   .mobile-menu-btn {
@@ -969,12 +1070,20 @@ async function handleLogout() {
   }
 
   .search-btn-text,
-  .search-btn-kbd {
+  .search-btn-kbd,
+  .ai-assistant-text {
     display: none;
   }
 
   .global-search-btn {
     padding: 8px 10px;
+    min-width: auto;
+  }
+
+  /* 移动端隐藏语言切换器和用户信息 */
+  .language-switcher-wrapper,
+  .enterprise-user-info {
+    display: none !important;
   }
 
   /* 登录页语言切换器：适配移动端 */
@@ -988,6 +1097,57 @@ async function handleLogout() {
 @media (max-width: 1024px) and (min-width: 769px) {
   .enterprise-content {
     padding: 16px;
+  }
+}
+
+/* 移动端底部Tab导航 */
+.mobile-bottom-tabs {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-top: 1px solid #e4e7ed;
+  padding: 8px 0;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  z-index: 1000;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.mobile-tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  color: #909399;
+  text-decoration: none;
+  transition: all 0.2s;
+  font-size: 12px;
+}
+
+.mobile-tab-item .el-icon {
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+
+.mobile-tab-item.active {
+  color: #409eff;
+}
+
+.mobile-tab-item:hover {
+  color: #66b1ff;
+}
+
+@media (max-width: 768px) {
+  .mobile-bottom-tabs {
+    display: flex;
+    justify-content: space-around;
+  }
+
+  .enterprise-content {
+    padding-bottom: 70px;
   }
 }
 </style>

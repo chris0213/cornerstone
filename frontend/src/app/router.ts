@@ -15,18 +15,16 @@ const BackupsPage = () => import('../features/backups/BackupsPage.vue')
 const CredentialList = () => import('../features/backups/CredentialList.vue')
 const BackupTaskList = () => import('../features/backups/BackupTaskList.vue')
 const AlertsPage = () => import('../features/alerts/AlertsPage.vue')
-const SystemPage = () => import('../features/system/SystemPage.vue')
 const LogsPage = () => import('../features/system/LogsPage.vue')
 const SettingsPage = () => import('../features/system/SettingsPage.vue')
 const AISettingsPage = () => import('../features/system/AISettingsPage.vue')
+const AIChatLogsPage = () => import('../features/system/AIChatLogsPage.vue')
 const SitesPage = () => import('../features/sites/SitesPage.vue')
 const SiteTopology = () => import('../features/topology/SiteTopology.vue')
 const DeviceTopology = () => import('../features/topology/DeviceTopology.vue')
-const LinkMonitor = () => import('../features/monitoring/LinkMonitor.vue')
 const ProfilePage = () => import('../features/system/ProfilePage.vue')
-const InspectionPage = () => import('../features/inspection/InspectionPage.vue')
-const ReportsPage = () => import('../features/reports/ReportsPage.vue')
 const RackViewPage = () => import('../features/rack/RackView.vue')
+const ReportCenterPage = () => import('../features/reports/ReportCenterPage.vue')
 const UserManagement = () => import('../features/system/UserManagement.vue')
 const RoleManagement = () => import('../features/system/RoleManagement.vue')
 const SSOSettingsPage = () => import('../features/system/SSOSettingsPage.vue')
@@ -52,12 +50,12 @@ const router = createRouter({
     { path: '/backups', name: 'backups', component: BackupsPage, meta: { requiresAuth: true, permission: 'backups:read', titleKey: 'backups.title' } },
     { path: '/backups/credentials', name: 'backup-credentials', component: CredentialList, meta: { requiresAuth: true, permission: 'backups:read', titleKey: 'backups.credentials' } },
     { path: '/backups/tasks', name: 'backup-tasks', component: BackupTaskList, meta: { requiresAuth: true, permission: 'backups:read', titleKey: 'backups.tasks' } },
-    { path: '/monitor', name: 'monitor', component: LinkMonitor, meta: { requiresAuth: true, permission: 'topology:read', titleKey: 'monitor.title' } },
     { path: '/alerts', name: 'alerts', component: AlertsPage, meta: { requiresAuth: true, permission: 'alerts:read', titleKey: 'alerts.title' } },
-    { path: '/system', name: 'system', component: SystemPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'system.title' } },
+    { path: '/system', redirect: '/system/users' },
     { path: '/system/logs', name: 'system-logs', component: LogsPage, meta: { requiresAuth: true, permission: 'logs:read', titleKey: 'system.logs' } },
     { path: '/system/settings', name: 'system-settings', component: SettingsPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'system.settings' } },
     { path: '/system/ai-settings', name: 'ai-settings', component: AISettingsPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'system.aiSettings' } },
+    { path: '/system/ai-chat-logs', name: 'ai-chat-logs', component: AIChatLogsPage, meta: { requiresAuth: true, permission: null, titleKey: 'system.aiChatLogs' } },
     { path: '/system/logs-settings', name: 'logs-settings', component: LogsSettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.logsSettings' } },
     { path: '/system/security', name: 'system-security', component: SecuritySettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.security' } },
     { path: '/system/users', name: 'system-users', component: UserManagement, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.userManagement' } },
@@ -68,10 +66,11 @@ const router = createRouter({
     { path: '/sites', name: 'sites', component: SitesPage, meta: { requiresAuth: true, permission: 'sites:read', titleKey: 'sites.title' } },
     { path: '/topology/sites', name: 'topology-sites', component: SiteTopology, meta: { requiresAuth: true, permission: 'topology:read', titleKey: 'topology.siteTopology' } },
     { path: '/topology/devices', name: 'topology-devices', component: DeviceTopology, meta: { requiresAuth: true, permission: 'topology:read', titleKey: 'topology.deviceTopology' } },
+    { path: '/topology/rack', name: 'topology-rack', component: RackViewPage, meta: { requiresAuth: true, permission: 'devices:read', titleKey: 'topology.rackTopology' } },
     { path: '/topology', redirect: '/topology/sites' },
-    { path: '/inspection', name: 'inspection', component: InspectionPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'inspection.title' } },
-    { path: '/reports', name: 'reports', component: ReportsPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'reports.title' } },
-    { path: '/rack-view', name: 'rack-view', component: RackViewPage, meta: { requiresAuth: true, permission: 'devices:read', titleKey: 'rack.title' } }
+    { path: '/inspection', redirect: '/reports' },
+    { path: '/reports', name: 'reports', component: ReportCenterPage, meta: { requiresAuth: true, permission: 'reports:read', titleKey: 'reports.title' } },
+    { path: '/rack-view', redirect: '/topology/rack' }
   ]
 })
 

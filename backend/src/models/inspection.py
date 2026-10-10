@@ -66,6 +66,8 @@ class InspectionResult(Base):
     finished_at = Column(DateTime(timezone=True))
     duration_seconds = Column(Float)
 
+    ai_summary = Column(JSON, nullable=True, comment="AI异常二次研判结论")
+
 
 class InspectionDeviceResult(Base):
     """单台设备的巡检结果"""

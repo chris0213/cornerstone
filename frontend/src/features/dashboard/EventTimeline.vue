@@ -162,7 +162,7 @@ onMounted(() => {
     
     <div class="timeline-content" v-loading="loading">
       <div v-if="filteredEvents.length === 0 && !loading" class="empty-state">
-        <el-icon class="empty-icon"><CheckCircle /></el-icon>
+        <el-icon class="empty-icon"><CircleCheck /></el-icon>
         <div class="empty-text">一切正常 ✓</div>
         <div class="empty-sub">{{ timeRangeLabel }}，无相关事件</div>
       </div>

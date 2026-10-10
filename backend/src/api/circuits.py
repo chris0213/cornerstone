@@ -6,19 +6,18 @@ from datetime import datetime, timezone
 from ..database import get_db
 from ..models import Circuit, CircuitChange
 from ..schemas import CircuitCreate, CircuitUpdate, CircuitResponse
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
 
 @router.get("/", response_model=list[CircuitResponse])
 async def read_circuits(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Circuit).offset(skip).limit(limit))
+    result = await db.execute(select(Circuit).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 

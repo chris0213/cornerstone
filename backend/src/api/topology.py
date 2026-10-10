@@ -5,6 +5,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
+from src.api.dependencies import PageParams, pagination
 from src.models.site import Site
 from src.models.circuit import Circuit
 from src.models.device import Device
@@ -388,12 +389,11 @@ async def get_device_graph(
 # 设备连接关系 CRUD API
 @router.get("/device-links", response_model=List[DeviceLinkResponse])
 async def read_device_links(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db)
 ):
     """获取设备连接关系列表"""
-    query = select(DeviceLink).offset(skip).limit(limit)
+    query = select(DeviceLink).offset(page.skip).limit(page.limit)
     result = await db.execute(query)
     return result.scalars().all()
 

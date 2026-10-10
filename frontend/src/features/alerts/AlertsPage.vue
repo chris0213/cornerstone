@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox, ElDialog, ElButton, ElDatePicker, ElTabPane, ElTabs, ElBadge } from 'element-plus'
-import { Bell, Clock, Refresh, CircleClose, Warning, DataLine, Connection, DocumentChecked, View, InfoFilled, Calendar, Monitor, DocumentCopy, SetUp, BellFilled, WarningFilled } from '@element-plus/icons-vue'
+import { Bell, Refresh, CircleClose, Warning, DataLine, Connection, View, InfoFilled, Calendar, Monitor, DocumentCopy, SetUp, BellFilled, WarningFilled, ArrowDown } from '@element-plus/icons-vue'
 import AIPrediction from '../../components/AIPrediction.vue'
-import { getAlertRecords, type AlertRecord } from '../../api/alerts'
+import AnomalyCard, { type Anomaly } from './AnomalyCard.vue'
+import { onNewAlert } from '@/lib/alertSocket'
+import { getAlertRecords, acknowledgeAlert, resolveAlert, muteAlertRule, type AlertRecord } from '../../api/alerts'
 import { getLocale } from '@/i18n'
 import { useI18n } from 'vue-i18n'
 
@@ -38,22 +40,6 @@ interface ExpiringIP {
   remainingDays: number
 }
 
-// AI异常检测接口
-interface Anomaly {
-  id: string
-  type: string
-  title: string
-  description: string
-  level: 'danger' | 'warn' | 'info'
-  target: string
-  targetId: string
-  metric: string
-  currentValue: string
-  threshold: string
-  suggestion: string
-  detectedAt: string
-}
-
 const router = useRouter()
 const store = useAppStore()
 const { circuits, devices, backups, prefixes, ipAddresses } = storeToRefs(store)
@@ -62,7 +48,7 @@ const { prefixNetwork, updateIPAddress } = store
 const today = new Date()
 today.setHours(0, 0, 0, 0)
 
-const activeTab = ref('overview')
+const activeTab = ref('realtime')
 const showRenewDialog = ref(false)
 const editingIP = ref<ExpiringIP | null>(null)
 const renewForm = ref({
@@ -72,12 +58,23 @@ const renewForm = ref({
 const searchKeyword = ref('')
 const selectedLevel = ref('all')
 
-// 告警通知状态
-const notifications = ref<{id: string; type: string; title: string; message: string; time: string; read: boolean}[]>([])
+// 告警通知状态（含处置闭环：待处理 → 认领 → 处理）
+const notifications = ref<{
+  id: string
+  type: string
+  title: string
+  message: string
+  time: string
+  read: boolean
+  recordId: number
+  status: 'active' | 'acknowledged' | 'resolved'
+  ruleId: number | null
+}[]>([])
 
 async function loadAlertRecords() {
   try {
-    const records = await getAlertRecords({ status: 'active', limit: 10 })
+    // 拉取最近记录（含已认领/已处理），便于处置闭环与回看
+    const records = await getAlertRecords({ limit: 15 })
     notifications.value = records.map((record: AlertRecord) => {
       const now = new Date()
       const createdAt = new Date(record.created_at)
@@ -110,7 +107,10 @@ async function loadAlertRecords() {
         title,
         message: record.message,
         time: timeText,
-        read: false
+        read: record.status !== 'active',
+        recordId: record.id,
+        status: record.status,
+        ruleId: record.rule_id ?? null
       }
     })
   } catch (error) {
@@ -124,8 +124,54 @@ function markAllAsRead() {
   ElMessage.success(t('alerts.markedAllAsRead'))
 }
 
+// ===== 告警处置：认领 / 处理 / 静默 =====
+async function handleAcknowledge(notification: typeof notifications.value[number]) {
+  try {
+    await acknowledgeAlert(notification.recordId)
+    ElMessage.success(t('alerts.acknowledgeSuccess'))
+    await loadAlertRecords()
+  } catch (error) {
+    console.error('认领告警失败:', error)
+    ElMessage.error(t('alerts.acknowledgeFailed'))
+  }
+}
+
+async function handleResolve(notification: typeof notifications.value[number]) {
+  try {
+    await resolveAlert(notification.recordId)
+    ElMessage.success(t('alerts.resolveSuccess'))
+    await loadAlertRecords()
+  } catch (error) {
+    console.error('处理告警失败:', error)
+    ElMessage.error(t('alerts.resolveFailed'))
+  }
+}
+
+async function handleMute(notification: typeof notifications.value[number], hours: number) {
+  if (!notification.ruleId) return
+  try {
+    await muteAlertRule(notification.ruleId, hours)
+    ElMessage.success(t('alerts.muteSuccess', { hours }))
+    await loadAlertRecords()
+  } catch (error: any) {
+    console.error('静默规则失败:', error)
+    ElMessage.error(error.response?.data?.detail || t('alerts.muteFailed'))
+  }
+}
+
+let unsubscribeRealtimeAlert: (() => void) | null = null
+
 onMounted(() => {
   loadAlertRecords()
+  // 实时推送到达时刷新告警通知列表
+  unsubscribeRealtimeAlert = onNewAlert(() => {
+    loadAlertRecords()
+  })
+})
+
+onUnmounted(() => {
+  unsubscribeRealtimeAlert?.()
+  unsubscribeRealtimeAlert = null
 })
 
 function daysUntilDate(dateText: string): number {
@@ -174,65 +220,20 @@ const filteredExpiringIPs = computed(() => {
   return result
 })
 
-const filteredDeviceAlerts = computed(() => {
-  let result = deviceAlerts.value
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(alert => 
-      alert.title.toLowerCase().includes(keyword) ||
-      (alert.detail && alert.detail.toLowerCase().includes(keyword))
-    )
-  }
-  if (selectedLevel.value !== 'all') {
-    result = result.filter(alert => alert.level === selectedLevel.value)
-  }
-  return result
-})
+/** 统一的告警筛选：关键字（title/detail）+ 严重等级 */
+function filterAlerts(list: Alert[], getKeywords: (a: Alert) => string[]): Alert[] {
+  const kw = searchKeyword.value.toLowerCase()
+  const level = selectedLevel.value
+  return list.filter(a =>
+    (!kw || getKeywords(a).some(f => f.toLowerCase().includes(kw))) &&
+    (level === 'all' || a.level === level)
+  )
+}
 
-const filteredCircuitAlerts = computed(() => {
-  let result = circuitAlerts.value
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(alert => 
-      alert.title.toLowerCase().includes(keyword) ||
-      (alert.detail && alert.detail.toLowerCase().includes(keyword))
-    )
-  }
-  if (selectedLevel.value !== 'all') {
-    result = result.filter(alert => alert.level === selectedLevel.value)
-  }
-  return result
-})
-
-const filteredBackupAlerts = computed(() => {
-  let result = backupAlerts.value
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(alert => 
-      alert.title.toLowerCase().includes(keyword) ||
-      (alert.detail && alert.detail.toLowerCase().includes(keyword))
-    )
-  }
-  if (selectedLevel.value !== 'all') {
-    result = result.filter(alert => alert.level === selectedLevel.value)
-  }
-  return result
-})
-
-const filteredPrefixAlerts = computed(() => {
-  let result = prefixAlerts.value
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(alert => 
-      alert.title.toLowerCase().includes(keyword) ||
-      (alert.detail && alert.detail.toLowerCase().includes(keyword))
-    )
-  }
-  if (selectedLevel.value !== 'all') {
-    result = result.filter(alert => alert.level === selectedLevel.value)
-  }
-  return result
-})
+const filteredDeviceAlerts = computed(() => filterAlerts(deviceAlerts.value, a => [a.title, a.detail || '']))
+const filteredCircuitAlerts = computed(() => filterAlerts(circuitAlerts.value, a => [a.title, a.detail || '']))
+const filteredBackupAlerts = computed(() => filterAlerts(backupAlerts.value, a => [a.title, a.detail || '']))
+const filteredPrefixAlerts = computed(() => filterAlerts(prefixAlerts.value, a => [a.title, a.detail || '']))
 
 // 专线合同预警
 const circuitAlerts = computed((): Alert[] => {
@@ -506,16 +507,7 @@ const dangerAlerts = computed(() => allAlerts.value.filter(a => a.level === 'dan
 const warnAlerts = computed(() => allAlerts.value.filter(a => a.level === 'warn'))
 const unreadCount = computed(() => notifications.value.filter(n => !n.read).length)
 
-function getAlertIcon(type: string) {
-  const map: Record<string, any> = {
-    [t('alerts.circuitContract')]: Connection,
-    [t('alerts.deviceWarranty')]: Monitor,
-    [t('alerts.backupFailed')]: DocumentCopy,
-    [t('alerts.subnetCapacity')]: SetUp,
-    [t('alerts.ipExpiring')]: Calendar
-  }
-  return map[type] || Bell
-}
+
 
 function getLevelType(level: string) {
   const map: Record<string, string> = {
@@ -688,7 +680,55 @@ function goToAISettings() {
             </div>
             <div class="notification-message">{{ notification.message }}</div>
           </div>
-          <div class="notification-time">{{ notification.time }}</div>
+          <div class="notification-side">
+            <div class="notification-time">
+              {{ notification.time }}
+              <el-tag
+                v-if="notification.status !== 'active'"
+                :type="notification.status === 'resolved' ? 'success' : 'primary'"
+                size="small"
+                effect="plain"
+              >
+                {{ notification.status === 'resolved' ? t('alerts.resolved') : t('alerts.acknowledged') }}
+              </el-tag>
+            </div>
+            <div class="notification-ops">
+              <el-button
+                v-if="notification.status === 'active'"
+                size="small"
+                type="primary"
+                plain
+                @click="handleAcknowledge(notification)"
+              >
+                {{ t('alerts.acknowledge') }}
+              </el-button>
+              <el-button
+                v-if="notification.status === 'acknowledged'"
+                size="small"
+                type="success"
+                plain
+                @click="handleResolve(notification)"
+              >
+                {{ t('alerts.resolve') }}
+              </el-button>
+              <el-dropdown
+                v-if="notification.status === 'active' && notification.ruleId"
+                @command="(cmd: number) => handleMute(notification, cmd)"
+              >
+                <el-button size="small" plain>
+                  {{ t('alerts.mute') }}
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item :command="1">{{ t('alerts.mute1h') }}</el-dropdown-item>
+                    <el-dropdown-item :command="8">{{ t('alerts.mute8h') }}</el-dropdown-item>
+                    <el-dropdown-item :command="24">{{ t('alerts.mute24h') }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </div>
         </div>
       </div>
     </el-card>
@@ -725,25 +765,8 @@ function goToAISettings() {
 
     <!-- Tab页签内容 -->
     <el-tabs v-model="activeTab" type="card" class="alerts-tabs">
-      <!-- 概览 -->
-      <el-tab-pane :label="t('alerts.overview')" name="overview">
-        <!-- AI智能预测中心 -->
-        <el-card class="table-card" shadow="never">
-          <template #header>
-            <div class="table-header">
-              <div class="card-title">
-                <el-icon><InfoFilled /></el-icon>
-                {{ t('alerts.aiPredictionCenter') }}
-              </div>
-              <el-tag type="primary" effect="light">
-                <InfoFilled style="width: 16px; height: 16px; margin-right: 4px;" />
-                {{ t('alerts.llmPowered') }}
-              </el-tag>
-            </div>
-          </template>
-          <AIPrediction />
-        </el-card>
-
+      <!-- 实时告警 -->
+      <el-tab-pane :label="t('alerts.realtimeAlerts')" name="realtime">
         <!-- AI异常检测 -->
         <el-card v-if="aiAnomalies.length > 0" class="table-card" shadow="never">
           <template #header>
@@ -758,273 +781,10 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div class="anomaly-list">
-            <div 
-              v-for="anomaly in aiAnomalies" 
-              :key="anomaly.id" 
-              class="anomaly-item"
-              :class="`anomaly-${anomaly.level}`"
-            >
-              <div class="anomaly-icon">
-                <el-icon>
-                  <component :is="anomaly.type.includes(t('alerts.device')) ? Monitor : anomaly.type.includes(t('alerts.circuit')) ? Connection : anomaly.type.includes(t('alerts.backup')) ? DocumentChecked : DataLine" />
-                </el-icon>
-              </div>
-              <div class="anomaly-content">
-                <div class="anomaly-header">
-                  <el-tag :type="anomaly.level === 'danger' ? 'danger' : 'warning'" effect="dark" size="small">
-                    {{ anomaly.type }}
-                  </el-tag>
-                  <span class="anomaly-title">{{ anomaly.title }}</span>
-                </div>
-                <div class="anomaly-description">{{ anomaly.description }}</div>
-                <div class="anomaly-metrics">
-                  <span class="metric-item">
-                    <span class="metric-label">{{ t('alerts.currentValue') }}：</span>
-                    <span class="metric-value">{{ anomaly.currentValue }}</span>
-                  </span>
-                  <span class="metric-item">
-                    <span class="metric-label">{{ t('alerts.threshold') }}：</span>
-                    <span class="metric-value">{{ anomaly.threshold }}</span>
-                  </span>
-                </div>
-                <div class="anomaly-suggestion">
-                  <el-icon><Clock /></el-icon>
-                  {{ anomaly.suggestion }}
-                </div>
-                <div class="anomaly-footer">
-                  <span class="anomaly-detected-at">
-                    <el-icon><Clock /></el-icon>
-                    {{ t('alerts.detectedAt') }}：{{ anomaly.detectedAt }}
-                  </span>
-                </div>
-              </div>
-              <div class="anomaly-action">
-                <el-button type="primary" link @click="handleViewAnomalyTarget(anomaly)">
-                  <el-icon><View /></el-icon>
-                  {{ t('common.viewDetail') }}
-                </el-button>
-              </div>
-            </div>
-          </div>
+          <AnomalyCard :anomalies="aiAnomalies" @view-target="handleViewAnomalyTarget" />
         </el-card>
 
-        <!-- 快速预警列表 -->
-        <el-card v-if="allAlerts.length > 0" class="table-card" shadow="never">
-          <template #header>
-            <div class="table-header">
-              <div class="card-title">
-                <el-icon><Bell /></el-icon>
-                {{ t('alerts.alertOverview') }}
-              </div>
-            </div>
-          </template>
-
-          <div class="quick-alert-list">
-            <div 
-              v-for="(alert, index) in allAlerts.slice(0, 5)" 
-              :key="index" 
-              class="quick-alert-item" 
-              :class="`alert-${alert.level}`"
-            >
-              <div class="quick-alert-icon">
-                <el-icon><component :is="getAlertIcon(alert.type)" /></el-icon>
-              </div>
-              <div class="quick-alert-content">
-                <div class="quick-alert-title">{{ alert.title }}</div>
-                <div class="quick-alert-meta">{{ alert.type }} · {{ alert.due }}</div>
-              </div>
-              <el-tag :type="getLevelType(alert.level)" effect="light" size="small">
-                {{ alert.days > 0 ? `${alert.days}${t('alerts.days')}` : t('alerts.immediately') }}
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-      </el-tab-pane>
-
-      <!-- IP到期预警 -->
-      <el-tab-pane v-if="!isViewer" :label="t('alerts.ipExpiring')" name="ip-expire">
-        <el-card class="table-card" shadow="never">
-          <template #header>
-            <div class="table-header">
-              <div class="card-title">
-                <el-icon><Calendar /></el-icon>
-                {{ t('alerts.ipExpiringAlerts') }}
-              </div>
-              <el-tag :type="expiringIPs.length > 0 ? 'warning' : 'success'" effect="light">
-                {{ expiringIPs.length }} {{ t('alerts.alerts') }}
-              </el-tag>
-            </div>
-          </template>
-
-          <div v-if="filteredExpiringIPs.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noExpiringIPs')" />
-          </div>
-
-          <el-table
-            v-else
-            class="alerts-ip-expire-table"
-            :data="filteredExpiringIPs"
-            style="width: 100%"
-            stripe
-            border
-          >
-            <el-table-column prop="address" :label="t('alerts.ipAddress')" min-width="120">
-              <template #default="{ row }">
-                <code class="ip-address">{{ row.address }}</code>
-              </template>
-            </el-table-column>
-            <el-table-column prop="prefixId" :label="t('alerts.subnet')" min-width="140">
-              <template #default="{ row }">{{ prefixNetwork(row.prefixId) }}</template>
-            </el-table-column>
-            <el-table-column prop="usage" :label="t('alerts.usage')" min-width="100" />
-            <el-table-column prop="owner" :label="t('alerts.owner')" min-width="80" />
-            <el-table-column prop="expireAt" :label="t('alerts.expireDate')" min-width="110" />
-            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
-              <template #default="{ row }">
-                <el-tag 
-                  :type="row.remainingDays <= 7 ? 'danger' : 'warning'" 
-                  effect="light"
-                  :class="{ 'bold': row.remainingDays <= 7 }"
-                >
-                  {{ row.remainingDays }} {{ t('alerts.days') }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('common.actions')" min-width="140" align="center">
-              <template #default="{ row }">
-                <el-button 
-                  link 
-                  type="primary" 
-                  size="small" 
-                  @click="openRenewDialog(row)"
-                >
-                  <el-icon><Refresh /></el-icon>
-                  {{ t('alerts.renew') }}
-                </el-button>
-                <el-button 
-                  link 
-                  type="danger" 
-                  size="small" 
-                  @click="handleReleaseIP(row)"
-                >
-                  <el-icon><CircleClose /></el-icon>
-                  {{ t('alerts.release') }}
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
-      <!-- 设备预警 -->
-      <el-tab-pane :label="t('alerts.deviceAlerts')" name="device">
-        <el-card class="table-card" shadow="never">
-          <template #header>
-            <div class="table-header">
-              <div class="card-title">
-                <el-icon><Monitor /></el-icon>
-                {{ t('alerts.deviceWarrantyAlerts') }}
-              </div>
-              <el-tag :type="deviceAlerts.length > 0 ? 'warning' : 'success'" effect="light">
-                {{ deviceAlerts.length }} {{ t('alerts.alerts') }}
-              </el-tag>
-            </div>
-          </template>
-
-          <div v-if="filteredDeviceAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noDeviceWarrantyAlerts')" />
-          </div>
-
-          <el-table v-else class="alerts-device-table" :data="filteredDeviceAlerts" style="width: 100%" stripe border>
-            <el-table-column :label="t('alerts.alertType')" min-width="100">
-              <template #default="{ row }">
-                <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.device')" min-width="150">
-              <template #default="{ row }">{{ row.title }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.serialNumber')" min-width="100">
-              <template #default="{ row }">{{ row.detail || '-' }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.warrantyExpire')" min-width="110">
-              <template #default="{ row }">{{ row.due }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
-              <template #default="{ row }">
-                <el-tag :type="getLevelType(row.level)" effect="light" size="small">
-                  {{ row.days > 0 ? `${row.days} ${t('alerts.days')}` : t('alerts.expired') }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('common.actions')" min-width="100" align="center">
-              <template #default="{ row }">
-                <el-button v-if="row.deviceId" type="primary" link size="small" @click="handleViewDevice(row.deviceId)">
-                  <el-icon><View /></el-icon>
-                  {{ t('common.viewDetail') }}
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
-      <!-- 专线预警 -->
-      <el-tab-pane :label="t('alerts.circuitAlerts')" name="circuit">
-        <el-card class="table-card" shadow="never">
-          <template #header>
-            <div class="table-header">
-              <div class="card-title">
-                <el-icon><Connection /></el-icon>
-                {{ t('alerts.circuitContractAlerts') }}
-              </div>
-              <el-tag :type="circuitAlerts.length > 0 ? 'warning' : 'success'" effect="light">
-                {{ circuitAlerts.length }} {{ t('alerts.alerts') }}
-              </el-tag>
-            </div>
-          </template>
-
-          <div v-if="filteredCircuitAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noCircuitContractAlerts')" />
-          </div>
-
-          <el-table v-else class="alerts-circuit-table" :data="filteredCircuitAlerts" style="width: 100%" stripe border>
-            <el-table-column :label="t('alerts.alertType')" min-width="100">
-              <template #default="{ row }">
-                <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.circuit')" min-width="150">
-              <template #default="{ row }">{{ row.title }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.circuitNo')" min-width="100">
-              <template #default="{ row }">{{ row.detail || '-' }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.contractExpire')" min-width="110">
-              <template #default="{ row }">{{ row.due }}</template>
-            </el-table-column>
-            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
-              <template #default="{ row }">
-                <el-tag :type="getLevelType(row.level)" effect="light" size="small">
-                  {{ row.days > 0 ? `${row.days} ${t('alerts.days')}` : t('alerts.expired') }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('common.actions')" min-width="100" align="center">
-              <template #default="{ row }">
-                <el-button v-if="row.circuitId" type="primary" link size="small" @click="handleViewCircuit(row.circuitId)">
-                  <el-icon><View /></el-icon>
-                  {{ t('common.viewDetail') }}
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
-      <!-- 备份预警 -->
-      <el-tab-pane v-if="!isViewer" :label="t('alerts.backupAlerts')" name="backup">
+        <!-- 备份失败告警 -->
         <el-card class="table-card" shadow="never">
           <template #header>
             <div class="table-header">
@@ -1076,8 +836,187 @@ function goToAISettings() {
         </el-card>
       </el-tab-pane>
 
-      <!-- 子网预警 -->
-      <el-tab-pane v-if="!isViewer" :label="t('alerts.subnetAlerts')" name="prefix">
+      <!-- 到期预警 -->
+      <el-tab-pane :label="t('alerts.expiringAlerts')" name="expiring">
+        <!-- 专线合同预警 -->
+        <el-card class="table-card" shadow="never">
+          <template #header>
+            <div class="table-header">
+              <div class="card-title">
+                <el-icon><Connection /></el-icon>
+                {{ t('alerts.circuitContractAlerts') }}
+              </div>
+              <el-tag :type="circuitAlerts.length > 0 ? 'warning' : 'success'" effect="light">
+                {{ circuitAlerts.length }} {{ t('alerts.alerts') }}
+              </el-tag>
+            </div>
+          </template>
+
+          <div v-if="filteredCircuitAlerts.length === 0" class="empty-state">
+            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noCircuitContractAlerts')" />
+          </div>
+
+          <el-table v-else class="alerts-circuit-table" :data="filteredCircuitAlerts" style="width: 100%" stripe border>
+            <el-table-column :label="t('alerts.alertType')" min-width="100">
+              <template #default="{ row }">
+                <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.circuit')" min-width="150">
+              <template #default="{ row }">{{ row.title }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.circuitNo')" min-width="100">
+              <template #default="{ row }">{{ row.detail || '-' }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.contractExpire')" min-width="110">
+              <template #default="{ row }">{{ row.due }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="getLevelType(row.level)" effect="light" size="small">
+                  {{ row.days > 0 ? `${row.days} ${t('alerts.days')}` : t('alerts.expired') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('common.actions')" min-width="100" align="center">
+              <template #default="{ row }">
+                <el-button v-if="row.circuitId" type="primary" link size="small" @click="handleViewCircuit(row.circuitId)">
+                  <el-icon><View /></el-icon>
+                  {{ t('common.viewDetail') }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+
+        <!-- 设备保修预警 -->
+        <el-card class="table-card" shadow="never">
+          <template #header>
+            <div class="table-header">
+              <div class="card-title">
+                <el-icon><Monitor /></el-icon>
+                {{ t('alerts.deviceWarrantyAlerts') }}
+              </div>
+              <el-tag :type="deviceAlerts.length > 0 ? 'warning' : 'success'" effect="light">
+                {{ deviceAlerts.length }} {{ t('alerts.alerts') }}
+              </el-tag>
+            </div>
+          </template>
+
+          <div v-if="filteredDeviceAlerts.length === 0" class="empty-state">
+            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noDeviceWarrantyAlerts')" />
+          </div>
+
+          <el-table v-else class="alerts-device-table" :data="filteredDeviceAlerts" style="width: 100%" stripe border>
+            <el-table-column :label="t('alerts.alertType')" min-width="100">
+              <template #default="{ row }">
+                <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.device')" min-width="150">
+              <template #default="{ row }">{{ row.title }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.serialNumber')" min-width="100">
+              <template #default="{ row }">{{ row.detail || '-' }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.warrantyExpire')" min-width="110">
+              <template #default="{ row }">{{ row.due }}</template>
+            </el-table-column>
+            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="getLevelType(row.level)" effect="light" size="small">
+                  {{ row.days > 0 ? `${row.days} ${t('alerts.days')}` : t('alerts.expired') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('common.actions')" min-width="100" align="center">
+              <template #default="{ row }">
+                <el-button v-if="row.deviceId" type="primary" link size="small" @click="handleViewDevice(row.deviceId)">
+                  <el-icon><View /></el-icon>
+                  {{ t('common.viewDetail') }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+
+        <!-- IP到期预警 -->
+        <el-card v-if="!isViewer" class="table-card" shadow="never">
+          <template #header>
+            <div class="table-header">
+              <div class="card-title">
+                <el-icon><Calendar /></el-icon>
+                {{ t('alerts.ipExpiringAlerts') }}
+              </div>
+              <el-tag :type="expiringIPs.length > 0 ? 'warning' : 'success'" effect="light">
+                {{ expiringIPs.length }} {{ t('alerts.alerts') }}
+              </el-tag>
+            </div>
+          </template>
+
+          <div v-if="filteredExpiringIPs.length === 0" class="empty-state">
+            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noExpiringIPs')" />
+          </div>
+
+          <el-table
+            v-else
+            class="alerts-ip-expire-table"
+            :data="filteredExpiringIPs"
+            style="width: 100%"
+            stripe
+            border
+          >
+            <el-table-column prop="address" :label="t('alerts.ipAddress')" min-width="120">
+              <template #default="{ row }">
+                <code class="ip-address">{{ row.address }}</code>
+              </template>
+            </el-table-column>
+            <el-table-column prop="prefixId" :label="t('alerts.subnet')" min-width="140">
+              <template #default="{ row }">{{ prefixNetwork(row.prefixId) }}</template>
+            </el-table-column>
+            <el-table-column prop="usage" :label="t('alerts.usage')" min-width="100" />
+            <el-table-column prop="owner" :label="t('alerts.owner')" min-width="80" />
+            <el-table-column prop="expireAt" :label="t('alerts.expireDate')" min-width="110" />
+            <el-table-column :label="t('alerts.daysRemaining')" min-width="100" align="center">
+              <template #default="{ row }">
+                <el-tag
+                  :type="row.remainingDays <= 7 ? 'danger' : 'warning'"
+                  effect="light"
+                  :class="{ 'bold': row.remainingDays <= 7 }"
+                >
+                  {{ row.remainingDays }} {{ t('alerts.days') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('common.actions')" min-width="140" align="center">
+              <template #default="{ row }">
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  @click="openRenewDialog(row)"
+                >
+                  <el-icon><Refresh /></el-icon>
+                  {{ t('alerts.renew') }}
+                </el-button>
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  @click="handleReleaseIP(row)"
+                >
+                  <el-icon><CircleClose /></el-icon>
+                  {{ t('alerts.release') }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- 容量预警 -->
+      <el-tab-pane v-if="!isViewer" :label="t('alerts.capacityAlerts')" name="capacity">
+        <!-- 子网容量预警 -->
         <el-card class="table-card" shadow="never">
           <template #header>
             <div class="table-header">
@@ -1126,6 +1065,43 @@ function goToAISettings() {
               </template>
             </el-table-column>
           </el-table>
+        </el-card>
+
+        <!-- IP池耗尽预测 -->
+        <el-card v-if="ipPoolAnomaly" class="table-card" shadow="never">
+          <template #header>
+            <div class="table-header">
+              <div class="card-title">
+                <el-icon><DataLine /></el-icon>
+                {{ t('alerts.ipPoolWarning') }}
+              </div>
+              <el-tag :type="ipPoolAnomaly.level === 'danger' ? 'danger' : 'warning'" effect="light">
+                {{ t('alerts.aiPrediction') }}
+              </el-tag>
+            </div>
+          </template>
+
+          <AnomalyCard v-if="ipPoolAnomaly" :anomalies="[ipPoolAnomaly]" @view-target="handleViewAnomalyTarget" />
+        </el-card>
+      </el-tab-pane>
+
+      <!-- 概览（保留用于向后兼容，但默认不显示） -->
+      <el-tab-pane :label="t('alerts.overview')" name="overview" v-if="false">
+        <!-- AI智能预测中心 -->
+        <el-card class="table-card" shadow="never">
+          <template #header>
+            <div class="table-header">
+              <div class="card-title">
+                <el-icon><InfoFilled /></el-icon>
+                {{ t('alerts.aiPredictionCenter') }}
+              </div>
+              <el-tag type="primary" effect="light">
+                <InfoFilled style="width: 16px; height: 16px; margin-right: 4px;" />
+                {{ t('alerts.llmPowered') }}
+              </el-tag>
+            </div>
+          </template>
+          <AIPrediction />
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -1418,6 +1394,24 @@ function goToAISettings() {
 .notification-time {
   font-size: 12px;
   color: #bfbfbf;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.notification-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.notification-ops {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .alerts-tabs {
@@ -1452,125 +1446,6 @@ function goToAISettings() {
 
 .bold {
   font-weight: bold;
-}
-
-.anomaly-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.anomaly-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 20px;
-  background: linear-gradient(135deg, #fffbe6 0%, #fff7e6 100%);
-  border-radius: 12px;
-  border: 1px solid #ffe58f;
-  transition: all 0.2s ease;
-}
-
-.anomaly-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-.anomaly-item.anomaly-danger {
-  background: linear-gradient(135deg, #fff2f0 0%, #fff0f0 100%);
-  border-color: #ffccc7;
-}
-
-.anomaly-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  color: #faad14;
-  flex-shrink: 0;
-}
-
-.anomaly-danger .anomaly-icon {
-  color: #ff4d4f;
-}
-
-.anomaly-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.anomaly-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.anomaly-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #262626;
-}
-
-.anomaly-description {
-  font-size: 14px;
-  color: #595959;
-  margin-bottom: 12px;
-  line-height: 1.5;
-}
-
-.anomaly-metrics {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 12px;
-}
-
-.metric-item {
-  font-size: 13px;
-}
-
-.metric-label {
-  color: #8c8c8c;
-}
-
-.metric-value {
-  color: #262626;
-  font-weight: 500;
-}
-
-.anomaly-suggestion {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 13px;
-  color: #52c41a;
-  padding: 10px 14px;
-  background: #f6ffed;
-  border-radius: 6px;
-  margin-bottom: 12px;
-}
-
-.anomaly-suggestion .el-icon {
-  color: #52c41a;
-  font-size: 14px;
-  margin-top: 1px;
-}
-
-.anomaly-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.anomaly-detected-at {
-  font-size: 12px;
-  color: #bfbfbf;
-}
-
-.anomaly-action {
-  flex-shrink: 0;
 }
 
 .quick-alert-list {
@@ -1740,25 +1615,16 @@ function goToAISettings() {
 
 @media (max-width: 768px) {
   .overview-cards {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
   }
-  
+
   .page-header {
     flex-direction: column;
     gap: 16px;
   }
-  
+
   .quick-alert-list {
     grid-template-columns: 1fr;
-  }
-  
-  .anomaly-item {
-    flex-direction: column;
-  }
-  
-  .anomaly-action {
-    width: 100%;
-    margin-top: 12px;
   }
 }
 

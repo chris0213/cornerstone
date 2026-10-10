@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from typing import Optional
-from httpx import AsyncClient, Timeout
+from httpx import AsyncClient, Timeout, AsyncHTTPTransport
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -42,12 +42,24 @@ async def get_ai_config(db: AsyncSession) -> Optional[AIConfig]:
     try:
         cfg = json.loads(setting.value)
         if isinstance(cfg, list):
-            default_config = next((c for c in cfg if c.get("is_default") and c.get("enabled")), None)
+            # 只在「已启用且真正配置好（有 api_key 与 api_url）」的配置里挑选。
+            # 之前的默认项(openai)虽 is_default=true 但 key 为空，会把已配置好的项
+            # （如 zhipu）挡在门外，导致整个 AI 走纯关键词兜底。
+            # 这里让默认项失效时回退到第一个真正可用的配置。
+            enabled = [c for c in cfg if c.get("enabled")]
+            default_config = next(
+                (
+                    c for c in enabled
+                    if c.get("is_default") and c.get("api_key") and c.get("api_url")
+                ),
+                None,
+            )
             if not default_config:
-                default_config = next((c for c in cfg if c.get("enabled")), None)
-            if not default_config:
-                default_config = cfg[0] if cfg else None
-            
+                default_config = next(
+                    (c for c in enabled if c.get("api_key") and c.get("api_url")),
+                    None,
+                )
+
             if default_config:
                 provider = default_config.get("provider", "").lower()
                 api_key = default_config.get("api_key", "")
@@ -176,7 +188,7 @@ async def _call_openai_compatible(
         "temperature": 0.1,
     }
 
-    async with AsyncClient(timeout=Timeout(timeout)) as client:
+    async with AsyncClient(timeout=Timeout(timeout), transport=AsyncHTTPTransport(proxy=None)) as client:
         resp = await client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
@@ -209,7 +221,7 @@ async def _call_anthropic(
         "temperature": 0.1,
     }
 
-    async with AsyncClient(timeout=Timeout(timeout)) as client:
+    async with AsyncClient(timeout=Timeout(timeout), transport=AsyncHTTPTransport(proxy=None)) as client:
         resp = await client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()

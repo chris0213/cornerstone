@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, Index
 from sqlalchemy.sql import func
 
 from ..database import Base
@@ -6,6 +6,9 @@ from ..database import Base
 
 class CircuitIncident(Base):
     __tablename__ = "circuit_incidents"
+    __table_args__ = (
+        Index('ix_circuit_incidents_status_started', 'status', 'started_at'),
+    )
     
     id = Column(Integer, primary_key=True, index=True)
     circuit_id = Column(Integer, ForeignKey("circuits.id"), nullable=False)

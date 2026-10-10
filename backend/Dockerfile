@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install "poetry==${POETRY_VERSION}"
 
-COPY pyproject.toml ./
-# 兼容无 poetry.lock 的情况；--without dev 只装运行时依赖
+COPY pyproject.toml poetry.lock ./
+# 使用 poetry.lock 锁定版本，保证构建可复现（M0 升级的 CVE 修复版本真正生效）；无 lock 时回退到 pyproject 解析
 RUN poetry install --without dev --no-root
 
 # ===== 运行阶段 =====

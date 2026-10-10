@@ -31,6 +31,9 @@ SYSTEM_PROMPT = """
 - prefixes：IP子网（网段、使用率、站点）
 - backups：配置备份记录（设备、时间、状态、是否有变更）
 - inspection_results：巡检记录（设备在线状态、离线记录）
+- topology：设备拓扑连线（源设备/接口 → 目标设备/接口）
+- vlans：VLAN 配置（VLAN ID、名称、状态）
+- audit_logs：审计日志（操作人、动作、资源、时间）
 
 你必须返回严格的 JSON 格式，不要返回任何其他内容：
 {
@@ -57,7 +60,7 @@ SYSTEM_PROMPT = """
 """
 
 
-async def parse_user_query(question: str) -> dict:
+async def parse_user_query(question: str, last_data_type: str = "") -> dict:
     """
     调用大模型解析用户问题为结构化查询意图
     失败时返回降级查询（full text search fallback）
@@ -88,14 +91,23 @@ async def parse_user_query(question: str) -> dict:
             logger.warning(f"AI parse failed, fallback to keyword search: {e}")
 
     # 降级：关键字匹配
-    return _fallback_parse(question)
+    return _fallback_parse(question, last_data_type)
 
 
-def _fallback_parse(question: str) -> dict:
+# execute_query 支持的全部数据类型，用于追问时沿用上一轮的上下文
+VALID_DATA_TYPES = {
+    "sites", "circuits", "devices", "ip_addresses", "prefixes",
+    "backups", "inspection_results", "topology", "vlans", "audit_logs",
+}
+
+
+def _fallback_parse(question: str, last_data_type: str = "") -> dict:
     """降级解析：通过关键字匹配确定查询类型"""
     q = question.lower()
+    data_type: Optional[str] = None
 
-    # 优先级处理：长句优先（避免"电路备份"误匹配到 circuits）
+    # 优先级处理：长句优先（避免"电路备份"误匹配到 circuits）；
+    # 「子网/使用率」要排在「ip」前面，否则"子网的IP使用率"会误判成查 IP 地址
     if any(k in q for k in ["防疫", "灾备"]):
         data_type = "backups"
     elif any(k in q for k in ["拓扑", "连线"]):
@@ -104,6 +116,8 @@ def _fallback_parse(question: str) -> dict:
         data_type = "vlans"
     elif any(k in q for k in ["日志", "审计", "操作记录"]):
         data_type = "audit_logs"
+    elif any(k in q for k in ["使用率", "利用率", "子网", "网段", "prefix", "可用的子网", "可用的网段"]):
+        data_type = "prefixes"
     elif any(k in q for k in ["站点", "办公室", "机房", "site", "场所"]):
         data_type = "sites"
     elif any(k in q for k in ["专线", "电路", "circuit", "带宽", "链路"]):
@@ -113,14 +127,18 @@ def _fallback_parse(question: str) -> dict:
         data_type = "devices"
     elif any(k in q for k in ["ip", "地址", "ip地址", "分配"]):
         data_type = "ip_addresses"
-    elif any(k in q for k in ["子网", "网段", "prefix", "可用的子网", "可用的网段"]):
-        data_type = "prefixes"
     elif any(k in q for k in ["备份", "backup", "配置保存"]):
         data_type = "backups"
     elif any(k in q for k in ["巡检", "离线", "在线", "扫描"]):
         data_type = "inspection_results"
-    else:
-        data_type = "devices"
+
+    # 这问兜底：没命中任何关键词、且上一轮有明确类型时，沿用上一轮的数据类型。
+    # 例：先问"统计各子网的IP使用率"，再问"都是什么"，应继续查子网而不是默认设备。
+    if data_type is None:
+        if last_data_type in VALID_DATA_TYPES:
+            data_type = last_data_type
+        else:
+            data_type = "devices"
 
     answer_format = "summary" if any(k in q for k in ["多少", "几个", "统计", "总数", "总共", "数一数", "计数"]) else "list"
 
@@ -436,8 +454,83 @@ async def format_answer(intent: dict, raw_data: list, question: str) -> dict:
     }
 
 
+def _row_summary(data_type: str, r: dict) -> str:
+    """把一条查询结果压成一行人话，供无模型时的兜底回答使用"""
+    if data_type == "sites":
+        s = r.get("name") or "-"
+        if r.get("city"):
+            s += f"（{r['city']}"
+            if r.get("status"):
+                s += f"，{r['status']}"
+            s += "）"
+        elif r.get("status"):
+            s += f"（{r['status']}）"
+        return s
+    if data_type == "circuits":
+        s = r.get("name") or "-"
+        if r.get("provider"):
+            s += f" · {r['provider']}"
+        if r.get("bandwidth"):
+            s += f" · {r['bandwidth']}"
+        if r.get("status"):
+            s += f" · {r['status']}"
+        if r.get("contract_end"):
+            s += f" · 合同至 {str(r['contract_end'])[:10]}"
+        return s
+    if data_type == "devices":
+        s = r.get("name") or "-"
+        extra = " ".join(str(x) for x in [r.get("type"), r.get("brand")] if x)
+        if extra:
+            s += f"（{extra}）"
+        if r.get("status"):
+            s += f" · {r['status']}"
+        if r.get("location"):
+            s += f" · {r['location']}"
+        return s
+    if data_type == "ip_addresses":
+        s = r.get("address") or "-"
+        if r.get("status"):
+            s += f" · {r['status']}"
+        if r.get("usage"):
+            s += f" · {r['usage']}"
+        return s
+    if data_type == "prefixes":
+        return (
+            f"{r.get('network') or '-'}：已用 {r.get('used_ips', 0)}/{r.get('total_ips', 0)}"
+            f"（{r.get('usage_rate', 0)}%）"
+        )
+    if data_type == "backups":
+        s = f"设备#{r.get('device_id')} {r.get('version') or ''}".strip()
+        if r.get("status"):
+            s += f" · {r['status']}"
+        if r.get("has_change"):
+            s += " · 有变更"
+        return s
+    if data_type == "inspection_results":
+        s = r.get("ip_address") or "-"
+        s += " · 在线" if r.get("is_online") else " · 离线"
+        if r.get("sys_name"):
+            s += f" · {r['sys_name']}"
+        if r.get("has_fingerprint_change"):
+            s += " · 指纹变化"
+        return s
+    if data_type == "topology":
+        return (
+            f"设备#{r.get('source_device_id')}({r.get('source_interface') or '?'})"
+            f" → 设备#{r.get('target_device_id')}({r.get('target_interface') or '?'})"
+        )
+    if data_type == "vlans":
+        return f"VLAN {r.get('vid')} {r.get('name') or ''} · {r.get('status') or ''}".strip()
+    if data_type == "audit_logs":
+        return (
+            f"{r.get('user') or '-'} {r.get('action') or ''} {r.get('resource') or ''}"
+            f" · {str(r.get('created_at') or '')[:19]}"
+        ).strip()
+    return json.dumps(r, ensure_ascii=False)[:120]
+
+
 def _generate_fallback_answer(data_type: str, raw_data: list, question: str) -> str:
-    """降级回答生成"""
+    """降级回答生成：直接把查询结果摘出来，而不是只报一个数字"""
     count = len(raw_data)
     name_map = {
         "sites": "站点", "circuits": "专线", "devices": "设备",
@@ -449,4 +542,8 @@ def _generate_fallback_answer(data_type: str, raw_data: list, question: str) -> 
 
     if count == 0:
         return f"没有找到相关的{label}信息。"
-    return f"找到 {count} 条{label}记录。"
+
+    show = raw_data[:5]
+    lines = [f"- {_row_summary(data_type, r)}" for r in show]
+    tail = f"\n…（还有 {count - 5} 条，可以让我缩小范围）" if count > 5 else ""
+    return f"共找到 {count} 条{label}：\n" + "\n".join(lines) + tail

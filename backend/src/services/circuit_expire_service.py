@@ -8,6 +8,7 @@ from src.models.circuit import Circuit
 from src.models.alert import AlertRecord, AlertNotification
 from src.models.setting import Setting
 from src.config import settings
+from src.services.alert_ws import broadcast_new_alert
 import json
 
 NOTIFICATION_SETTINGS_KEY = "notification_settings"
@@ -132,6 +133,9 @@ class CircuitExpireService:
             await db.flush()
             
             await CircuitExpireService._send_expire_notifications(db, alert_record)
+
+            # 实时推送给在线前端（失败不影响告警落库）
+            await broadcast_new_alert(alert_record)
     
     @staticmethod
     async def _send_expire_notifications(db: AsyncSession, alert_record: AlertRecord):

@@ -520,6 +520,20 @@ onMounted(() => {
   }
 }
 
+@media (max-width: 768px) {
+  .overview-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-actions-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
 .side-panel {
   display: flex;
   flex-direction: column;

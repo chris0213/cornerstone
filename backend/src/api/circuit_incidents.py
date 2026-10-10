@@ -14,7 +14,7 @@ from ..schemas.circuit_incident import (
     CircuitIncidentLogResponse,
     CircuitIncidentStats
 )
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
@@ -186,8 +186,7 @@ async def get_incident_logs(
 async def get_all_incidents(
     status: str = None,
     severity: str = None,
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
@@ -198,7 +197,7 @@ async def get_all_incidents(
     if severity:
         query = query.where(CircuitIncident.severity == severity)
     
-    query = query.offset(skip).limit(limit)
+    query = query.offset(page.skip).limit(page.limit)
     result = await db.execute(query)
     return result.scalars().all()
 

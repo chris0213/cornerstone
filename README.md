@@ -100,70 +100,202 @@
 
 ### 本地开发
 
+> **注意**：本项目后端默认端口 `8001`，前端默认端口 `5174`（避免与常见服务的 8000/5173 冲突）。如需修改请编辑 `backend/.env` 与 `frontend/vite.config.ts`。
+
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/pancq/cornerstone.git
 cd cornerstone
 
-# 2. 配置后端
+# 2. 启动后端（新终端）
 cd backend
-cp .env.example .env       # 编辑 .env 填写数据库与 SECRET_KEY
-python -m venv venv
-source venv/bin/activate    # Windows: venv\Scripts\activate
-pip install poetry && poetry install
-python init_db.py           # 初始化数据库与默认数据
-uvicorn src.main:app --reload --port 8000
+cp .env.example .env      # 编辑 .env：至少修改 SECRET_KEY、INITIAL_ADMIN_PASSWORD
+python3.11 -m venv .venv  # 推荐使用与 Docker 一致的 3.11
+source .venv/bin/activate # Windows: .venv\Scripts\activate
+pip install poetry
+poetry install            # 或: pip install -e . (需确保 pyproject.toml 依赖解析成功)
+
+#   2a. 建表（唯一权威方式，禁止使用 Base.metadata.create_all）
+alembic upgrade head
+#   2b. 初始化种子数据（权限/角色/admin账号 + 演示数据）
+python init_db.py
+#   2c. 启动后端
+uvicorn src.main:app --reload --port 8001
 
 # 3. 启动前端（新终端）
-cd frontend
+cd ../frontend
 npm install
-npm run dev
+npm run dev               # 开发服务器 http://localhost:5174
 ```
 
 访问：
 
 | 服务 | 地址 |
 |------|------|
-| 前端 | http://localhost:5173 |
-| 后端 API | http://localhost:8000 |
-| API Swagger | http://localhost:8000/docs |
+| 前端 | http://localhost:5174 |
+| 后端 API | http://localhost:8001 |
+| API Swagger | http://localhost:8001/docs |
 
 默认账号：`admin` / `INITIAL_ADMIN_PASSWORD` 中配置的密码。
 
-### Docker Compose 部署（推荐）
+---
+
+### 🐳 Docker Compose 部署（生产推荐）
+
+#### 架构说明
+
+```
+用户浏览器 → [宿主机 HTTP_PORT] → cornerstone-frontend (Nginx)
+                                    ├─ 静态资源: /usr/share/nginx/html
+                                    └─ /api/* 反代 → cornerstone-backend:8000 (容器内部)
+cornerstone-postgres (PostgreSQL 16)
+cornerstone-redis    (Redis 7, AOF持久化)
+```
+
+> **重要**：前端容器内的 Nginx 已正确配置 `X-Real-IP` 与 `X-Forwarded-For` 头，后端登录接口会优先读取这些头获取真实客户端 IP（详见「部署后验证 → 真实IP透传」一节）。
+
+#### 部署步骤
 
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/pancq/cornerstone.git
 cd cornerstone
 
-# 2. 配置环境变量
+# 2. 配置环境变量（至少修改带 change-me 的三项）
 cp .env.docker.example .env
-# 至少修改：POSTGRES_PASSWORD、SECRET_KEY、INITIAL_ADMIN_PASSWORD、CORS_ORIGINS
+vim .env
+# 必填项:
+#   POSTGRES_PASSWORD       数据库密码（强密码）
+#   SECRET_KEY              JWT 签名密钥: `openssl rand -hex 32` 生成
+#   INITIAL_ADMIN_PASSWORD  首次启动时 admin 账号的初始密码
+#   CORS_ORIGINS            改为你的域名或服务器公网IP，如 http://1.2.3.4,https://itsm.example.com
+#   HTTP_PORT               宿主机暴露端口（默认80，若被占用可改为8080）
 
 # 3. 构建并启动（首次约 3~5 分钟）
 docker compose up -d --build
 
-# 4. 查看状态
+# 4. 等待启动完成 + 健康检查
+sleep 10
 docker compose ps
+# STATUS 全部显示 healthy 才算启动完成
 ```
 
-访问 `http://localhost`，使用 `admin` + `INITIAL_ADMIN_PASSWORD` 登录。
+启动流程（容器内自动执行，无需手动干预）：
 
-常用命令：
+```
+cornerstone-backend 容器启动
+  ├─ 等待 postgres 容器 ready (最多 60 秒)
+  ├─ 执行 `alembic upgrade head`   ← 建表 / schema 迁移（唯一权威方式）
+  ├─ 执行 `python init_db.py`      ← 初始化权限、角色、admin 账号、演示数据
+  └─ 启动 uvicorn :8000
+```
+
+访问 `http://<服务器IP或域名>:<HTTP_PORT>`，使用 `admin` + `INITIAL_ADMIN_PASSWORD` 登录。
+
+#### 常用运维命令
 
 ```bash
-# 查看日志
-docker compose logs -f backend
+# ---- 日志 ----
+docker compose logs -f backend    # 后端日志
+docker compose logs -f frontend   # 前端 Nginx 访问/错误日志
+docker compose logs -f --tail 200 # 所有服务近 200 行
 
-# 升级
-git pull
-docker compose up -d --build
+# ---- 升级部署（代码有更新时）----
+# ⚠️ 重要：如果服务器本地有未提交的改动（如 docker-entrypoint.sh 被本地修改），
+#         git pull 会失败。解决方法：先丢弃本地改动，再拉取。
+git status                         # 检查是否有本地修改
+git checkout -- backend/docker-entrypoint.sh backend/src/ frontend/   # 丢弃冲突文件的本地改动
+git pull origin main
+docker compose build --no-cache backend frontend   # 无缓存重建，避免旧代码残留
+docker compose up -d --force-recreate backend frontend # 强制重建容器
 
-# 停止 / 销毁（保留数据卷）
-docker compose stop
-docker compose down
+# ---- 启停 ----
+docker compose stop                # 停止（保留容器）
+docker compose start               # 再次启动
+docker compose down                # 销毁容器（数据卷保留在 postgres_data / redis_data 中，下次启动数据不丢）
+
+# ---- 数据备份 ----
+# PostgreSQL 数据库（建议生产每日定时执行）
+docker exec cornerstone-postgres pg_dump -U cornerstone cornerstone | gzip > cornerstone_db_$(date +%Y%m%d).sql.gz
+# 备份文件（含配置备份）：备份任务输出到 backend_backups 卷，可通过以下方式查看
+docker run --rm -v cornerstone_backend_backups:/data alpine ls -la /data
 ```
+
+#### 部署后验证
+
+```bash
+# 1. 基础健康检查
+curl -I http://<服务器IP>/healthz      # 前端 Nginx 健康检查 → 200
+curl -s http://<服务器IP>/api/v1/auth/captcha | head -c 100   # API 连通性（返回二进制验证码图片）
+
+# 2. 获取登录 Token 并调用业务接口（替换密码）
+TOKEN=$(curl -s -X POST http://<服务器IP>/api/v1/auth/token \
+  -d "username=admin&password=<你的ADMIN密码>" | python3 -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))")
+echo "Token 前30位: ${TOKEN:0:30}"
+curl -s http://<服务器IP>/api/v1/logs/ -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+print(f'审计日志条数: {len(data)}')
+print('最近3条:', [{'id':d['id'],'user':d['user'],'ip':d.get('ipAddress')} for d in data[:3]])
+"
+
+# 3. ✅ 真实 IP 透传验证（关键）
+#    模拟外面有一层反代/CDN，带 X-Forwarded-For 头访问，
+#    然后看审计日志里是否记录了模拟的真实IP而不是127.0.0.1
+curl -s -X POST http://<服务器IP>/api/v1/auth/token \
+  -H "X-Forwarded-For: 203.0.113.25, 10.0.0.1" \
+  -d "username=admin&password=<你的ADMIN密码>" > /dev/null
+#    再调用上面的审计日志接口，最新一条的 ip 字段应为 203.0.113.25
+```
+
+#### Nginx 配置验证与查看（frontend 容器内）
+
+```bash
+# 查看运行中的 Nginx 配置文件（项目自带 /etc/nginx/conf.d/cornerstone.conf）
+docker exec cornerstone-frontend cat /etc/nginx/conf.d/cornerstone.conf
+
+# 实时查看 Nginx access log（第一列就是客户端IP，用于核对来源IP透传）
+docker logs -f cornerstone-frontend
+
+# 进入容器重载配置（修改配置后使用）
+docker exec cornerstone-frontend nginx -t   # 语法检查
+docker exec cornerstone-frontend nginx -s reload
+```
+
+> 💡 项目自带的 Nginx 配置已包含 IP 透传（`frontend/nginx.conf` L46-47）。
+> 如果你的架构是 **「宿主机 Nginx → cornerstone-frontend:Nginx」** 双层反代，**外层宿主机 Nginx 必须再加一次透传头**，否则最内层拿到的是外层 Nginx IP 而不是真实用户 IP。外层配置模板：
+>
+> ```nginx
+> server {
+>     listen 443 ssl http2;
+>     server_name itsm.example.com;
+>     ssl_certificate     /etc/ssl/certs/itsm.example.com.pem;
+>     ssl_certificate_key /etc/ssl/private/itsm.example.com.key;
+>
+>     location / {
+>         proxy_pass http://127.0.0.1:<HTTP_PORT>;   # HTTP_PORT 对应 .env 中的值
+>         proxy_set_header Host              $host;
+>         proxy_set_header X-Real-IP         $remote_addr;
+>         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+>         proxy_set_header X-Forwarded-Proto $scheme;
+>         proxy_read_timeout 300s;
+>     }
+> }
+> ```
+
+#### 常见问题排查
+
+| 现象 | 可能原因 | 解决方法 |
+|---|---|---|
+| cornerstone-backend 无限重启 `restarting` | 旧 Postgres 数据卷残留旧 schema，缺列导致崩溃 | 见项目 memory 中「服务器旧 postgres volume 残留恢复流程」 |
+| 登录后审计日志「来源IP」显示 `127.0.0.1` 或服务器内网IP | 外层反代（宿主机 Nginx/CDN/负载均衡）未加 X-Forwarded-For 头 | 见上方「双层反代」配置模板 |
+| 前端登录按钮无反应，控制台 `/captcha` ERR_ABORTED | 后端进程已退出 | `docker compose logs backend` 查看崩溃原因，`docker compose restart backend` |
+| `docker compose pull/push` 失败报 `local changes` | 服务器上有未提交的文件被改（如 entrypoint） | `git checkout -- <冲突文件>` 后再 pull |
+| PDF 报告里中文为方框 □ | 字体文件损坏/被 Docker volume 覆盖 | 不要将字体目录挂到 volume，字体文件必须放在容器内非 volume 目录 |
+| 全新部署登录报 500 / auth 接口 500 | SECRET_KEY 为空或 PostgreSQL 未完成迁移 | 检查 `.env` 三项必填；`docker exec cornerstone-backend alembic current` 确认 migration 已到 head |
+| 管理页面标题重复（显示两次「运营月报」等） | 代码版本过旧（旧版本在页面内部再渲染了标题） | 升级到 main 分支最新 commit c8e4504 之后 |
+
+---
 
 ## 功能模块
 

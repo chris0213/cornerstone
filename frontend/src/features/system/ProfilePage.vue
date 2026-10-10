@@ -663,4 +663,66 @@ onMounted(() => {
 .profile-login-history-table :deep(.el-table__cell) {
   padding: 8px 12px;
 }
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .profile-page {
+    padding: 12px;
+  }
+
+  .profile-content {
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .profile-left {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .avatar-wrapper {
+    width: 120px;
+    height: 120px;
+    margin-bottom: 16px;
+  }
+
+  .avatar-placeholder {
+    font-size: 36px;
+  }
+
+  .avatar-upload-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .user-info h2 {
+    font-size: 18px;
+  }
+
+  .profile-right {
+    width: 100%;
+  }
+
+  .el-form-item {
+    margin-bottom: 16px;
+  }
+
+  :deep(.el-form-item__label) {
+    width: 100px !important;
+  }
+
+  :deep(.el-form-item__content) {
+    margin-left: 100px !important;
+  }
+
+  .profile-login-history-table {
+    font-size: 12px;
+  }
+
+  :deep(.el-table__cell) {
+    padding: 8px 4px;
+  }
+}
 </style>

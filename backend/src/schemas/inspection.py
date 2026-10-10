@@ -124,7 +124,8 @@ class InspectionResultResponse(BaseModel):
     started_at: datetime
     finished_at: Optional[datetime]
     duration_seconds: Optional[float]
-    
+    ai_summary: Optional[Any] = None
+
     class Config:
         from_attributes = True
 

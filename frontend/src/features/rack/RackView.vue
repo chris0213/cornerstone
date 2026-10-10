@@ -464,18 +464,6 @@ function getUSlotInfo(u: number) {
   }
 }
 
-const auditLog = (action: string, detail: string) => {
-  store.addAuditLog({
-    user: authStore.user?.username || 'system',
-    action,
-    resource: t('rack.deviceList'),
-    detail,
-    ipAddress: null,
-    createdAt: new Date().toISOString(),
-    success: 'true',
-  })
-}
-
 const selectRack = async (id: number) => {
   rackLog.info('selectRack: 选中机柜', { id })
   selectedRackId.value = id

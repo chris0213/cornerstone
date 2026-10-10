@@ -14,7 +14,7 @@ from ..models import User, Role, Permission, RolePermission, UserSession, AuditL
 from ..schemas import UserCreate, UserUpdate, UserResponse, ResetPasswordResponse, UserSessionResponse, RoleResponse, RoleCreate, PermissionResponse
 from ..utils.security import get_password_hash, validate_password
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user, get_current_superuser
+from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
 
 router = APIRouter()
 
@@ -78,8 +78,7 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
 
 @router.get("/", response_model=list[UserResponse])
 async def read_users(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     role: str = None,
     is_active: bool = None,
     keyword: str = None,
@@ -106,7 +105,7 @@ async def read_users(
             (User.display_name.ilike(f"%{keyword}%"))
         )
     
-    result = await db.execute(stmt.offset(skip).limit(limit))
+    result = await db.execute(stmt.offset(page.skip).limit(page.limit))
     users = result.scalars().all()
     
     return [await build_user_response(db, user) for user in users]

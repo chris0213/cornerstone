@@ -51,7 +51,6 @@ export const menuConfig: MenuGroup[] = [
     groupKey: 'menuGroups.operationsCenter',
     items: [
       { path: '/devices', nameKey: 'devices.title', permission: 'devices:read' },
-      { path: '/rack-view', nameKey: 'rack.title', permission: 'devices:read' },
       {
         key: 'topology',
         nameKey: 'topology.title',
@@ -59,7 +58,7 @@ export const menuConfig: MenuGroup[] = [
         children: [
           { path: '/topology/sites', nameKey: 'topology.siteTopology', permission: 'topology:read' },
           { path: '/topology/devices', nameKey: 'topology.deviceTopology', permission: 'topology:read' },
-          { path: '/monitor', nameKey: 'monitor.title', permission: 'topology:read' }
+          { path: '/topology/rack', nameKey: 'topology.rackTopology', permission: 'devices:read' }
         ]
       },
       {
@@ -73,8 +72,7 @@ export const menuConfig: MenuGroup[] = [
         ]
       },
       { path: '/alerts', nameKey: 'alerts.title', permission: 'alerts:read' },
-      { path: '/inspection', nameKey: 'inspection.title', permission: 'system:read' },
-      { path: '/reports', nameKey: 'reports.title', permission: 'system:read' }
+      { path: '/reports', nameKey: 'reports.title', permission: 'reports:read' }
     ]
   },
   {
@@ -92,6 +90,7 @@ export const menuConfig: MenuGroup[] = [
       { path: '/system/security', nameKey: 'system.security', permission: 'system:admin' },
       { path: '/system/notifications', nameKey: 'system.notifications', permission: 'system:admin' },
       { path: '/system/ai-settings', nameKey: 'system.aiSettings', permission: 'system:read' },
+      { path: '/system/ai-chat-logs', nameKey: 'system.aiChatLogs', permission: null },
       { path: '/system/logs-settings', nameKey: 'system.logsSettings', permission: 'system:admin' }
     ]
   },

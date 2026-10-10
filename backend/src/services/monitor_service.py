@@ -145,6 +145,14 @@ async def monitor_device(db: AsyncSession, device: Device) -> None:
                 )
                 db.add(monitor_data)
 
+                # 采集指标样本（仅当存在 detection_mode='anomaly' 的启用规则时才写入，
+                # 默认 static 模式 → 零额外写入，升级后无副作用）
+                try:
+                    from src.services.alert_service import AlertService
+                    await AlertService.collect_metric_samples(db, device.id, latency, packet_loss)
+                except Exception as sample_err:
+                    print(f"[monitor] 设备 {device.name} 指标采样失败: {sample_err}")
+
                 # 评估告警规则，产生 AlertRecord（修复：接入预警链路）
                 from src.services.alert_service import AlertService
                 # ping 失败时 latency/packet_loss 可能为 None，规则评估需要数值

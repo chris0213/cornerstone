@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import SecuritySettings from './SecuritySettings.vue'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import { Lock } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
 </script>
@@ -11,7 +11,7 @@ const { t } = useI18n()
     <el-card shadow="never">
       <template #header>
         <div class="card-title">
-          <el-icon><component :is="ElementPlusIconsVue.Shield" /></el-icon>
+          <el-icon><Lock /></el-icon>
           {{ t('system.security') }}
         </div>
       </template>

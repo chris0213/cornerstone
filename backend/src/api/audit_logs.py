@@ -5,7 +5,7 @@ from sqlalchemy import select, insert
 from ..database import get_db
 from ..models import AuditLog, Role
 from ..schemas import AuditLogResponse
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 
 @router.get("/")
 async def read_logs(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     user: str = None,
     action: str = None,
     category: str = None,
@@ -46,7 +45,7 @@ async def read_logs(
     if action:
         query = query.where(AuditLog.action.like(f"%{action}%"))
     query = query.order_by(AuditLog.created_at.desc())
-    result = await db.execute(query.offset(skip).limit(limit))
+    result = await db.execute(query.offset(page.skip).limit(page.limit))
     logs = result.scalars().all()
     
     # 手动序列化并确保时间带 UTC 时区标记

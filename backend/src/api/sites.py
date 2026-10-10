@@ -5,18 +5,17 @@ from sqlalchemy import select, insert, update, delete
 from ..database import get_db
 from ..models import Site, Circuit, Device, Vlan, VlanGroup, Prefix, BackupTask, InspectionResult, InspectionTask, InspectionDeviceResult, DeviceFingerprint, IPAddress, Backup, LinkMonitor, DeviceLink, AlertRecord, AlertRule, Credential
 from ..schemas import SiteCreate, SiteUpdate, SiteResponse
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
 @router.get("/", response_model=list[SiteResponse])
 async def read_sites(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Site).offset(skip).limit(limit))
+    result = await db.execute(select(Site).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.get("/{site_id}", response_model=SiteResponse)

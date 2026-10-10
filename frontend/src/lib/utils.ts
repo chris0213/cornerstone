@@ -50,6 +50,52 @@ export function formatDate(dateText: string | null | undefined): string {
   return `${year}-${month}-${day}`
 }
 
+/**
+ * 统一日期时间格式化（年-月-日 时:分:秒，Asia/Shanghai 时区）
+ * 兼容 ISO、PostgreSQL、无时区信息等后端时间格式
+ */
+export function formatDateTime(
+  dateText: string | null | undefined,
+  options: { seconds?: boolean } = {}
+): string {
+  if (!dateText) return '-'
+  let date: Date
+  if (dateText.includes('T') || dateText.includes('Z')) {
+    date = new Date(dateText)
+  } else if (dateText.includes('+')) {
+    // PostgreSQL 格式：2026-06-17 15:33:24.455473+08
+    date = new Date(dateText.replace(' ', 'T'))
+  } else {
+    // 无时区信息，按 UTC 解释（与后端存储约定一致）
+    date = new Date(dateText.replace(' ', 'T') + 'Z')
+  }
+  if (isNaN(date.getTime())) return dateText
+  const fmt: Intl.DateTimeFormatOptions = {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }
+  if (options.seconds !== false) fmt.second = '2-digit'
+  return date.toLocaleString(getLocale() || 'zh-CN', fmt)
+}
+
+/** 统一文件大小格式化：B / KB / MB / GB */
+export function formatFileSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let i = -1
+  do {
+    size /= 1024
+    i++
+  } while (size >= 1024 && i < units.length - 1)
+  return `${size.toFixed(1)} ${units[i]}`
+}
+
 export function statusTag(value: string): string {
   const cls =
     {

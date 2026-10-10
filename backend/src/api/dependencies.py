@@ -1,4 +1,6 @@
-from fastapi import Depends, HTTPException, status, WebSocket, WebSocketException
+from dataclasses import dataclass
+
+from fastapi import Depends, HTTPException, Query, status, WebSocket, WebSocketException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
@@ -10,6 +12,29 @@ from ..models import User, UserSession
 from ..utils.security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+
+
+@dataclass(frozen=True)
+class PageParams:
+    """统一分页参数"""
+    skip: int
+    limit: int
+
+
+def pagination(default_limit: int = 100, max_limit: int = 1000):
+    """分页查询参数依赖，生成 skip/limit 查询参数并校验取值范围。
+
+    用法：`page: PageParams = Depends(pagination())`，
+    查询时使用 `query.offset(page.skip).limit(page.limit)`。
+    需要非默认 limit 的接口传 `pagination(default_limit=50)`。
+    """
+    def _pagination(
+        skip: int = Query(0, ge=0, description="跳过条数"),
+        limit: int = Query(default_limit, ge=1, le=max_limit, description="返回条数"),
+    ) -> PageParams:
+        return PageParams(skip=skip, limit=limit)
+
+    return _pagination
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),

@@ -42,6 +42,24 @@ export async function deleteMonthlyReport(year: number, month: number): Promise<
   await request.delete(`/reports/monthly/${year}/${month}`)
 }
 
+export interface ReportSchedule {
+  enabled: boolean
+  day: number      // 每月 1-28 号
+  hour: number     // 0-23
+  minute: number   // 0-59
+  email_to: string // 留空只生成不发送
+}
+
+export async function getReportSchedule(): Promise<ReportSchedule> {
+  const response = await request.get('/reports/schedule')
+  return response.data
+}
+
+export async function updateReportSchedule(config: ReportSchedule): Promise<ReportSchedule> {
+  const response = await request.put('/reports/schedule', config)
+  return response.data
+}
+
 export async function getCompanyInfo(): Promise<CompanyInfo> {
   const response = await request.get('/settings/company')
   return response.data

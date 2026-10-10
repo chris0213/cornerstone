@@ -19,6 +19,7 @@ router = APIRouter()
 logger = get_logger()
 
 NOTIFICATION_SETTINGS_KEY = "notification_settings"
+AI_INSPECTION_SETTINGS_KEY = "ai_inspection_settings"
 LOG_SETTINGS_KEY = "log_settings"
 COMPANY_INFO_KEY = "company_info"
 BRAND_SETTINGS_KEY = "brand_settings"
@@ -199,6 +200,14 @@ class TestNotificationRequest(BaseModel):
     channel: str  # dingtalk, wechat, feishu, email
 
 
+class AIInspectionSettingsRequest(BaseModel):
+    enabled: bool = False
+
+
+class AIInspectionSettingsResponse(BaseModel):
+    enabled: bool = False
+
+
 class LogSettingsRequest(BaseModel):
     log_retention_days: int = 90
     login_log_retention_days: int = 180
@@ -354,6 +363,52 @@ async def update_notification_settings(
     _log_setting_after(current_user.username, "更新通知设置", NOTIFICATION_SETTINGS_KEY, config_json, created)
 
     return NotificationSettingsResponse(**config_dict)
+
+
+@router.get("/ai-inspection", response_model=AIInspectionSettingsResponse)
+async def get_ai_inspection_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_super_admin)
+):
+    """获取巡检 AI 二次研判开关配置"""
+    result = await db.execute(select(Setting).filter(Setting.key == AI_INSPECTION_SETTINGS_KEY))
+    setting = result.scalars().first()
+
+    if setting:
+        try:
+            config = json.loads(setting.value)
+            return AIInspectionSettingsResponse(enabled=bool(config.get("enabled", False)))
+        except json.JSONDecodeError:
+            pass
+
+    return AIInspectionSettingsResponse(enabled=False)
+
+
+@router.put("/ai-inspection", response_model=AIInspectionSettingsResponse)
+async def update_ai_inspection_settings(
+    request: AIInspectionSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_super_admin)
+):
+    """更新巡检 AI 二次研判开关配置"""
+    config_dict = {"enabled": bool(request.enabled)}
+    config_json = json.dumps(config_dict)
+
+    result = await db.execute(select(Setting).filter(Setting.key == AI_INSPECTION_SETTINGS_KEY))
+    setting = result.scalars().first()
+    _log_setting_before(current_user.username, "更新巡检AI二次研判开关", AI_INSPECTION_SETTINGS_KEY, setting)
+
+    created = setting is None
+    if setting:
+        setting.value = config_json
+    else:
+        setting = Setting(key=AI_INSPECTION_SETTINGS_KEY, value=config_json)
+        db.add(setting)
+
+    await db.commit()
+    _log_setting_after(current_user.username, "更新巡检AI二次研判开关", AI_INSPECTION_SETTINGS_KEY, config_json, created)
+
+    return AIInspectionSettingsResponse(**config_dict)
 
 
 @router.post("/notification/test")

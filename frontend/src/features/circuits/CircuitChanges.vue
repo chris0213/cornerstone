@@ -52,8 +52,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Document, Files, ArrowLeft } from '@element-plus/icons-vue'
 import { getCircuitChanges, type CircuitChange } from '../../api/circuits'
-import { useI18n } from 'vue-i18n'
-const { locale } = useI18n()
+import { formatDateTime } from '@/lib/utils'
 
 const route = useRoute()
 const router = useRouter()
@@ -86,23 +85,6 @@ function getChangeTypeTag(type: string): string {
     'delete': 'danger'
   }
   return types[type] || 'info'
-}
-
-function formatDateTime(dateTimeStr: string): string {
-  if (!dateTimeStr) return ''
-  try {
-    const date = new Date(dateTimeStr)
-    return date.toLocaleString(locale?.value || 'zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-  } catch {
-    return dateTimeStr
-  }
 }
 
 onMounted(async () => {

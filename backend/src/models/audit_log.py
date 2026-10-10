@@ -13,4 +13,4 @@ class AuditLog(Base):
     detail = Column(Text)
     ip_address = Column(String(50))
     success = Column(String(10), default="true")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)

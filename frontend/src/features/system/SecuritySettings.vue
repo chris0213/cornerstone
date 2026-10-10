@@ -2,8 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
-const { Shield } = ElementPlusIconsVue
+import { Lock } from '@element-plus/icons-vue'
 import api from '../../api'
 
 const { t } = useI18n()
@@ -77,7 +76,7 @@ onMounted(() => {
 
     <div class="current-status">
       <el-tag :type="whitelist.trim() ? 'danger' : 'success'" size="large">
-        <Shield class="tag-icon" />
+        <Lock class="tag-icon" />
         {{ whitelist.trim() ? t('system.ipWhitelistEnabled') : t('system.ipWhitelistDisabled') }}
       </el-tag>
       <div class="status-desc" v-if="!whitelist.trim()">

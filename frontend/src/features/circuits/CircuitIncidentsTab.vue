@@ -300,7 +300,7 @@ onMounted(() => {
 
         <div v-if="selectedIncident.status === 'open'" class="resolve-section">
           <el-button type="success" @click="showResolveDialog = true">
-            <el-icon><CheckCircle /></el-icon> 标记已解决
+            <el-icon><CircleCheck /></el-icon> 标记已解决
           </el-button>
         </div>
       </div>

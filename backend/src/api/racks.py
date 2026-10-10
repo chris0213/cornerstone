@@ -11,6 +11,8 @@ from ..schemas import (
 from .dependencies import (
     get_current_active_user,
     require_permission,
+    PageParams,
+    pagination,
 )
 
 router = APIRouter()
@@ -32,15 +34,14 @@ def _compute_rack_stats(total_u: int, devices: list) -> RackStats:
 @router.get("/", response_model=list[RackResponse])
 async def list_racks(
     site_id: int | None = None,
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_permission("devices:read")),
 ):
     stmt = select(Rack)
     if site_id:
         stmt = stmt.where(Rack.site_id == site_id)
-    stmt = stmt.order_by(Rack.site_id, Rack.room, Rack.row_position, Rack.name).offset(skip).limit(limit)
+    stmt = stmt.order_by(Rack.site_id, Rack.room, Rack.row_position, Rack.name).offset(page.skip).limit(page.limit)
     result = await db.execute(stmt)
     return result.scalars().all()
 

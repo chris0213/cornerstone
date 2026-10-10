@@ -20,7 +20,9 @@ from .setting import Setting
 from .backup_analysis import BackupAnalysis
 from .inspection import InspectionTask, InspectionResult, InspectionDeviceResult, DeviceFingerprint
 from .alert import AlertRule, AlertRecord, AlertNotification
+from .metric_sample import MetricSample
 from .report import MonthlyReport
+from .ai_chat_log import AIChatLog
 
 __all__ = [
     'User', 'Role', 'Permission', 'RolePermission', 'UserSession',
@@ -30,5 +32,7 @@ __all__ = [
     'VlanGroup', 'Vlan', 'LinkMonitor', 'SystemConfig', 'Setting', 'BackupAnalysis',
     'InspectionTask', 'InspectionResult', 'InspectionDeviceResult', 'DeviceFingerprint',
     'AlertRule', 'AlertRecord', 'AlertNotification',
-    'MonthlyReport'
+    'MetricSample',
+    'MonthlyReport',
+    'AIChatLog'
 ]

@@ -2,8 +2,10 @@
 import asyncio
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
-from datetime import datetime
+from sqlalchemy import select, update, func, delete
+from datetime import datetime, timedelta
+import statistics
+import time
 import httpx
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -16,11 +18,22 @@ from src.models.device import Device
 from src.models.link_monitor import LinkMonitor
 from src.models.setting import Setting
 from src.config import settings
+from src.services.alert_ws import broadcast_new_alert
 from src.utils.logger import get_logger
 
 logger = get_logger()
 
 NOTIFICATION_SETTINGS_KEY = "notification_settings"
+
+# ---------------- 自适应告警（突变检测）相关常量与缓存 ----------------
+# 默认 detection_mode='static'，因此升级后默认不写入任何样本、不产生任何行为变化
+ANOMALY_RULE_CHECK_TTL = 60.0          # 是否存在 anomaly 规则的缓存时间（秒）
+METRIC_RETENTION_DAYS = 7              # 历史样本保留天数（防止表无限增长）
+METRIC_PRUNE_INTERVAL = 3600.0         # 清理执行的最小间隔（秒）
+MIN_BASELINE_SAMPLES = 10              # 冷启动保护：样本不足时不告警
+
+_ANOMALY_RULE_CACHE = {"checked_at": 0.0, "exists": False}
+_LAST_PRUNE_AT = 0.0
 
 
 class AlertService:
@@ -48,7 +61,23 @@ class AlertService:
                     f"found {len(rules)} enabled rules")
         
         for rule in rules:
-            if await AlertService._check_condition(rule, latency, packet_loss, status):
+            # 静默中的规则不产生新告警（到期后自动恢复）
+            if rule.muted_until is not None and rule.muted_until > datetime.now():
+                logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} muted until {rule.muted_until}, skip")
+                continue
+            mode = (getattr(rule, "detection_mode", None) or "static")
+            baseline_info = None
+
+            if mode == "anomaly" and rule.condition_type in ("latency", "packet_loss"):
+                # 自适应突变检测（新增能力，仅 detection_mode='anomaly' 的规则会走到）
+                matched, baseline_info = await AlertService._check_anomaly_condition(
+                    db, rule, device_id, latency, packet_loss
+                )
+            else:
+                # 原有静态阈值判定：完全沿用历史逻辑，行为保持不变
+                matched = await AlertService._check_condition(rule, latency, packet_loss, status)
+
+            if matched:
                 logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} name={rule.name} "
                             f"condition_type={rule.condition_type} severity={rule.severity} condition matched")
                 # 检查是否已有相同类型的活动告警
@@ -69,7 +98,7 @@ class AlertService:
                         target_ip=target_ip,
                         alert_type=rule.condition_type,
                         severity=rule.severity,
-                        message=AlertService._generate_message(rule, latency, packet_loss, status),
+                        message=AlertService._generate_message(rule, latency, packet_loss, status, baseline_info),
                         current_value=AlertService._get_current_value(rule, latency, packet_loss, status),
                         threshold=rule.threshold
                     )
@@ -78,6 +107,9 @@ class AlertService:
                     
                     # 发送通知
                     await AlertService._send_notifications(db, alert_record)
+
+                    # 实时推送给在线前端（失败不影响告警落库）
+                    await broadcast_new_alert(alert_record)
 
                     # critical 告警触发 AI 根因分析
                     if rule.severity == "critical":
@@ -96,7 +128,7 @@ class AlertService:
                     # 更新现有告警信息
                     logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} existing active alert exists, updating")
                     old_severity = existing_alert.severity
-                    existing_alert.message = AlertService._generate_message(rule, latency, packet_loss, status)
+                    existing_alert.message = AlertService._generate_message(rule, latency, packet_loss, status, baseline_info)
                     existing_alert.current_value = AlertService._get_current_value(rule, latency, packet_loss, status)
                     await db.flush()
                     
@@ -178,8 +210,188 @@ class AlertService:
         
         return False
     
+    # ---------------- 自适应告警（突变检测）----------------
+
     @staticmethod
-    def _generate_message(rule: AlertRule, latency: float, packet_loss: float, status: str) -> str:
+    async def _has_anomaly_rules(db: AsyncSession) -> bool:
+        """是否存在启用的 anomaly 模式规则（带短缓存，避免每轮每设备重复查库）"""
+        now = time.time()
+        if now - _ANOMALY_RULE_CACHE["checked_at"] < ANOMALY_RULE_CHECK_TTL:
+            return _ANOMALY_RULE_CACHE["exists"]
+        try:
+            result = await db.execute(
+                select(AlertRule.id)
+                .where(AlertRule.enabled == True, AlertRule.detection_mode == "anomaly")
+                .limit(1)
+            )
+            exists = result.scalar_one_or_none() is not None
+        except Exception as e:
+            # 列尚未就绪等异常：一律按「无规则」处理，保证默认零写入、零影响
+            logger.warning(f"[自适应告警] 检测 anomaly 规则失败，按无规则处理（不影响告警流程）: {e}")
+            exists = False
+        _ANOMALY_RULE_CACHE["checked_at"] = now
+        _ANOMALY_RULE_CACHE["exists"] = exists
+        return exists
+
+    @staticmethod
+    async def collect_metric_samples(db: AsyncSession, device_id: int,
+                                     latency: Optional[float],
+                                     packet_loss: Optional[float]) -> None:
+        """采集指标样本（滚动基线用）。
+
+        升级安全要点：仅当存在启用的 anomaly 规则时才入库；
+        默认 detection_mode='static' → 不产生任何额外写入。
+        """
+        try:
+            if not await AlertService._has_anomaly_rules(db):
+                return
+            from src.models import MetricSample
+
+            now = datetime.now()
+            for metric, value in (("latency", latency), ("packet_loss", packet_loss)):
+                if value is None:
+                    continue
+                db.add(MetricSample(
+                    device_id=device_id,
+                    metric=metric,
+                    value=float(value),
+                    sampled_at=now,
+                ))
+
+            await AlertService._prune_metric_samples(db)
+        except Exception as e:
+            logger.warning(f"[自适应告警] 指标采样失败（不影响监控与告警主流程）: {e}")
+
+    @staticmethod
+    async def _prune_metric_samples(db: AsyncSession) -> None:
+        """按保留天数清理过期样本（限频执行，避免高频 DELETE 冲击生产库）"""
+        global _LAST_PRUNE_AT
+        now = time.time()
+        if now - _LAST_PRUNE_AT < METRIC_PRUNE_INTERVAL:
+            return
+        try:
+            from src.models import MetricSample
+
+            cutoff = datetime.now() - timedelta(days=METRIC_RETENTION_DAYS)
+            await db.execute(delete(MetricSample).where(MetricSample.sampled_at < cutoff))
+            _LAST_PRUNE_AT = now
+        except Exception as e:
+            logger.warning(f"[自适应告警] 历史样本清理失败（不影响主流程）: {e}")
+
+    @staticmethod
+    async def _check_anomaly_condition(db: AsyncSession, rule: AlertRule, device_id: int,
+                                       latency: Optional[float],
+                                       packet_loss: Optional[float]) -> tuple:
+        """自适应突变检测：返回 (是否异常, 基线信息)
+
+        判定口径（任一命中即判定异常）：
+        1) z-score：|当前值 - 均值| / 标准差 > baseline_sensitivity（默认 3.0）
+        2) 变化率：|当前值 - 均值| / |均值| > mutation_threshold（默认 0.5，即 50%）
+
+        冷启动保护：样本数 < MIN_BASELINE_SAMPLES 时一律不告警，避免上线即误报风暴。
+        """
+        value = latency if rule.condition_type == "latency" else packet_loss
+        if value is None:
+            return False, None
+
+        window = int(getattr(rule, "baseline_window", None) or 50)
+        window = max(10, min(window, 500))
+        sensitivity = float(getattr(rule, "baseline_sensitivity", None) or 3.0)
+        mutation_threshold = float(getattr(rule, "mutation_threshold", None) or 0.5)
+
+        try:
+            from src.models import MetricSample
+
+            rows = await db.execute(
+                select(MetricSample.value)
+                .where(MetricSample.device_id == device_id,
+                       MetricSample.metric == rule.condition_type)
+                .order_by(MetricSample.sampled_at.desc())
+                .limit(window)
+            )
+            values = [float(v) for (v,) in rows.all() if v is not None]
+        except Exception as e:
+            logger.warning(
+                f"[自适应告警] rule={rule.id} 读取历史样本失败，本次不告警（不影响主流程）: {e}"
+            )
+            return False, None
+
+        if len(values) < MIN_BASELINE_SAMPLES:
+            return False, {
+                "status": "insufficient",
+                "samples": len(values),
+                "required": MIN_BASELINE_SAMPLES,
+            }
+
+        mean = statistics.mean(values)
+        stdev = statistics.pstdev(values)
+
+        # 阻尼：方差趋零时 z-score 会过度敏感（极稳定链路的微小抖动被放大成「突变」），
+        # 故给标准差设一个相对下限（均值的 2%）。
+        stdev_eff = max(stdev, abs(mean) * 0.02)
+        z_score = ((value - mean) / stdev_eff) if stdev_eff > 0 else 0.0
+
+        # 零基线兜底：历史恒为 0（如丢包率长期 0%）时，用绝对下限做分母，
+        # 避免 0% → 5% 这类真实突变被 0 分母吞掉而漏报。
+        denom = max(abs(mean), 1.0)
+        change_rate = abs(value - mean) / denom
+
+        # 基线完全无波动时 z-score 无统计意义，交由变化率判定，避免 0→0.1 这类
+        # 微小抖动被放大成突变（此时 stdev_eff 为 0，本分支自动失效）
+        by_zscore = stdev_eff > 0 and abs(z_score) > sensitivity
+        by_rate = mutation_threshold > 0 and change_rate > mutation_threshold
+
+        return (by_zscore or by_rate), {
+            "status": "ready",
+            "samples": len(values),
+            "mean": mean,
+            "stdev": stdev,
+            "z_score": z_score,
+            "change_rate": change_rate,
+            "sensitivity": sensitivity,
+            "mutation_threshold": mutation_threshold,
+        }
+
+    @staticmethod
+    async def get_metric_history(db: AsyncSession, device_id: int, metric: str,
+                                 limit: int = 200) -> dict:
+        """事件回看：返回指定设备/指标的近期采样序列与基线统计"""
+        from src.models import MetricSample
+
+        rows = await db.execute(
+            select(MetricSample.value, MetricSample.sampled_at)
+            .where(MetricSample.device_id == device_id, MetricSample.metric == metric)
+            .order_by(MetricSample.sampled_at.desc())
+            .limit(limit)
+        )
+        row_list = rows.all()
+        values = [float(v) for v, _ in row_list if v is not None]
+
+        samples = [
+            {"value": float(v), "sampled_at": (t.isoformat() if t is not None else None)}
+            for v, t in reversed(row_list)
+        ]
+
+        if len(values) >= 2:
+            baseline = {
+                "status": "ready",
+                "samples": len(values),
+                "mean": statistics.mean(values),
+                "stdev": statistics.pstdev(values),
+            }
+        else:
+            baseline = {"status": "insufficient", "samples": len(values)}
+
+        return {
+            "device_id": device_id,
+            "metric": metric,
+            "samples": samples,
+            "baseline": baseline,
+        }
+
+    @staticmethod
+    def _generate_message(rule: AlertRule, latency: float, packet_loss: float, status: str,
+                          baseline_info: Optional[dict] = None) -> str:
         """生成告警消息"""
         status_text: dict[str, str] = {
             "critical": "严重",
@@ -188,6 +400,22 @@ class AlertService:
             "normal": "正常",
         }
         status_cn = status_text.get(status, status)
+
+        # 自适应突变检测命中：给出「偏离基线」描述（新增分支，不影响静态阈值文案）
+        if baseline_info and baseline_info.get("status") == "ready" \
+                and rule.condition_type in ("latency", "packet_loss"):
+            is_latency = rule.condition_type == "latency"
+            metric_cn = "延迟" if is_latency else "丢包率"
+            unit = "ms" if is_latency else "%"
+            current = latency if is_latency else packet_loss
+            mean = baseline_info.get("mean") or 0
+            return (
+                f"设备{metric_cn}显著偏离历史基线: 当前 {current}{unit}, "
+                f"基线均值 {mean:.2f}{unit}, "
+                f"偏离 {(baseline_info.get('z_score') or 0):.2f} 个标准差"
+                f"（变化率 {((baseline_info.get('change_rate') or 0) * 100):.1f}%, "
+                f"样本数 {baseline_info.get('samples')}）"
+            )
 
         if rule.condition_type == "latency":
             return f"设备延迟过高: 当前 {latency}ms, 阈值 {rule.threshold}ms"

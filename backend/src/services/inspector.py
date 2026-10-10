@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import socket
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -12,8 +13,11 @@ from src.models import (
     InspectionDeviceResult,
     DeviceFingerprint,
     Device,
-    IPAddress
+    IPAddress,
+    AlertRecord
 )
+
+logger = logging.getLogger("cornerstone")
 
 # MIB-II 通用 OID（所有品牌）
 MIB2_OIDS = {
@@ -447,20 +451,27 @@ class InspectorService:
             
             if fingerprint and fingerprint.last_seen_online:
                 device_name = fingerprint.sys_name or "未知设备"
-                alerts.append(Alert(
-                    level="warning",
+                alerts.append(AlertRecord(
+                    rule_id=None,
+                    device_id=device_result.device_id,
+                    target_ip=device_result.ip_address,
+                    alert_type="inspection_offline",
+                    severity="warning",
                     message=f"设备 {device_name}（{device_result.ip_address}）已离线，上次在线：{fingerprint.last_seen_online}",
-                    resource_type="device",
-                    resource_id=device_result.device_id,
+                    status="active",
                     created_at=datetime.now()
                 ))
         
         if device_result.is_new_device and task.alert_on_new_device:
             sys_descr = device_result.sys_descr or "未知"
-            alerts.append(Alert(
-                level="info",
+            alerts.append(AlertRecord(
+                rule_id=None,
+                device_id=device_result.device_id,
+                target_ip=device_result.ip_address,
+                alert_type="inspection_new_device",
+                severity="info",
                 message=f"发现未登记设备，IP：{device_result.ip_address}，系统描述：{sys_descr}",
-                resource_type="device",
+                status="active",
                 created_at=datetime.now()
             ))
         
@@ -468,11 +479,14 @@ class InspectorService:
             changed_fields = device_result.change_detail or {}
             field_names = ", ".join(changed_fields.keys())
             device_name = device_result.sys_name or "未知设备"
-            alerts.append(Alert(
-                level="warning",
+            alerts.append(AlertRecord(
+                rule_id=None,
+                device_id=device_result.device_id,
+                target_ip=device_result.ip_address,
+                alert_type="inspection_fingerprint_change",
+                severity="warning",
                 message=f"设备 {device_name}（{device_result.ip_address}）指纹变更：{field_names}",
-                resource_type="device",
-                resource_id=device_result.device_id,
+                status="active",
                 created_at=datetime.now()
             ))
         
@@ -655,9 +669,18 @@ class InspectorService:
                 .where(InspectionDeviceResult.result_id == inspection_result.id)
             )
             for device_result in device_results.scalars().all():
-                await InspectorService.process_alerts(device_result, task, db)
+                try:
+                    await InspectorService.process_alerts(device_result, task, db)
+                except Exception as e:
+                    logger.warning(
+                        f"[巡检告警] device={device_result.ip_address} process_alerts 失败，"
+                        f"跳过该设备（不影响巡检主流程）: {e}"
+                    )
             await db.commit()
         
+        # AI 二次研判（默认关闭，需在 settings.ai_inspection_settings 开启；快速与全量扫描均执行，不影响主流程）
+        await InspectorService.run_ai_secondary_analysis(inspection_result, db)
+
         # 更新巡检记录最终状态
         end_time = datetime.now()
         duration_seconds = (end_time - start_time).total_seconds()
@@ -692,6 +715,108 @@ class InspectorService:
             })
         
         return inspection_result
+
+    @staticmethod
+    async def run_ai_secondary_analysis(inspection_result: InspectionResult, db: AsyncSession):
+        """巡检 AI 二次研判（可选能力，默认关闭）
+
+        仅当 settings 表 key='ai_inspection_settings' 且 {"enabled": true} 时执行；
+        且需要 AI 配置已就绪（api_key 与 api_base 均非空）。任何缺失或异常均直接返回，
+        绝不抛出、绝不写入 ai_summary、绝不影响巡检主流程。
+        """
+        try:
+            import json
+            from src.models.setting import Setting
+            from src.services.ai_client import get_ai_config, call_ai
+
+            # 1. 读取开关，默认关闭（缺记录/解析失败均视为关闭，不调用任何 AI）
+            switch_result = await db.execute(
+                select(Setting).filter(Setting.key == "ai_inspection_settings")
+            )
+            switch_setting = switch_result.scalars().first()
+            enabled = False
+            if switch_setting:
+                try:
+                    cfg = json.loads(switch_setting.value)
+                    enabled = bool(cfg.get("enabled", False))
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    enabled = False
+            if not enabled:
+                return
+
+            # 2. AI 配置缺失或未就绪则直接返回（不报错）
+            ai_config = await get_ai_config(db)
+            if not ai_config or not ai_config.is_configured():
+                return
+
+            # 3. 构造异常明细快照（对条数做上限截断，避免 prompt 过大）
+            device_rows = await db.execute(
+                select(InspectionDeviceResult)
+                .where(InspectionDeviceResult.result_id == inspection_result.id)
+            )
+            anomaly_details = []
+            for dr in device_rows.scalars().all():
+                if dr.is_online is False:
+                    anomaly_details.append(f"离线设备 {dr.ip_address}（{dr.sys_name or ''}）")
+                elif dr.is_new_device:
+                    anomaly_details.append(f"新发现设备 {dr.ip_address}（{dr.sys_name or ''}）")
+                elif dr.has_fingerprint_change:
+                    anomaly_details.append(f"指纹变更 {dr.ip_address}")
+                elif (dr.cpu_usage is not None and dr.cpu_usage >= 80) or (
+                    dr.memory_usage is not None and dr.memory_usage >= 80
+                ):
+                    anomaly_details.append(
+                        f"资源偏高 {dr.ip_address} CPU={dr.cpu_usage} 内存={dr.memory_usage}"
+                    )
+                elif dr.error_message:
+                    anomaly_details.append(f"扫描报错 {dr.ip_address}: {dr.error_message}")
+            if len(anomaly_details) > 30:
+                anomaly_details = anomaly_details[:30]
+
+            stats = (
+                f"在线: {inspection_result.online_count} 台, "
+                f"离线: {inspection_result.offline_count} 台, "
+                f"新发现设备: {inspection_result.new_device_count} 台, "
+                f"指纹变更: {inspection_result.change_count} 台"
+            )
+            detail_text = "\n".join(
+                f"{i + 1}. {d}" for i, d in enumerate(anomaly_details)
+            ) or "无异常明细"
+
+            prompt = (
+                f"以下是一次网络设备巡检的执行结果，请进行二次研判。\n\n"
+                f"巡检统计：\n{stats}\n\n"
+                f"异常明细（最多 30 条）：\n{detail_text}\n\n"
+                f"请输出：\n1. 整体健康评估\n2. 重点风险点\n3. 处置建议"
+            )
+            system = (
+                "你是一位资深的 IT 基础设施运维专家，擅长网络设备、服务器、存储等基础设施的巡检研判。"
+                "请基于巡检数据给出专业、准确、简洁的二次研判结论。"
+            )
+
+            # 4. 调用 AI
+            analysis_text = await call_ai(prompt, system, ai_config, max_tokens=1500, timeout=20)
+
+            # 5. 写入 ai_summary（仅取 AIConfig 真实存在的模型字段名）
+            summary = {
+                "analysis": analysis_text,
+                "generated_at": datetime.now().isoformat(),
+            }
+            model = getattr(ai_config, "model", None)
+            if model:
+                summary["model"] = model
+            inspection_result.ai_summary = summary
+            await db.flush()
+
+            logger.info(
+                f"[巡检AI二次研判] result_id={inspection_result.id} 完成，结果已写入 ai_summary"
+            )
+        except Exception as e:
+            import traceback
+            logger.warning(
+                f"[巡检AI二次研判] result_id={inspection_result.id} 失败（不影响巡检主流程）: {e}\n"
+                f"{traceback.format_exc()}"
+            )
 
     @staticmethod
     async def _update_fingerprint(db: AsyncSession, ip: str, snmp_result: SNMPResult):

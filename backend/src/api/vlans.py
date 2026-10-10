@@ -6,7 +6,7 @@ from typing import List, Optional
 from ..database import get_db
 from ..models import VlanGroup, Vlan, Prefix
 from ..schemas import VlanGroupCreate, VlanGroupUpdate, VlanGroupResponse, VlanCreate, VlanUpdate, VlanResponse
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
@@ -15,13 +15,12 @@ router = APIRouter()
 
 @router.get("/vlans/groups/", response_model=list[VlanGroupResponse])
 async def read_vlan_groups(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
     """获取VLAN组列表"""
-    result = await db.execute(select(VlanGroup).offset(skip).limit(limit))
+    result = await db.execute(select(VlanGroup).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 
@@ -83,8 +82,7 @@ async def read_vlans(
     group_id: Optional[int] = None,
     site_id: Optional[int] = None,
     status: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
@@ -96,7 +94,7 @@ async def read_vlans(
     if status is not None:
         query = query.where(Vlan.status == status)
     
-    result = await db.execute(query.offset(skip).limit(limit))
+    result = await db.execute(query.offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 

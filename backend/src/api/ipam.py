@@ -12,7 +12,7 @@ from ..schemas import (
     PrefixCreate, PrefixUpdate, PrefixResponse,
     IPAddressCreate, IPAddressUpdate, IPAddressResponse, IPExpiringResponse
 )
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task
 
 router = APIRouter()
@@ -133,12 +133,11 @@ scan_manager = ScanManager()
 # Aggregate routes
 @router.get("/aggregates/", response_model=list[AggregateResponse])
 async def read_aggregates(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Aggregate).offset(skip).limit(limit))
+    result = await db.execute(select(Aggregate).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.post("/aggregates/", response_model=AggregateResponse, status_code=status.HTTP_201_CREATED)
@@ -186,12 +185,11 @@ async def delete_aggregate(
 # Prefix routes
 @router.get("/prefixes/", response_model=list[PrefixResponse])
 async def read_prefixes(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Prefix).offset(skip).limit(limit))
+    result = await db.execute(select(Prefix).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.post("/prefixes/", response_model=PrefixResponse, status_code=status.HTTP_201_CREATED)
@@ -239,12 +237,11 @@ async def delete_prefix(
 # IP Address routes
 @router.get("/addresses/", response_model=list[IPAddressResponse])
 async def read_addresses(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(IPAddress).offset(skip).limit(limit))
+    result = await db.execute(select(IPAddress).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.post("/addresses/", response_model=IPAddressResponse, status_code=status.HTTP_201_CREATED)

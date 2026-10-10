@@ -10,19 +10,18 @@ from ..schemas import (
     CredentialCreate, CredentialUpdate, CredentialResponse
 )
 from ..utils import backup_config
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
 # Device routes
 @router.get("/", response_model=list[DeviceResponse])
 async def read_devices(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Device).offset(skip).limit(limit))
+    result = await db.execute(select(Device).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.get("/{device_id}", response_model=DeviceResponse)

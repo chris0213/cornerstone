@@ -1,5 +1,5 @@
 """告警相关模型"""
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, JSON, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, JSON, Text, Index
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from src.database import Base
@@ -19,6 +19,14 @@ class AlertRule(Base):
     severity = Column(String(20), nullable=False, default="warning", comment="告警级别：info/warning/critical")
     enabled = Column(Boolean, default=True, comment="是否启用")
     notification_channels = Column(JSON, default=list, comment="通知渠道：email/dingtalk/wechat/webhook")
+    muted_until = Column(DateTime, nullable=True, comment="静默截止时间：到期前该规则不产生新告警")
+
+    # 自适应告警（突变检测）——默认 static，与历史行为完全一致
+    detection_mode = Column(String(20), nullable=True, comment="检测模式：static（静态阈值）/anomaly（自适应突变检测）")
+    baseline_window = Column(Integer, nullable=True, comment="基线窗口：参与统计的样本数（默认 50）")
+    baseline_sensitivity = Column(Float, nullable=True, comment="基线敏感度：z-score 阈值（默认 3.0）")
+    mutation_threshold = Column(Float, nullable=True, comment="环比突变阈值：相对变化率（默认 0.5，即 50%）")
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
     
@@ -28,10 +36,13 @@ class AlertRule(Base):
 class AlertRecord(Base):
     """告警记录"""
     __tablename__ = "alert_records"
+    __table_args__ = (
+        Index('ix_alert_records_status_created_at', 'status', 'created_at'),
+    )
     
     id = Column(Integer, primary_key=True, index=True)
     rule_id = Column(Integer, ForeignKey("alert_rules.id"), nullable=True)
-    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=True, comment="关联设备ID；巡检发现的未登记设备可能尚无 device 记录，故允许为空")
     target_ip = Column(String(50), comment="目标IP")
     alert_type = Column(String(50), nullable=False, comment="告警类型")
     severity = Column(String(20), nullable=False, comment="告警级别")

@@ -116,6 +116,16 @@ export const resolveAlert = async (recordId: number) => {
   return response.data
 }
 
+export const muteAlertRule = async (ruleId: number, hours: number) => {
+  const response = await request.post(`/alerts/rules/${ruleId}/mute`, { hours })
+  return response.data
+}
+
+export const unmuteAlertRule = async (ruleId: number) => {
+  const response = await request.post(`/alerts/rules/${ruleId}/unmute`)
+  return response.data
+}
+
 export const getAlertSummary = async () => {
   const response = await request.get('/alerts/summary')
   return response.data.data as AlertSummary

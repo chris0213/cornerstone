@@ -5,18 +5,22 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+import re
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from ..database import get_db
-from ..api.dependencies import get_current_active_user
-from ..models import User, Device, Backup, Circuit, Prefix, IPAddress
+from ..api.dependencies import get_current_active_user, PageParams, pagination
+from ..models import User, Device, Backup, Circuit, Prefix, IPAddress, AIChatLog
 from ..models.alert import AlertRecord
 from ..models.inspection import InspectionResult
 from ..models.backup_analysis import BackupAnalysis
-from ..services.ai_client import get_ai_config, call_ai
+from ..services.ai_client import get_ai_config, call_ai, OPENAI_COMPATIBLE
 from ..services.ai_search import parse_user_query, execute_query, format_answer
 from ..services.ai_backup_analyzer import analyze_config_change, save_change_analysis
 
@@ -29,6 +33,8 @@ router = APIRouter()
 
 class SearchRequest(BaseModel):
     question: str
+    # 上一轮回答的数据类型，用于「都是什么」这类追问沿用上下文；可为空
+    last_data_type: str = ""
 
 
 class SearchResponse(BaseModel):
@@ -51,6 +57,15 @@ class AIConfigRequest(BaseModel):
     description: str = ""
     enabled: bool = True
     is_default: bool = False
+
+
+class AIConfigTestRequest(BaseModel):
+    """连接测试：可传 config_id（用库里已存的 key）或完整字段（测未保存的新 key）"""
+    config_id: int | None = None
+    provider: str = ""
+    model: str = ""
+    api_url: str = ""
+    api_key: str = ""
 
 
 class AIConfigResponse(BaseModel):
@@ -93,19 +108,22 @@ class AIPredictionResponse(BaseModel):
 @router.post("/search", response_model=SearchResponse)
 async def ai_search(
     req: SearchRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """
     自然语言查询主接口
-    输入自然语言问题，返回结构化答案
+    输入自然语言问题，返回结构化答案；并持久化聊天日志（本人/超级管理员可见，保留 30 天）
     """
     if not req.question or not req.question.strip():
         raise HTTPException(status_code=400, detail="问题不能为空")
 
+    answer_text = ""
+    data_type = "unknown"
     try:
-        # Step 1: 解析意图
-        intent = await parse_user_query(req.question.strip())
+        # Step 1: 解析意图（带上上一轮的数据类型，支持追问）
+        intent = await parse_user_query(req.question.strip(), (req.last_data_type or "").strip())
 
         # Step 2: 执行查询
         raw_data = await execute_query(intent, db)
@@ -113,18 +131,207 @@ async def ai_search(
         # Step 3: 格式化回答
         result = await format_answer(intent, raw_data, req.question)
 
-        return {"code": 0, "data": result}
+        answer_text = result.get("answer_text", "")
+        data_type = result.get("data_type", "unknown")
+        payload = {"code": 0, "data": result}
     except Exception as e:
         logger.error(f"AI search failed: {e}")
-        return {
+        answer_text = "查询失败，请稍后重试或换个问法。"
+        data_type = "unknown"
+        payload = {
             "code": 1,
             "data": {
-                "answer_text": "查询失败，请稍后重试或换个问法。",
+                "answer_text": answer_text,
                 "data": [],
                 "data_type": "unknown",
                 "suggestions": [],
             },
         }
+
+    # 持久化聊天日志（即便查询失败也记录问题本身，便于回溯）
+    await _persist_chat_log(
+        db=db,
+        user=current_user,
+        question=req.question.strip(),
+        answer_text=answer_text,
+        data_type=data_type,
+        request=request,
+    )
+
+    return payload
+
+
+# ── 聊天日志脱敏与持久化 ──────────────────────────
+
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# 设备序列号/资产编码类：纯字母数字、长度>=10 且同时含字母与数字
+_SN_RE = re.compile(r"\b(?=[A-Za-z0-9]{10,}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b")
+
+
+def _mask_sensitive(text: str) -> str:
+    """对聊天日志中可能包含的敏感信息做轻量脱敏，避免 PII 落入日志表。"""
+    if not text:
+        return text
+    text = _EMAIL_RE.sub("[邮箱已脱敏]", text)
+    text = _MAC_RE.sub("[MAC已脱敏]", text)
+    text = _IPV4_RE.sub("[IP已脱敏]", text)
+    text = _SN_RE.sub("[编码已脱敏]", text)
+    return text
+
+
+async def _persist_chat_log(
+    db: AsyncSession,
+    user: User,
+    question: str,
+    answer_text: str,
+    data_type: str,
+    request: Request,
+) -> None:
+    """写入一条 AI 聊天日志，并清理 30 天前的记录。失败不影响主流程。"""
+    try:
+        client_ip = request.client.host if request and request.client else None
+        log = AIChatLog(
+            user_id=user.id,
+            question=question,
+            answer_text=_mask_sensitive(answer_text or ""),
+            data_type=data_type or None,
+            client_ip=client_ip,
+        )
+        db.add(log)
+        await db.flush()
+
+        # 30 天保留期：每次写入顺手清理过期记录
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        await db.execute(delete(AIChatLog).where(AIChatLog.created_at < cutoff))
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to persist AI chat log: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+def _build_chat_log_filters(current_user: User, keyword: str, data_type: str, user_id: int | None, days: int | None):
+    """构造聊天日志的公共过滤条件（列表与导出共用，保证口径一致）"""
+    conds = []
+    # 可见范围：普通用户仅自己；超级管理员可见全部（可按 user_id 下钻）
+    if not current_user.is_superuser:
+        conds.append(AIChatLog.user_id == current_user.id)
+    elif user_id is not None:
+        conds.append(AIChatLog.user_id == user_id)
+    if keyword:
+        kw = f"%{keyword}%"
+        conds.append(or_(AIChatLog.question.like(kw), AIChatLog.answer_text.like(kw)))
+    if data_type:
+        conds.append(AIChatLog.data_type == data_type)
+    if days and days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        conds.append(AIChatLog.created_at >= cutoff)
+    return conds
+
+
+@router.get("/chat-logs")
+async def get_chat_logs(
+    page: PageParams = Depends(pagination(default_limit=50)),
+    keyword: str = "",
+    data_type: str = "",
+    user_id: int | None = None,
+    days: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    查询 AI 助手聊天日志。
+    - 普通用户仅可见自己的记录；
+    - 超级管理员可见全部，并可通过 user_id 过滤。
+    支持关键字（问题/回答）、数据类型、时间范围（days=近N天）过滤，按时间倒序分页返回。
+    """
+    conds = _build_chat_log_filters(current_user, keyword, data_type, user_id, days)
+
+    count_stmt = select(func.count(AIChatLog.id))
+    detail_stmt = select(AIChatLog).options(joinedload(AIChatLog.user))
+    if conds:
+        count_stmt = count_stmt.where(*conds)
+        detail_stmt = detail_stmt.where(*conds)
+    detail_stmt = detail_stmt.order_by(AIChatLog.created_at.desc()).offset(page.skip).limit(page.limit)
+
+    total = (await db.execute(count_stmt)).scalar() or 0
+    rows = (await db.execute(detail_stmt)).scalars().all()
+
+    items = []
+    for log in rows:
+        created_at = log.created_at
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        items.append({
+            "id": log.id,
+            "userId": log.user_id,
+            "username": log.user.username if log.user else "",
+            "question": log.question,
+            "answerText": log.answer_text,
+            "dataType": log.data_type,
+            "clientIp": log.client_ip,
+            "createdAt": created_at.isoformat() if created_at else None,
+        })
+    return {"total": total, "items": items}
+
+
+def _csv_cell(value) -> str:
+    """CSV 单元格转义：含逗号/引号时用双引号包裹，内部引号翻倍"""
+    s = str("" if value is None else value)
+    s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    if '"' in s or "," in s:
+        s = '"' + s.replace('"', '""') + '"'
+    return s
+
+
+@router.get("/chat-logs/export")
+async def export_chat_logs(
+    keyword: str = "",
+    data_type: str = "",
+    user_id: int | None = None,
+    days: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    流式导出聊天日志为 CSV（沿用列表的全部筛选条件与可见范围）。
+    使用 StreamingResponse 逐行产出，规避前端一次拉全量导致的内存与超时问题。
+    """
+    conds = _build_chat_log_filters(current_user, keyword, data_type, user_id, days)
+    stmt = select(AIChatLog).options(joinedload(AIChatLog.user))
+    if conds:
+        stmt = stmt.where(*conds)
+    stmt = stmt.order_by(AIChatLog.created_at.desc()).limit(200000)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    def _line(values) -> str:
+        return ",".join(_csv_cell(v) for v in values) + "\r\n"
+
+    header = _line(["时间", "用户", "提问", "回答", "数据类型", "来源IP"])
+
+    async def gen():
+        # 带 BOM，确保 Excel 正确识别 UTF-8 中文
+        yield "\ufeff" + header
+        for log in rows:
+            yield _line([
+                log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                log.user.username if log.user else log.user_id,
+                log.question,
+                log.answer_text,
+                log.data_type or "",
+                log.client_ip or "",
+            ])
+
+    filename = f"ai-chat-logs-{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return StreamingResponse(
+        gen(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/config/status", response_model=ConfigStatusResponse)
@@ -214,7 +421,8 @@ async def update_ai_config(
         "provider": req.provider,
         "model": req.model,
         "api_url": req.api_url,
-        "api_key": req.api_key,
+        # 前端编辑时若未重新输入 key 会传空串，此时保留已有值
+        "api_key": req.api_key or configs[index].get("api_key", ""),
         "description": req.description,
         "enabled": req.enabled,
         "is_default": req.is_default,
@@ -244,6 +452,89 @@ async def delete_ai_config(
     await save_ai_configs(db, configs)
 
     return {"message": "配置已删除"}
+
+
+@router.post("/config/test")
+async def test_ai_config(
+    req: AIConfigTestRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    连接测试：验证 API Key / 模型 / URL 是否可用。
+    可传 config_id（用库里已存的 key 测）或完整字段（测未保存的新 key）。
+    单次请求、不重试，避免加重限流。
+    """
+    # 解析要测试的配置来源
+    if req.config_id is not None:
+        from ..services.ai_client import get_ai_configs as fetch_configs
+        configs = await fetch_configs(db)
+        target = next((c for c in configs if c.get("id") == req.config_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="配置不存在")
+        provider = target.get("provider", "")
+        model = target.get("model", "")
+        api_url = target.get("api_url", "")
+        api_key = target.get("api_key", "")
+    else:
+        provider = req.provider
+        model = req.model
+        api_url = req.api_url
+        api_key = req.api_key
+
+    if not provider or not model or not api_url or not api_key:
+        return {"ok": False, "message": "缺少必要配置（provider / model / api_url / api_key）"}
+
+    if provider.lower() not in OPENAI_COMPATIBLE:
+        return {"ok": False, "message": f"暂不支持测试该提供商：{provider}"}
+
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "你是运维助手"},
+            {"role": "user", "content": "只回复两个字：通了"},
+        ],
+        "max_tokens": 20,
+        "temperature": 0.1,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15), transport=httpx.AsyncHTTPTransport(proxy=None)) as client:
+            r = await client.post(
+                f"{api_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            if r.status_code == 200:
+                try:
+                    content = r.json()["choices"][0]["message"]["content"].strip()
+                except Exception:
+                    content = ""
+                return {"ok": True, "message": f"连接成功，模型返回：{content[:50]}"}
+
+            # 解析常见错误体
+            try:
+                err = r.json().get("error", {})
+                msg = err.get("message") or r.text[:200]
+            except Exception:
+                msg = r.text[:200]
+
+            if r.status_code == 401:
+                return {"ok": False, "message": f"认证失败（401）：API Key 无效或已失效"}
+            if r.status_code == 429:
+                friendly = "频率限制或额度不足（429）"
+                if "余额" in msg or "资源包" in msg or "1113" in msg:
+                    friendly = "账号余额不足或无可用资源包，请先充值"
+                return {"ok": False, "message": f"{friendly}：{msg}"}
+            return {"ok": False, "message": f"HTTP {r.status_code}：{msg}"}
+    except httpx.ConnectError:
+        return {"ok": False, "message": "无法连接到 API 地址，请检查 API URL 是否正确"}
+    except httpx.TimeoutException:
+        return {"ok": False, "message": "连接超时（15s），请检查网络或 API URL"}
+    except Exception as e:
+        return {"ok": False, "message": f"测试失败：{str(e)[:200]}"}
 
 
 @router.get("/backups/{backup_id}/analysis", response_model=BackupAnalysisResponse)

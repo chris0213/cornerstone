@@ -32,8 +32,15 @@ import {
   Document,
   Download
 } from '@element-plus/icons-vue'
-import * as echarts from 'echarts'
+// echarts 按需引入：只注册用到的图表与组件，避免全量打包（全量约 1MB）
+import * as echarts from 'echarts/core'
+import { LineChart, BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent, AxisPointerComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { ElMessage } from 'element-plus'
+import { formatFileSize } from '@/lib/utils'
+
+echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, AxisPointerComponent, CanvasRenderer])
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -131,17 +138,11 @@ function initCostChart() {
     }
   ]
 
-  const typeList = [
-    { name: '互联网专线', key: '互联网专线' },
-    { name: 'MPLS', key: 'MPLS' },
-    { name: 'SD-WAN', key: 'SD-WAN' }
-  ]
-
   const byType = costTrendData.value?.by_type as Record<string, number[]> | undefined
   // 动态获取所有存在费用数据的类型（支持新增类型）
   const allTypes = byType ? Object.keys(byType) : []
   allTypes.forEach(typeKey => {
-    const typeData = byType[typeKey]
+    const typeData = byType?.[typeKey]
     if (typeData && typeData.some(v => v > 0)) {
       const color = getCircuitTypeColor(typeKey)
       series.push({
@@ -149,7 +150,7 @@ function initCostChart() {
         type: 'line',
         data: typeData,
         smooth: true,
-        lineStyle: { width: 2, color },
+        lineStyle: { width: 2, color } as any,
         itemStyle: { color }
       })
     }
@@ -360,14 +361,6 @@ async function handleDownloadReport(item: ReportItem) {
     ElMessage.error('下载失败')
   }
 }
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-
 
 function getSeverityRisks(severity: string): RiskItem[] {
   if (!risksData.value) return []
@@ -633,20 +626,20 @@ onMounted(() => {
         </div>
         <div class="incident-content">
           <el-table class="dashboard-incidents-table" :data="monthlyIncidents?.incidents || []" style="width: 100%">
-            <el-table-column prop="title" label="故障标题" min-width="150" />
-            <el-table-column prop="circuit_name" label="专线" min-width="100" />
-            <el-table-column prop="severity" label="严重程度" min-width="80">
+            <el-table-column prop="title" label="故障标题" min-width="100" />
+            <el-table-column prop="circuit_name" label="专线" min-width="70" />
+            <el-table-column prop="severity" label="严重程度" min-width="60">
               <template #default="{ row }">
                 <el-tag :type="row.severity === 'critical' ? 'danger' : row.severity === 'major' ? 'warning' : 'info'" size="small">
                   {{ row.severity }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="started_at" label="开始时间" min-width="120" />
-            <el-table-column prop="duration_hours" label="持续时长" min-width="80">
+            <el-table-column prop="started_at" label="开始时间" min-width="90" />
+            <el-table-column prop="duration_hours" label="持续时长" min-width="60">
               <template #default="{ row }">{{ row.duration_hours }}h</template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" min-width="70">
+            <el-table-column prop="status" label="状态" min-width="55">
               <template #default="{ row }">
                 <el-tag :type="row.status === 'open' ? 'danger' : 'success'" size="small">
                   {{ row.status === 'open' ? '未解决' : '已解决' }}
@@ -757,6 +750,105 @@ onMounted(() => {
   }
 }
 
+@media (max-width: 768px) {
+  .overview-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-breakdown {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .cost-item {
+    min-width: 80px;
+  }
+
+  .chart-container {
+    height: 200px;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .lifecycle-chart {
+    height: 200px;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .dashboard-incidents-table {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-incidents-table :deep(.el-table__header th) {
+    white-space: nowrap;
+    font-size: 11px;
+    padding: 4px 2px;
+  }
+
+  .dashboard-incidents-table :deep(.el-table__body td) {
+    font-size: 11px;
+    padding: 4px 2px;
+  }
+
+  .dashboard-incidents-table :deep(.el-table__cell) {
+    padding: 4px 2px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  .risk-item {
+    padding: 8px 10px;
+  }
+
+  .risk-item-title {
+    font-size: 12px;
+  }
+
+  .risk-item-desc {
+    font-size: 11px;
+  }
+
+  :deep(.el-table) {
+    font-size: 12px;
+    overflow-x: auto;
+  }
+
+  :deep(.el-table__cell) {
+    padding: 6px 4px;
+  }
+
+  :deep(.el-table__header th) {
+    white-space: nowrap;
+  }
+
+  .dashboard-incidents-table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .expiring-item {
+    padding: 10px 12px;
+  }
+
+  .expiring-item-title {
+    font-size: 13px;
+  }
+
+  .expiring-item-desc {
+    font-size: 12px;
+  }
+}
+
 .overview-card {
   background: #fff;
   border-radius: 8px;
@@ -835,6 +927,7 @@ onMounted(() => {
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  overflow-x: hidden;
 }
 
 .panel-header {
@@ -933,6 +1026,8 @@ onMounted(() => {
 .chart-container {
   height: 250px;
   width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .cost-breakdown {
@@ -1094,11 +1189,14 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-x: hidden;
 }
 
 .lifecycle-chart {
   height: 200px;
   width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .lifecycle-warning {

@@ -50,11 +50,18 @@ PERMISSIONS = [
     
     # 预警中心
     {"module": "alerts", "action": "read", "display_name": "预警管理-查看", "description": "查看预警信息"},
-    
+
+    # 运营月报
+    {"module": "reports", "action": "read", "display_name": "运营月报-查看", "description": "查看和下载运营月报"},
+
+    # 智能巡检
+    {"module": "inspection", "action": "read", "display_name": "智能巡检-查看", "description": "查看智能巡检任务与结果"},
+
     # 系统管理
     {"module": "system", "action": "read", "display_name": "系统管理-查看", "description": "查看系统设置"},
     {"module": "system", "action": "write", "display_name": "系统管理-编辑", "description": "编辑系统设置"},
     {"module": "system", "action": "delete", "display_name": "系统管理-删除", "description": "删除系统数据"},
+    {"module": "system", "action": "admin", "display_name": "系统管理-高级", "description": "用户/角色/SSO/安全/通知/日志等高级系统管理"},
     
     # 操作日志
     {"module": "logs", "action": "read", "display_name": "日志管理-查看", "description": "查看操作日志"},
@@ -90,6 +97,7 @@ ROLES = [
             "backups:read", "backups:write", "backups:delete", "backups:export", "backups:backup_exec",
             "topology:read", "topology:write", "topology:delete",
             "alerts:read",
+            "inspection:read",
             "logs:read"
         ]
     },
@@ -102,6 +110,8 @@ ROLES = [
             "dashboard:read",
             "circuits:read",
             "alerts:read",
+            "reports:read",
+            "inspection:read",
             "logs:read"
         ]
     }

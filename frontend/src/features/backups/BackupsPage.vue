@@ -3,9 +3,10 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, Connection, Box, MapLocation } from '@element-plus/icons-vue'
 import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup } from '@/api/backups'
+import { formatDateTime } from '@/lib/utils'
 import { useI18n } from 'vue-i18n'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 import { getDevices, type DeviceResponse } from '@/api/devices'
 import { getSites, type SiteResponse } from '@/api/sites'
 import { getIPAddresses } from '@/api/ipam'
@@ -395,36 +396,6 @@ function getStatusType(status: string) {
     'pending': 'info',
   }
   return map[status] || 'info'
-}
-
-function formatDateTime(dateString: string) {
-    let date: Date
-    if (!dateString) return '-'
-    
-    // 处理 ISO 格式时间（如 2026-06-17T15:33:24.455473+08:00）
-    if (dateString.includes('T') || dateString.includes('Z')) {
-        date = new Date(dateString)
-    } else if (dateString.includes('+')) {
-        // 处理 PostgreSQL 格式：2026-06-17 15:33:24.455473+08
-        date = new Date(dateString.replace(' ', 'T'))
-    } else {
-        // 如果没有时区信息，假设是 UTC 时间
-        date = new Date(dateString.replace(' ', 'T') + 'Z')
-    }
-    
-    if (isNaN(date.getTime())) {
-        return dateString
-    }
-    return date.toLocaleString(locale?.value || navigator.language || 'zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-    })
 }
 
 function formatDuration(ms?: number) {

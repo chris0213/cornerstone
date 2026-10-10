@@ -35,6 +35,18 @@ async def scheduled_circuit_expire_task():
         await db.commit()
 
 
+async def scheduled_monthly_report_task():
+    """月报定时生成与推送：每分钟检查一次配置时间（配置保存即生效）"""
+    from src.services.report_schedule_service import run_scheduled_report
+    async with async_session() as db:
+        try:
+            result = await run_scheduled_report(db)
+            if result.get("action") not in ("disabled", "not_due"):
+                print(f"[{datetime.now()}] Monthly report schedule: {result}")
+        except Exception as e:
+            print(f"[{datetime.now()}] Monthly report schedule error: {e}")
+
+
 def start_scheduler(interval_minutes: int = 5):
     """启动定时任务调度器"""
     global scheduler, current_interval
@@ -59,6 +71,14 @@ def start_scheduler(interval_minutes: int = 5):
         scheduled_circuit_expire_task,
         trigger=CronTrigger(hour=1, minute=0),
         id="circuit_expire_task",
+        replace_existing=True
+    )
+
+    # 月报定时生成与推送：每分钟检查配置时间（enabled/day/hour/minute 存于 settings）
+    scheduler.add_job(
+        scheduled_monthly_report_task,
+        trigger=CronTrigger(minute="*"),
+        id="monthly_report_task",
         replace_existing=True
     )
     

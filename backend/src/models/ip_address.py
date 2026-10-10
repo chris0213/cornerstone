@@ -1,10 +1,13 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.sql import func
 
 from ..database import Base
 
 class IPAddress(Base):
     __tablename__ = "ip_addresses"
+    __table_args__ = (
+        Index('ix_ip_addresses_prefix_status', 'prefix_id', 'status'),
+    )
     
     id = Column(Integer, primary_key=True, index=True)
     address = Column(String(50), nullable=False)  # IP地址
@@ -12,7 +15,7 @@ class IPAddress(Base):
     device_id = Column(Integer, ForeignKey("devices.id"))
     usage = Column(String(100))
     owner = Column(String(50))
-    status = Column(String(20), default="available")  # available, assigned, reserved
+    status = Column(String(20), default="available", index=True)  # available, assigned, reserved
     expire_at = Column(DateTime(timezone=True), nullable=True)  # 到期时间
     is_online = Column(Boolean, nullable=True)  # 是否在线
     last_seen_at = Column(DateTime(timezone=True), nullable=True)  # 最后在线时间

@@ -11,6 +11,11 @@ class AlertRuleCreate(BaseModel):
     severity: str = "warning"
     enabled: bool = True
     notification_channels: Optional[List[str]] = None
+    # 自适应告警（可选）：不传则按 static 静态阈值处理，与历史行为一致
+    detection_mode: Optional[str] = None
+    baseline_window: Optional[int] = None
+    baseline_sensitivity: Optional[float] = None
+    mutation_threshold: Optional[float] = None
 
 class AlertRuleUpdate(BaseModel):
     name: Optional[str] = None
@@ -22,3 +27,8 @@ class AlertRuleUpdate(BaseModel):
     severity: Optional[str] = None
     enabled: Optional[bool] = None
     notification_channels: Optional[List[str]] = None
+    # 自适应告警（可选）
+    detection_mode: Optional[str] = None
+    baseline_window: Optional[int] = None
+    baseline_sensitivity: Optional[float] = None
+    mutation_threshold: Optional[float] = None

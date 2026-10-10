@@ -17,7 +17,7 @@ from ..services.backup_collector import collect_device_config, detect_config_cha
 from ..utils.crypto import encrypt_password, decrypt_password
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
 
@@ -229,8 +229,7 @@ async def test_credential(
 # 备份历史列表
 @router.get("/", response_model=list[BackupResponse])
 async def read_backups(
-    skip: int = 0,
-    limit: int = 100,
+    page: PageParams = Depends(pagination()),
     device_id: int = None,
     status: str = None,
     trigger: str = None,
@@ -248,7 +247,7 @@ async def read_backups(
     if has_change is not None:
         query = query.where(Backup.has_change == has_change)
     query = query.order_by(desc(Backup.created_at))
-    result = await db.execute(query.offset(skip).limit(limit))
+    result = await db.execute(query.offset(page.skip).limit(page.limit))
     
     backups = []
     for row in result.all():

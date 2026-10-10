@@ -15,6 +15,49 @@
       </el-button>
     </div>
 
+    <!-- 定时推送设置 -->
+    <el-card class="schedule-card">
+      <template #header>
+        <div class="card-header">
+          <span class="schedule-title">
+            <el-icon><Timer /></el-icon>
+            {{ t('reports.scheduleTitle') }}
+          </span>
+          <el-switch
+            v-model="schedule.enabled"
+            :disabled="savingSchedule"
+            @change="saveSchedule"
+          />
+        </div>
+      </template>
+      <div class="schedule-form">
+        <span class="schedule-label">{{ t('reports.scheduleRunAt') }}</span>
+        <span class="schedule-fixed">{{ t('reports.scheduleEveryMonth') }}</span>
+        <el-select v-model="schedule.day" style="width: 74px">
+          <el-option v-for="d in 28" :key="d" :label="`${d}`" :value="d" />
+        </el-select>
+        <span class="schedule-fixed">{{ t('reports.scheduleDayUnit') }}</span>
+        <el-select v-model="schedule.hour" style="width: 74px">
+          <el-option v-for="h in 24" :key="h - 1" :label="`${h - 1}`" :value="h - 1" />
+        </el-select>
+        <span class="schedule-colon">:</span>
+        <el-select v-model="schedule.minute" style="width: 74px">
+          <el-option v-for="m in 60" :key="m - 1" :label="`${m - 1}`" :value="m - 1" />
+        </el-select>
+        <span class="schedule-label schedule-email-label">{{ t('reports.scheduleEmailTo') }}</span>
+        <el-input
+          v-model="schedule.email_to"
+          :placeholder="t('reports.scheduleEmailPlaceholder')"
+          style="width: 250px"
+          clearable
+        />
+        <el-button type="primary" @click="saveSchedule" :loading="savingSchedule">
+          {{ t('common.save') }}
+        </el-button>
+      </div>
+      <div class="schedule-hint">{{ t('reports.scheduleHint') }}</div>
+    </el-card>
+
     <el-card class="report-card" v-loading="loading">
       <template #header>
         <div class="card-header">
@@ -55,13 +98,17 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, Refresh, Download, Delete } from '@element-plus/icons-vue'
+import { Document, Refresh, Download, Delete, Timer } from '@element-plus/icons-vue'
+import { formatFileSize } from '@/lib/utils'
 import {
   listMonthlyReports,
   generateMonthlyReport,
   downloadMonthlyReport,
   deleteMonthlyReport,
-  type ReportItem
+  getReportSchedule,
+  updateReportSchedule,
+  type ReportItem,
+  type ReportSchedule
 } from '@/api/reports'
 
 const { t } = useI18n()
@@ -131,30 +178,97 @@ async function handleDelete(item: ReportItem) {
   }
 }
 
-function formatFileSize(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let i = 0
-  let size = bytes
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024
-    i++
-  }
-  return `${size.toFixed(1)} ${units[i]}`
-}
-
 function formatTime(time: string): string {
   if (!time) return ''
   const d = new Date(time)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-onMounted(fetchReports)
+onMounted(() => {
+  fetchReports()
+  loadSchedule()
+})
+
+// ===== 定时推送设置 =====
+const schedule = ref<ReportSchedule>({
+  enabled: false,
+  day: 1,
+  hour: 9,
+  minute: 0,
+  email_to: ''
+})
+const savingSchedule = ref(false)
+
+async function loadSchedule() {
+  try {
+    schedule.value = await getReportSchedule()
+  } catch (error) {
+    console.error('Failed to load report schedule:', error)
+  }
+}
+
+async function saveSchedule() {
+  savingSchedule.value = true
+  try {
+    schedule.value = await updateReportSchedule(schedule.value)
+    ElMessage.success(t('reports.scheduleSaved'))
+  } catch (error: any) {
+    console.error('Failed to save report schedule:', error)
+    ElMessage.error(error.response?.data?.detail || t('reports.scheduleSaveFailed'))
+  } finally {
+    savingSchedule.value = false
+  }
+}
 </script>
 
 <style scoped>
 .reports-page {
-  padding: 20px;
+  padding: 0;
+}
+
+/* 定时推送设置 */
+.schedule-card {
+  margin-bottom: 16px;
+}
+
+.schedule-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.schedule-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-label {
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+}
+
+.schedule-email-label {
+  margin-left: 12px;
+}
+
+.schedule-fixed {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.schedule-colon {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.schedule-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
 }
 
 .page-header {

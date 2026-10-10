@@ -2,11 +2,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBackupTasks, createBackupTask, updateBackupTask, deleteBackupTask, toggleBackupTask, runBackupTaskNow, getBackupTaskHistory, getCredentials } from '@/api/backups'
+import { formatDateTime } from '@/lib/utils'
 import { getDevices, type DeviceResponse } from '@/api/devices'
 import { getSites, type SiteResponse } from '@/api/sites'
 import type { BackupTask, Credential, Device, Site } from '@/types/domain'
 import { useI18n } from 'vue-i18n'
-const { t, locale } = useI18n()
+const { t } = useI18n()
 
 const tasks = ref<BackupTask[]>([])
 const credentials = ref<Credential[]>([])
@@ -373,33 +374,6 @@ async function loadCredentials() {
 }
 
 
-
-function formatDateTime(dateString: string) {
-    let date: Date
-    if (!dateString) return '-'
-    
-    if (dateString.includes('T') || dateString.includes('Z')) {
-        date = new Date(dateString)
-    } else if (dateString.includes('+')) {
-        date = new Date(dateString.replace(' ', 'T'))
-    } else {
-        date = new Date(dateString.replace(' ', 'T'))
-    }
-    
-    if (isNaN(date.getTime())) {
-        return dateString
-    }
-    return date.toLocaleString(locale?.value || 'zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-    })
-}
 
 function getStatusType(status?: string) {
   const map: Record<string, string> = {
