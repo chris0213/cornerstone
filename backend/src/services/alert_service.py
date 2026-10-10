@@ -673,6 +673,54 @@ class AlertService:
         logger.info(f"自定义Webhook通知: {message}")
     
     @staticmethod
+    async def send_backup_failure_notification(
+        db: AsyncSession, task_id: int, task_name: str, summary: str
+    ):
+        """备份任务失败时推送通知（钉钉/企业微信/飞书/邮件）
+
+        逐渠道隔离异常，单渠道失败不影响其他渠道，且不向调用方抛出异常。
+        """
+        try:
+            config = await AlertService._get_notification_config(db)
+            message = f"【备份失败】任务 {task_id}（{task_name}）：{summary}"
+            errors = []
+            sent = False
+
+            if config["dingtalk_webhook_url"]:
+                try:
+                    await AlertService._send_dingtalk_notification(config["dingtalk_webhook_url"], message)
+                    sent = True
+                except Exception as e:
+                    errors.append(f"钉钉: {e}")
+            if config["wechat_webhook_url"]:
+                try:
+                    await AlertService._send_wechat_notification(config["wechat_webhook_url"], message)
+                    sent = True
+                except Exception as e:
+                    errors.append(f"企业微信: {e}")
+            if config["feishu_webhook_url"]:
+                try:
+                    await AlertService._send_feishu_notification(config["feishu_webhook_url"], message)
+                    sent = True
+                except Exception as e:
+                    errors.append(f"飞书: {e}")
+            if all([config["smtp_host"], config["smtp_username"], config["smtp_password"], config["smtp_from_email"]]):
+                try:
+                    await AlertService._send_email_notification(config, message)
+                    sent = True
+                except Exception as e:
+                    errors.append(f"邮件: {e}")
+
+            if sent:
+                logger.info(f"[备份通知] 任务 {task_id} 失败通知已发送: {summary}")
+            elif not errors:
+                logger.warning("[备份通知] 未配置任何通知渠道（钉钉/企业微信/飞书/邮件），跳过备份失败通知")
+            if errors:
+                logger.error(f"[备份通知] 任务 {task_id} 部分渠道发送失败: {'; '.join(errors)}")
+        except Exception as e:
+            logger.error(f"[备份通知] 任务 {task_id} 失败通知发送异常（不影响备份流程）: {e}")
+
+    @staticmethod
     async def acknowledge_alert(db: AsyncSession, alert_id: int, user_id: int):
         """确认告警"""
         stmt = update(AlertRecord).where(AlertRecord.id == alert_id).values(

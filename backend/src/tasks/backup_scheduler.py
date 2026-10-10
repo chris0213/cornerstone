@@ -30,6 +30,11 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
         calculate_hash, save_config_to_file
     from ..utils.crypto import decrypt_password
     from ..database import async_session
+
+    async def _notify_failure(db, summary: str):
+        """备份失败时推送通知（渠道未配置/发送异常均不影响备份流程）"""
+        from ..services.alert_service import AlertService
+        await AlertService.send_backup_failure_notification(db, task_id, task.name, summary)
     
     running_tasks[task_id] = True
     
@@ -54,6 +59,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                 task.last_run_at = datetime.now(BJT)
                 task.last_run_status = "failed"
                 await db_session.commit()
+                await _notify_failure(db_session, "凭证不存在")
                 return
             
             # 解密凭证密码
@@ -118,6 +124,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                 task.last_run_at = datetime.now(BJT)
                 task.last_run_status = "failed"
                 await db_session.commit()
+                await _notify_failure(db_session, "没有找到可备份的设备")
                 return
             
             # 并发采集（最多10台并发）
@@ -156,6 +163,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
             # 处理结果并写入备份记录
             success_count = 0
             failed_count = 0
+            failed_details = []
             
             for device_id, result in results:
                 # 如果result为None，说明设备没有管理IP，跳过
@@ -218,6 +226,12 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                     success_count += 1
                 else:
                     failed_count += 1
+                    device = next((d for d, _ in devices_with_ip if d.id == device_id), None)
+                    device_name = device.name if device else f"设备{device_id}"
+                    device_ip = next((ip for d, ip in devices_with_ip if d.id == device_id), None)
+                    failed_details.append(
+                        f"{device_name}({device_ip or '无IP'}): {result.error_message or '未知错误'}"
+                    )
             
             await db_session.commit()
             
@@ -232,6 +246,13 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                 else:
                     task.last_run_status = "partial_fail"
                 await db_session.commit()
+
+                if failed_count > 0:
+                    status_label = "部分失败" if task.last_run_status == "partial_fail" else "全部失败"
+                    summary = f"{status_label}（成功 {success_count} / 失败 {failed_count}）"
+                    if failed_details:
+                        summary += "\n" + "\n".join(failed_details)
+                    await _notify_failure(db_session, summary)
             
             logger.info(f"备份任务 {task_id} 执行完成: success={success_count}, failed={failed_count}")
     finally:
