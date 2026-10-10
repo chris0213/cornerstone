@@ -11,7 +11,7 @@ from src.models.site import Site
 from src.models.circuit_incident import CircuitIncident
 from src.api.auth import get_current_active_user
 from src.models.user import User
-from .common import require_manager_or_admin
+from .common import require_manager_or_admin, to_naive_bjt
 
 router = APIRouter()
 
@@ -383,15 +383,15 @@ async def get_monthly_incidents_trend(
         )
         last_month_total = last_month_result.scalar() or 0
         
-        # 平均恢复时长
+        # 平均恢复时长（duration_minutes 为分钟，换算为小时）
         avg_recovery = 0.0
         try:
             avg_recovery_result = await db.execute(
-                select(func.coalesce(func.avg(CircuitIncident.duration_hours), 0))
+                select(func.coalesce(func.avg(CircuitIncident.duration_minutes), 0) / 60)
                 .where(and_(
                     CircuitIncident.created_at >= month_start,
                     CircuitIncident.created_at < next_month,
-                    CircuitIncident.duration_hours > 0
+                    CircuitIncident.duration_minutes > 0
                 ))
             )
             avg_recovery = float(avg_recovery_result.scalar() or 0)
@@ -405,7 +405,7 @@ async def get_monthly_incidents_trend(
         try:
             max_result = await db.execute(
                 select(
-                    CircuitIncident.duration_hours,
+                    CircuitIncident.duration_minutes,
                     Circuit.name.label('circuit_name'),
                     CircuitIncident.created_at
                 )
@@ -414,14 +414,14 @@ async def get_monthly_incidents_trend(
                     CircuitIncident.created_at >= month_start,
                     CircuitIncident.created_at < next_month
                 ))
-                .order_by(func.coalesce(CircuitIncident.duration_hours, 0).desc())
+                .order_by(func.coalesce(CircuitIncident.duration_minutes, 0).desc())
                 .limit(1)
             )
             max_row = max_result.first()
             if max_row:
-                max_duration = float(max_row.duration_hours or 0)
+                max_duration = float(max_row.duration_minutes or 0) / 60
                 max_duration_circuit = max_row.circuit_name or ""
-                max_duration_date = max_row.created_at.strftime("%Y-%m-%d") if max_row.created_at else ""
+                max_duration_date = to_naive_bjt(max_row.created_at).strftime("%Y-%m-%d") if max_row.created_at else ""
         except Exception:
             pass
         
@@ -435,7 +435,7 @@ async def get_monthly_incidents_trend(
                     Circuit.name.label('circuit_name'),
                     CircuitIncident.severity,
                     CircuitIncident.started_at,
-                    CircuitIncident.duration_hours,
+                    CircuitIncident.duration_minutes,
                     CircuitIncident.status
                 )
                 .outerjoin(Circuit, CircuitIncident.circuit_id == Circuit.id)
@@ -451,8 +451,8 @@ async def get_monthly_incidents_trend(
                     "title": row.title or "",
                     "circuit_name": row.circuit_name or "",
                     "severity": row.severity or "low",
-                    "started_at": row.started_at.strftime("%Y-%m-%d %H:%M:%S") if row.started_at else "",
-                    "duration_hours": float(row.duration_hours or 0),
+                    "started_at": to_naive_bjt(row.started_at).strftime("%Y-%m-%d %H:%M:%S") if row.started_at else "",
+                    "duration_hours": float(row.duration_minutes or 0) / 60,
                     "status": row.status or "open"
                 })
         except Exception:

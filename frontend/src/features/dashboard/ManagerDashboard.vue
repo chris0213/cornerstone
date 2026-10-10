@@ -293,20 +293,32 @@ function initLifecycleChart() {
 async function loadData() {
   loading.value = true
   try {
-    const [stats, risks, costTrend, lifecycle, incidents] = await Promise.all([
+    // 独立容错：任一接口失败只影响对应卡片，不拖垮整个看板
+    const settled = await Promise.allSettled([
       getManagerStats(),
       getRisks(),
       getCircuitCostTrend(),
       getDeviceLifecycle(),
       getMonthlyIncidents()
     ])
-    
-    managerStats.value = stats
-    risksData.value = risks
-    costTrendData.value = costTrend
-    lifecycleData.value = lifecycle
-    monthlyIncidents.value = incidents
-    
+    const pick = <T>(r: PromiseSettledResult<T>): T | null => {
+      if (r.status === 'fulfilled') return r.value
+      console.error('Failed to load manager dashboard data:', r.reason)
+      return null
+    }
+
+    const stats = pick(settled[0])
+    const risks = pick(settled[1])
+    const costTrend = pick(settled[2])
+    const lifecycle = pick(settled[3])
+    const incidents = pick(settled[4])
+
+    if (stats) managerStats.value = stats
+    if (risks) risksData.value = risks
+    if (costTrend) costTrendData.value = costTrend
+    if (lifecycle) lifecycleData.value = lifecycle
+    if (incidents) monthlyIncidents.value = incidents
+
     setTimeout(() => {
       initCostChart()
       initLifecycleChart()
@@ -438,7 +450,7 @@ onMounted(() => {
         <div class="card-content">
           <div class="card-label">本月网络可用性</div>
           <div class="card-value">
-            {{ managerStats?.availability.current !== null ? managerStats?.availability.current + '%' : '暂无数据' }}
+            {{ managerStats?.availability.current != null ? managerStats?.availability.current + '%' : '暂无数据' }}
             <el-icon v-if="getTrendIcon(managerStats?.availability.trend || null)" :style="{ color: getTrendColor(managerStats?.availability.trend || null) }">
               <component :is="getTrendIcon(managerStats?.availability.trend || null)" />
             </el-icon>

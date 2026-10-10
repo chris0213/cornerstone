@@ -14,7 +14,7 @@ from src.models.link_monitor import LinkMonitor
 from src.models.circuit_incident import CircuitIncident
 from src.api.auth import get_current_active_user
 from src.models.user import User
-from .common import require_manager_or_admin
+from .common import require_manager_or_admin, to_naive_bjt
 
 router = APIRouter()
 
@@ -128,7 +128,8 @@ async def get_manager_stats(
         )
         oldest = oldest_open_result.scalar_one_or_none()
         if oldest:
-            max_duration_hours = round((now - oldest).total_seconds() / 3600, 1)
+            # PG timestamptz 返回 aware UTC，与 naive now 混算会抛 TypeError，先归一
+            max_duration_hours = round((now - to_naive_bjt(oldest)).total_seconds() / 3600, 1)
     
     # 4. 即将到期事项（两级预警）
     now_dt = now
@@ -148,8 +149,8 @@ async def get_manager_stats(
         {
             "type": "专线合同",
             "name": c.name,
-            "expire_date": c.contract_end.strftime("%Y-%m-%d"),
-            "days_left": (c.contract_end.date() - now_dt.date()).days,
+            "expire_date": to_naive_bjt(c.contract_end).strftime("%Y-%m-%d"),
+            "days_left": (to_naive_bjt(c.contract_end).date() - now_dt.date()).days,
             "detail": c.provider or ""
         }
         for c in urgent_circuits_result.all()
