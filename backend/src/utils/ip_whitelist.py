@@ -59,6 +59,32 @@ def is_ip_in_networks(client_ip: str, networks: List[ipaddress.IPv4Network | ipa
         return False
 
 
+def parse_whitelist_value(raw: str) -> List[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """解析白名单存储值（JSON 数组或换行分隔文本）为网络列表"""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    entries: List[str]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            entries = [str(e) for e in parsed]
+        elif isinstance(parsed, str):
+            entries = [line.strip() for line in parsed.splitlines() if line.strip()]
+        else:
+            return []
+    except json.JSONDecodeError:
+        entries = [line.strip() for line in raw.splitlines() if line.strip()]
+
+    networks: List[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for entry in entries:
+        net = parse_cidr_or_ip(entry)
+        if net:
+            networks.append(net)
+    return networks
+
+
 async def get_whitelist_from_db(db: AsyncSession) -> List[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """从数据库读取白名单配置"""
     result = await db.execute(select(Setting).filter(Setting.key == "security.ip_whitelist"))
@@ -67,25 +93,7 @@ async def get_whitelist_from_db(db: AsyncSession) -> List[ipaddress.IPv4Network 
     if not setting or not setting.value:
         return []
 
-    try:
-        entries = json.loads(setting.value)
-        if not isinstance(entries, list):
-            # 如果是纯文本（每行一个），解析为列表
-                if isinstance(setting.value, str):
-                    entries = [line.strip() for line in setting.value.splitlines() if line.strip()]
-                else:
-                    return []
-    except json.JSONDecodeError:
-        # 如果是纯文本（每行一个），解析为列表
-        entries = [line.strip() for line in setting.value.splitlines() if line.strip()]
-
-    networks: List[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for entry in entries:
-        net = parse_cidr_or_ip(str(entry))
-        if net:
-            networks.append(net)
-
-    return networks
+    return parse_whitelist_value(setting.value)
 
 
 async def get_cached_whitelist(db: AsyncSession) -> List[ipaddress.IPv4Network | ipaddress.IPv6Network]:

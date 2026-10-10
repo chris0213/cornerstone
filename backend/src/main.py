@@ -38,16 +38,19 @@ app.add_middleware(
 @app.middleware("http")
 async def ip_whitelist_middleware(request: Request, call_next):
     # 跳过公开端点（登录前可访问）
+    # 注意：白名单自身的读写接口必须放行，否则配错白名单后无法在页面上自救
+    # （这两个接口仍有 JWT + super_admin 鉴权，IP 层放行不降低身份安全性）
     public_paths = [
-        "/", "/health", 
-        "/api/v1/settings/public/brand", 
+        "/", "/health",
+        "/api/v1/settings/public/brand",
         "/api/v1/auth/captcha",
         "/api/v1/auth/token",
         "/api/v1/auth/login-with-captcha"
     ]
-    if (request.url.path in public_paths or 
+    if (request.url.path in public_paths or
         request.url.path.startswith("/api/v1/auth/sso/") or
-        request.url.path.startswith("/api/v1/auth/ldap/")):
+        request.url.path.startswith("/api/v1/auth/ldap/") or
+        request.url.path.startswith("/api/v1/settings/security/")):
         return await call_next(request)
 
     # 检查IP是否允许

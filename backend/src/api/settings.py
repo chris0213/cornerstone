@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete
@@ -683,13 +683,34 @@ async def get_ip_whitelist(
 @router.put("/security/ip-whitelist", response_model=IPWhitelistResponse)
 async def update_ip_whitelist(
     request: IPWhitelistRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_super_admin),
 ):
-    """更新IP白名单配置（仅 super_admin）"""
-    from src.utils.ip_whitelist import invalidate_cache
+    """更新IP白名单配置（仅 super_admin）
+
+    防自锁：配置了白名单但未包含当前操作者 IP 时，自动把操作者 IP 追加进名单，
+    避免保存成功后自己被立刻挡在门外。
+    """
+    from src.utils.ip_whitelist import (
+        invalidate_cache,
+        get_client_ip_from_request,
+        parse_whitelist_value,
+        is_ip_in_networks,
+    )
 
     whitelist_text = request.whitelist.strip()
+
+    # 防自锁：名单非空且操作者不在其中 → 自动追加
+    client_ip = get_client_ip_from_request(http_request)
+    if whitelist_text and client_ip not in ("127.0.0.1", "::1", "localhost"):
+        try:
+            networks = parse_whitelist_value(whitelist_text)
+            if networks and not is_ip_in_networks(client_ip, networks):
+                whitelist_text = f"{whitelist_text}\n{client_ip}"
+                logger.info(f"[IP白名单] 自动追加操作者 IP {client_ip}，防止配置后被锁")
+        except ValueError:
+            pass
 
     result = await db.execute(select(Setting).filter(Setting.key == IP_WHITELIST_KEY))
     setting = result.scalars().first()
