@@ -232,18 +232,14 @@ async def get_circuit_cost_trend(
         idx = base_idx - i
         month_points.append((idx // 12, idx % 12 + 1))
 
-    type_mapping = {
-        '互联网专线': '互联网专线',
-        'MPLS': 'MPLS',
-        'SD-WAN': 'SD-WAN',
-        '光纤专线': '其他',
-        '云专线': '其他',
-        None: '其他',
-    }
+    # 按专线实际类型动态分组：类型为空的才归入"其他"，其余按原类型展示（如裸光纤、云专线）
+    type_keys = sorted({(c.type or "").strip() for c in circuits} - {""})
+    by_type: dict = {k: [] for k in type_keys}
+    if any(not (c.type or "").strip() for c in circuits):
+        by_type["其他"] = []
 
     months = []
     total_costs = []
-    by_type = {"互联网专线": [], "MPLS": [], "SD-WAN": [], "其他": []}
 
     for year, month in month_points:
         month_start = datetime(year, month, 1)
@@ -259,7 +255,8 @@ async def get_circuit_cost_trend(
             history = changes_by_circuit.get(circuit.id)
             value = cost_in_month(circuit, history, month_start, month_end)
             total += value
-            per_type[type_mapping.get(circuit.type, '其他')] += value
+            type_key = (circuit.type or "").strip() or "其他"
+            per_type[type_key] += value
 
         total_costs.append(int(total))
         for key in by_type:
