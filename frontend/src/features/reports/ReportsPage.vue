@@ -44,14 +44,40 @@
         <el-select v-model="schedule.minute" style="width: 74px">
           <el-option v-for="m in 60" :key="m - 1" :label="`${m - 1}`" :value="m - 1" />
         </el-select>
-        <span class="schedule-label schedule-email-label">{{ t('reports.scheduleEmailTo') }}</span>
+        <span class="schedule-label schedule-email-label" v-if="hasEmailChannel">{{ t('reports.scheduleEmailTo') }}</span>
         <el-input
+          v-if="hasEmailChannel"
           v-model="schedule.email_to"
           :placeholder="t('reports.scheduleEmailPlaceholder')"
           style="width: 250px"
           clearable
         />
         <el-button type="primary" @click="saveSchedule" :loading="savingSchedule">
+          {{ t('common.save') }}
+        </el-button>
+      </div>
+      <!-- 推送渠道选择 -->
+      <div class="schedule-channels">
+        <span class="schedule-label">{{ t('reports.scheduleChannels') }}</span>
+        <el-checkbox-group v-model="schedule.channels" @change="saveSchedule">
+          <el-checkbox label="email">{{ t('reports.channelEmail') }}</el-checkbox>
+          <el-checkbox label="dingtalk">{{ t('reports.channelDingtalk') }}</el-checkbox>
+          <el-checkbox label="wechat">{{ t('reports.channelWechat') }}</el-checkbox>
+          <el-checkbox label="feishu">{{ t('reports.channelFeishu') }}</el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <!-- 聊天软件消息内容配置 -->
+      <div class="schedule-chat-config" v-if="hasChatChannel">
+        <span class="schedule-label">{{ t('reports.scheduleBaseUrl') }}</span>
+        <el-input
+          v-model="schedule.link_base_url"
+          :placeholder="t('reports.scheduleBaseUrlPlaceholder')"
+          style="width: 250px"
+          clearable
+        />
+        <el-checkbox v-model="schedule.include_summary">{{ t('reports.scheduleIncludeSummary') }}</el-checkbox>
+        <el-checkbox v-model="schedule.include_link">{{ t('reports.scheduleIncludeLink') }}</el-checkbox>
+        <el-button @click="saveSchedule" :loading="savingSchedule" size="small">
           {{ t('common.save') }}
         </el-button>
       </div>
@@ -95,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Refresh, Download, Delete, Timer } from '@element-plus/icons-vue'
@@ -195,9 +221,19 @@ const schedule = ref<ReportSchedule>({
   day: 1,
   hour: 9,
   minute: 0,
-  email_to: ''
+  email_to: '',
+  channels: ['email'],
+  include_link: true,
+  include_summary: true,
+  link_base_url: ''
 })
 const savingSchedule = ref(false)
+
+// 是否勾选了聊天软件渠道（钉钉/企业微信/飞书）
+const hasChatChannel = computed(() =>
+  schedule.value.channels.some(c => ['dingtalk', 'wechat', 'feishu'].includes(c))
+)
+const hasEmailChannel = computed(() => schedule.value.channels.includes('email'))
 
 async function loadSchedule() {
   try {
@@ -262,6 +298,25 @@ async function saveSchedule() {
 .schedule-colon {
   font-size: 16px;
   font-weight: 600;
+}
+
+.schedule-channels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.schedule-chat-config {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
 }
 
 .schedule-hint {

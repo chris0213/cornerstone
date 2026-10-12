@@ -1,9 +1,14 @@
-"""月报定时生成与邮件推送
+"""月报定时生成与多渠道推送
 
 配置存 settings（key=report_schedule）：
-    {"enabled": bool, "day": 1-28, "hour": 0-23, "minute": 0-59, "email_to": "a@b.c"}
+    {"enabled": bool, "day": 1-28, "hour": 0-23, "minute": 0-59, "email_to": "a@b.c",
+     "channels": ["email","dingtalk","wechat","feishu"],
+     "include_link": bool, "include_summary": bool, "link_base_url": "https://ops.example.com"}
 
-调度器每分钟检查一次：到达配置时间且启用时，生成上个月的月报并邮件推送。
+调度器每分钟检查一次：到达配置时间且启用时，生成上个月的月报并按渠道推送。
+- 邮件：带 PDF 附件（email_to 为空则跳过）
+- 钉钉/企业微信/飞书：文本消息，内容含关键指标摘要与报告页下载链接（按 include_* 开关），
+  webhook 地址复用「通知设置」中的配置。
 幂等：该月已存在 done 记录则跳过，进程重启/重复触发不会重复生成与发送。
 """
 import json
@@ -38,7 +43,14 @@ SCHEDULE_DEFAULTS = {
     "hour": 9,      # 北京时间
     "minute": 0,
     "email_to": "",  # 留空只生成不发送
+    "channels": ["email"],          # 推送渠道：email/dingtalk/wechat/feishu
+    "include_link": True,           # 聊天软件消息是否附报告页下载链接
+    "include_summary": True,        # 聊天软件消息是否附关键指标摘要
+    "link_base_url": "",            # 系统访问地址，生成下载链接用（如 https://ops.example.com）
 }
+
+VALID_CHANNELS = ("email", "dingtalk", "wechat", "feishu")
+CHAT_CHANNELS = ("dingtalk", "wechat", "feishu")
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -54,6 +66,20 @@ def _validate(config: dict) -> dict:
     minute = int(config.get("minute", 0))
     email_to = str(config.get("email_to", "") or "").strip()
 
+    channels = config.get("channels")
+    if channels is None:
+        channels = list(SCHEDULE_DEFAULTS["channels"])  # 旧配置无此字段时兼容默认
+    if not isinstance(channels, list):
+        raise ValueError("推送渠道格式不正确")
+    channels = [str(c).strip() for c in channels if str(c).strip()]
+    unknown = [c for c in channels if c not in VALID_CHANNELS]
+    if unknown:
+        raise ValueError(f"不支持的推送渠道: {', '.join(unknown)}")
+
+    include_link = bool(config.get("include_link", True))
+    include_summary = bool(config.get("include_summary", True))
+    link_base_url = str(config.get("link_base_url", "") or "").strip().rstrip("/")
+
     if not 1 <= day <= 28:
         raise ValueError("执行日期须在 1-28 之间")
     if not 0 <= hour <= 23:
@@ -63,12 +89,20 @@ def _validate(config: dict) -> dict:
     if email_to and "@" not in email_to:
         raise ValueError("收件邮箱格式不正确")
 
+    # 勾选聊天软件渠道时，至少选择一种消息内容
+    if any(c in CHAT_CHANNELS for c in channels) and not (include_link or include_summary):
+        raise ValueError("聊天软件推送至少需要选择一种消息内容（下载链接或关键指标）")
+
     return {
         "enabled": bool(config.get("enabled", False)),
         "day": day,
         "hour": hour,
         "minute": minute,
         "email_to": email_to,
+        "channels": channels,
+        "include_link": include_link,
+        "include_summary": include_summary,
+        "link_base_url": link_base_url,
     }
 
 
@@ -142,7 +176,15 @@ async def generate_report(db: AsyncSession, year: int, month: int, generated_by:
     ))
     await db.commit()
 
-    return {"filename": filename, "file_path": output_path, "file_size": file_size}
+    return {
+        "filename": filename, "file_path": output_path, "file_size": file_size,
+        "summary": {
+            "cost_total": data.circuit_cost_total,
+            "incident_count": data.incident_count,
+            "availability_pct": data.availability_pct,
+            "expiring_count": len(data.urgent_items) + len(data.warning_items),
+        },
+    }
 
 
 async def _has_report(db: AsyncSession, year: int, month: int) -> bool:
@@ -181,8 +223,67 @@ def _send_report_email(smtp_cfg: dict, to_email: str, subject: str, pdf_path: st
         server.sendmail(smtp_cfg["smtp_from_email"], [to_email], msg.as_string())
 
 
+def _build_chat_message(config: dict, year: int, month: int, summary: dict) -> str:
+    """构建聊天软件推送文本（关键指标摘要 + 报告页下载链接，按开关拼装）"""
+    lines = [f"【基石月报】{year}年{month}月运营月报已生成"]
+
+    if config.get("include_summary", True):
+        lines.append("")
+        lines.append("关键指标：")
+        lines.append(f"· 专线月租总费用：¥{summary.get('cost_total', 0):,}")
+        lines.append(f"· 本月故障：{summary.get('incident_count', 0)} 起")
+        avail = summary.get("availability_pct")
+        if avail is not None:
+            lines.append(f"· 网络可用性：{avail:.1f}%")
+        lines.append(f"· 到期事项：{summary.get('expiring_count', 0)} 项")
+
+    if config.get("include_link", True):
+        base_url = (config.get("link_base_url") or "").strip().rstrip("/")
+        if base_url:
+            lines.append("")
+            lines.append(f"报告下载：{base_url}/reports")
+
+    return "\n".join(lines)
+
+
+async def _send_chat_notifications(db: AsyncSession, config: dict, message: str) -> dict:
+    """按已选聊天渠道发送消息，webhook 复用通知设置；逐渠道容错"""
+    from src.services.alert_service import AlertService  # 局部导入避免循环依赖
+
+    channels = [c for c in config.get("channels", []) if c in CHAT_CHANNELS]
+    result: dict = {"sent": [], "failed": {}}
+    if not channels:
+        return result
+
+    notify_cfg = await AlertService._get_notification_config(db)
+    senders = {
+        "dingtalk": AlertService._send_dingtalk_notification,
+        "wechat": AlertService._send_wechat_notification,
+        "feishu": AlertService._send_feishu_notification,
+    }
+    url_keys = {
+        "dingtalk": "dingtalk_webhook_url",
+        "wechat": "wechat_webhook_url",
+        "feishu": "feishu_webhook_url",
+    }
+
+    for ch in channels:
+        webhook = notify_cfg.get(url_keys[ch])
+        if not webhook:
+            logger.warning("月报推送跳过 %s：通知设置中未配置 webhook", ch)
+            result["failed"][ch] = "webhook 未配置"
+            continue
+        try:
+            await senders[ch](webhook, message)
+            result["sent"].append(ch)
+        except Exception as e:
+            logger.warning("月报推送 %s 发送失败: %s", ch, e)
+            result["failed"][ch] = str(e)
+    return result
+
+
 async def run_scheduled_report(db: AsyncSession) -> dict:
-    """调度入口（每分钟调用）：到达配置时间则生成上月月报并推送
+    """调度入口（每分钟调用）：到达配置时间则生成上月月报并按渠道推送
 
     返回执行结果 dict，便于日志与测试断言。
     """
@@ -206,10 +307,12 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
         logger.error("定时月报生成失败 %04d-%02d: %s", year, month, e)
         return {"action": "failed", "error": str(e)}
 
+    channels = config.get("channels") or []
     outcome = {"action": "generated", "year": year, "month": month,
-               "filename": result["filename"], "email_sent": False}
+               "filename": result["filename"], "email_sent": False, "chat_sent": []}
 
-    if config["email_to"]:
+    # 邮件渠道（带 PDF 附件）
+    if "email" in channels and config["email_to"]:
         from src.services.alert_service import AlertService  # 局部导入避免循环依赖
         try:
             smtp_cfg = await AlertService._get_notification_config(db)
@@ -224,5 +327,14 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
             logger.warning("定时月报邮件发送失败（报告已生成）: %s", e)
             outcome["email_error"] = str(e)
 
-    logger.info("定时月报已生成: %s email_sent=%s", result["filename"], outcome["email_sent"])
+    # 聊天软件渠道（摘要 + 下载链接文本消息）
+    chat_result = await _send_chat_notifications(
+        db, config, _build_chat_message(config, year, month, result.get("summary", {}))
+    )
+    outcome["chat_sent"] = chat_result["sent"]
+    if chat_result["failed"]:
+        outcome["chat_failed"] = chat_result["failed"]
+
+    logger.info("定时月报已生成: %s email_sent=%s chat_sent=%s",
+                result["filename"], outcome["email_sent"], outcome["chat_sent"])
     return outcome

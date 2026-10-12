@@ -48,6 +48,10 @@ export interface ReportSchedule {
   hour: number     // 0-23
   minute: number   // 0-59
   email_to: string // 留空只生成不发送
+  channels: string[]      // email/dingtalk/wechat/feishu
+  include_link: boolean   // 聊天消息附下载链接
+  include_summary: boolean // 聊天消息附关键指标
+  link_base_url: string   // 系统访问地址（生成下载链接）
 }
 
 export async function getReportSchedule(): Promise<ReportSchedule> {

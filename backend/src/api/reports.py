@@ -33,6 +33,10 @@ class ScheduleConfig(BaseModel):
     hour: int       # 0-23
     minute: int     # 0-59
     email_to: str = ""  # 留空只生成不发送
+    channels: list[str] = ["email"]          # email/dingtalk/wechat/feishu
+    include_link: bool = True                # 聊天消息附下载链接
+    include_summary: bool = True             # 聊天消息附关键指标
+    link_base_url: str = ""                  # 系统访问地址（生成下载链接）
 
 
 def _require_manager_or_admin(current_user: User):
