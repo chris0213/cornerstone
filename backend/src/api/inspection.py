@@ -21,8 +21,22 @@ from src.schemas.inspection import (
     AlertCountResponse
 )
 from .dependencies import get_current_active_user
+from src.tasks.inspection_scheduler import (
+    add_inspection_task,
+    remove_inspection_task,
+    update_inspection_task as refresh_scheduled_task,
+)
 
 router = APIRouter(prefix="/inspection", tags=["inspection"])
+
+
+async def _sync_scheduler(coro) -> None:
+    """同步调度器注册，失败只记日志不影响主流程（任务已落库）"""
+    try:
+        await coro
+    except Exception as e:
+        import logging
+        logging.getLogger("cornerstone").error(f"巡检任务调度器同步失败: {e}", exc_info=True)
 
 
 # 巡检任务管理
@@ -61,6 +75,7 @@ async def create_inspection_task(
     db.add(new_task)
     await db.commit()
     await db.refresh(new_task)
+    await _sync_scheduler(add_inspection_task(new_task.id, db))
     return new_task
 
 
@@ -80,9 +95,10 @@ async def update_inspection_task(
     update_data = task.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(existing, key, value)
-    
+
     await db.commit()
     await db.refresh(existing)
+    await _sync_scheduler(refresh_scheduled_task(task_id, db))
     return existing
 
 
@@ -100,6 +116,7 @@ async def delete_inspection_task(
     
     await db.delete(task)
     await db.commit()
+    await _sync_scheduler(remove_inspection_task(task_id))
     return {"message": "删除成功"}
 
 
@@ -118,6 +135,10 @@ async def toggle_inspection_task(
     task.is_enabled = not task.is_enabled
     await db.commit()
     await db.refresh(task)
+    if task.is_enabled:
+        await _sync_scheduler(add_inspection_task(task_id, db))
+    else:
+        await _sync_scheduler(remove_inspection_task(task_id))
     return {"message": "已启用" if task.is_enabled else "已停用", "is_enabled": task.is_enabled}
 
 

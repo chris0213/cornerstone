@@ -1,24 +1,30 @@
 from datetime import datetime
 from typing import Optional
+import logging
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import InspectionTask
-from src.database import get_db
+from src.database import async_session
 from src.services.inspector import InspectorService
+
+logger = logging.getLogger("cornerstone")
 
 scheduler = None
 
 
 async def run_scheduled_inspection(task_id: int):
     """执行定时巡检任务"""
-    async with get_db() as db:
-        result = await db.execute(InspectionTask.__table__.select().where(InspectionTask.id == task_id))
+    async with async_session() as db:
+        result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
         task = result.scalar_one_or_none()
-        
+
         if not task or not task.is_enabled:
             return
-        
+
         try:
             await InspectorService.run_inspection(
                 task=task,
@@ -27,6 +33,7 @@ async def run_scheduled_inspection(task_id: int):
                 db=db
             )
         except Exception as e:
+            logger.error(f"定时巡检任务 {task_id} 执行失败: {e}", exc_info=True)
             # 更新任务状态为失败
             await db.execute(
                 InspectionTask.__table__.update()
@@ -49,56 +56,54 @@ async def reload_inspection_tasks(db: AsyncSession):
     """重新加载所有巡检任务到调度器"""
     if not scheduler:
         return
-    
+
     # 移除所有现有的巡检任务
     for job in scheduler.get_jobs():
         if job.id.startswith("inspection_"):
             scheduler.remove_job(job.id)
-    
+
     # 加载所有启用的巡检任务
-    from sqlalchemy import select
     result = await db.execute(
         select(InspectionTask)
         .where(InspectionTask.is_enabled == True)
     )
     tasks = result.scalars().all()
-    
+
     for task in tasks:
-        # 解析cron表达式
-        cron_parts = task.cron_expr.split()
-        scheduler.add_job(
-            run_scheduled_inspection,
-            trigger='cron',
-            args=[task.id],
-            id=f"inspection_{task.id}",
-            name=task.name,
-            minute=cron_parts[0],
-            hour=cron_parts[1],
-            day=cron_parts[2],
-            month=cron_parts[3],
-            day_of_week=cron_parts[4],
-            replace_existing=True
-        )
+        _register_task(task)
+
+
+def _register_task(task: InspectionTask) -> bool:
+    """把任务注册到调度器，cron 无效时记日志跳过（不影响调用方）"""
+    if not scheduler:
+        return False
+    try:
+        trigger = CronTrigger.from_crontab(task.cron_expr)
+    except Exception as e:
+        logger.error(f"巡检任务 {task.id}（{task.name}）cron 表达式无效: {task.cron_expr!r}, {e}")
+        return False
+    scheduler.add_job(
+        run_scheduled_inspection,
+        trigger=trigger,
+        args=[task.id],
+        id=f"inspection_{task.id}",
+        name=task.name,
+        replace_existing=True
+    )
+    logger.info(f"巡检任务 {task.id}（{task.name}）已注册到调度器: {task.cron_expr}")
+    return True
 
 
 async def add_inspection_task(task_id: int, db: AsyncSession):
     """添加单个巡检任务到调度器"""
     if not scheduler:
         return
-    
-    result = await db.execute(InspectionTask.__table__.select().where(InspectionTask.id == task_id))
+
+    result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
     task = result.scalar_one_or_none()
-    
+
     if task and task.is_enabled:
-        scheduler.add_job(
-            run_scheduled_inspection,
-            trigger='cron',
-            args=[task.id],
-            id=f"inspection_{task.id}",
-            name=task.name,
-            cron_expression=task.cron_expr,
-            replace_existing=True
-        )
+        _register_task(task)
 
 
 async def remove_inspection_task(task_id: int):
