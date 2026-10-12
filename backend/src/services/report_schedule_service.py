@@ -11,10 +11,13 @@
   webhook 地址复用「通知设置」中的配置。
 幂等：该月已存在 done 记录则跳过，进程重启/重复触发不会重复生成与发送。
 """
+import hashlib
+import hmac
 import json
 import logging
 import os
 import smtplib
+import time
 from datetime import datetime, timedelta, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -52,7 +55,36 @@ SCHEDULE_DEFAULTS = {
 VALID_CHANNELS = ("email", "dingtalk", "wechat", "feishu")
 CHAT_CHANNELS = ("dingtalk", "wechat", "feishu")
 
+SHARE_LINK_TTL = 7 * 24 * 3600  # 分享直链有效期 7 天
+
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def make_shared_link(base_url: str, year: int, month: int, now_ts: int | None = None) -> str:
+    """生成免登录的月报分享直链（HMAC 签名 + 7 天有效期，点开直接下载 PDF）
+
+    base_url 为系统访问根地址（含可能的反代路径前缀）。
+    """
+    base = (base_url or "").strip().rstrip("/")
+    exp = int(now_ts if now_ts is not None else time.time()) + SHARE_LINK_TTL
+    sig = sign_report(year, month, exp)
+    return f"{base}/api/v1/reports/monthly/shared-download/{year}/{month}?exp={exp}&sig={sig}"
+
+
+def sign_report(year: int, month: int, exp: int) -> str:
+    """HMAC-SHA256 签名（生成与验证共用）"""
+    from src.config import settings
+    msg = f"report:{year}:{month}:{exp}".encode()
+    return hmac.new(settings.secret_key.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def verify_shared_link(year: int, month: int, exp: int | None, sig: str | None) -> bool:
+    """校验分享直链：签名匹配且未过期"""
+    if not exp or not sig:
+        return False
+    if int(exp) < time.time():
+        return False
+    return hmac.compare_digest(sign_report(year, month, int(exp)), sig)
 
 
 class ReportError(Exception):
@@ -238,10 +270,10 @@ def _build_chat_message(config: dict, year: int, month: int, summary: dict) -> s
         lines.append(f"· 到期事项：{summary.get('expiring_count', 0)} 项")
 
     if config.get("include_link", True):
-        base_url = (config.get("link_base_url") or "").strip().rstrip("/")
+        base_url = (config.get("link_base_url") or "").strip()
         if base_url:
             lines.append("")
-            lines.append(f"报告下载：{base_url}/reports")
+            lines.append(f"报告下载：{make_shared_link(base_url, year, month)}")
 
     return "\n".join(lines)
 

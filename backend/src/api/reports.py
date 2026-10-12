@@ -19,6 +19,7 @@ from src.services.report_schedule_service import (
     generate_report,
     get_schedule,
     save_schedule,
+    verify_shared_link,
 )
 
 router = APIRouter(tags=["reports"])
@@ -158,6 +159,40 @@ async def download_monthly_report(
         report.file_path,
         media_type="application/pdf",
         filename=filename
+    )
+
+
+@router.get("/monthly/shared-download/{year}/{month}")
+async def shared_download_monthly_report(
+    year: int,
+    month: int,
+    exp: int,
+    sig: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """分享直链下载月报 PDF（免登录，HMAC 签名校验，7 天有效期）
+
+    链接由定时推送在聊天软件消息中生成，点开直接下载文件。
+    """
+    if not verify_shared_link(year, month, exp, sig):
+        raise HTTPException(status_code=403, detail="链接无效或已过期")
+
+    result = await db.execute(
+        select(MonthlyReport).where(
+            MonthlyReport.year == year,
+            MonthlyReport.month == month,
+            MonthlyReport.status == "done"
+        )
+    )
+    report = result.scalars().first()
+
+    if not report or not os.path.exists(report.file_path):
+        raise HTTPException(status_code=404, detail="月报文件不存在")
+
+    return FileResponse(
+        report.file_path,
+        media_type="application/pdf",
+        filename=Path(report.file_path).name
     )
 
 

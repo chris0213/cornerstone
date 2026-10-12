@@ -50,7 +50,9 @@ async def ip_whitelist_middleware(request: Request, call_next):
     if (request.url.path in public_paths or
         request.url.path.startswith("/api/v1/auth/sso/") or
         request.url.path.startswith("/api/v1/auth/ldap/") or
-        request.url.path.startswith("/api/v1/settings/security/")):
+        request.url.path.startswith("/api/v1/settings/security/") or
+        request.url.path.startswith("/api/v1/reports/monthly/shared-download/")):
+        # shared-download 为 HMAC 签名直链（验签+7天过期），IP 层放行不降低安全性
         return await call_next(request)
 
     # 检查IP是否允许
