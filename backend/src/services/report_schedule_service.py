@@ -63,12 +63,18 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 def make_shared_link(base_url: str, year: int, month: int, now_ts: int | None = None) -> str:
     """生成免登录的月报分享直链（HMAC 签名 + 7 天有效期，点开直接下载 PDF）
 
-    base_url 为系统访问根地址（含可能的反代路径前缀）。
+    base_url 为系统访问地址；API 固定挂在域名根路径（前端 axios baseURL='/api/v1'
+    为绝对路径），故只取 origin，自动忽略反代路径前缀（如 http://ip:8089/r）。
     """
+    from urllib.parse import urlparse
     base = (base_url or "").strip().rstrip("/")
+    if "://" not in base:
+        base = f"http://{base}"
+    parsed = urlparse(base)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
     exp = int(now_ts if now_ts is not None else time.time()) + SHARE_LINK_TTL
     sig = sign_report(year, month, exp)
-    return f"{base}/api/v1/reports/monthly/shared-download/{year}/{month}?exp={exp}&sig={sig}"
+    return f"{origin}/api/v1/reports/monthly/shared-download/{year}/{month}?exp={exp}&sig={sig}"
 
 
 def sign_report(year: int, month: int, exp: int) -> str:
