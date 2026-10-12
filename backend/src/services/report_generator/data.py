@@ -1,10 +1,10 @@
 """运营月报 PDF - data"""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 import json
-from sqlalchemy import select, func, and_, or_, Date, cast
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.circuit import Circuit
 from src.models.circuit_incident import CircuitIncident
@@ -92,7 +92,7 @@ async def get_brand_settings(db: AsyncSession) -> dict:
 
 async def collect_report_data(year: int, month: int, db: AsyncSession) -> MonthlyReportData:
     """从数据库收集月报所需数据"""
-    # 使用 naive datetime 配合 cast(column, Date) 避免 SQLite/PostgreSQL 时区不兼容
+    # naive datetime 直接范围比较，SQLite/PostgreSQL 均兼容
     month_start = datetime(year, month, 1)
     next_month = datetime(
         year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1
@@ -145,13 +145,13 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
         })
 
     # 计算网络可用性：从 inspection_device_results 表统计本月在线率
+    # 直接用 naive datetime 范围比较（SQLite 无时区直接比；PG 下写入/查询同为 naive 按 UTC 编码，数字一致）
     from src.models.inspection import InspectionDeviceResult
-    # 使用 cast(column, Date) 确保 SQLite/PostgreSQL 时区兼容
     avail_result = await db.execute(
         select(func.count(InspectionDeviceResult.id)).where(
             and_(
-                cast(InspectionDeviceResult.scanned_at, Date) >= month_start.date(),
-                cast(InspectionDeviceResult.scanned_at, Date) < next_month.date()
+                InspectionDeviceResult.scanned_at >= month_start,
+                InspectionDeviceResult.scanned_at < next_month
             )
         )
     )
@@ -160,8 +160,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
     online_result = await db.execute(
         select(func.count(InspectionDeviceResult.id)).where(
             and_(
-                cast(InspectionDeviceResult.scanned_at, Date) >= month_start.date(),
-                cast(InspectionDeviceResult.scanned_at, Date) < next_month.date(),
+                InspectionDeviceResult.scanned_at >= month_start,
+                InspectionDeviceResult.scanned_at < next_month,
                 InspectionDeviceResult.is_online.is_(True)
             )
         )
@@ -174,8 +174,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
     incidents_result = await db.execute(
         select(func.count(CircuitIncident.id))
         .where(and_(
-            cast(CircuitIncident.created_at, Date) >= month_start.date(),
-            cast(CircuitIncident.created_at, Date) < next_month.date()
+            CircuitIncident.created_at >= month_start,
+            CircuitIncident.created_at < next_month
         ))
     )
     incident_count = incidents_result.scalar() or 0
@@ -183,8 +183,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
     max_duration_min_result = await db.execute(
         select(func.coalesce(func.max(CircuitIncident.duration_minutes), 0))
         .where(and_(
-            cast(CircuitIncident.created_at, Date) >= month_start.date(),
-            cast(CircuitIncident.created_at, Date) < next_month.date()
+            CircuitIncident.created_at >= month_start,
+            CircuitIncident.created_at < next_month
         ))
     )
     max_duration = float(max_duration_min_result.scalar() or 0) / 60.0
@@ -192,8 +192,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
     avg_recovery_min_result = await db.execute(
         select(func.coalesce(func.avg(CircuitIncident.duration_minutes), 0))
         .where(and_(
-            cast(CircuitIncident.created_at, Date) >= month_start.date(),
-            cast(CircuitIncident.created_at, Date) < next_month.date(),
+            CircuitIncident.created_at >= month_start,
+            CircuitIncident.created_at < next_month,
             CircuitIncident.duration_minutes > 0
         ))
     )
@@ -210,23 +210,25 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
             CircuitIncident.id
         )
         .where(and_(
-            cast(CircuitIncident.created_at, Date) >= month_start.date(),
-            cast(CircuitIncident.created_at, Date) < next_month.date()
+            CircuitIncident.created_at >= month_start,
+            CircuitIncident.created_at < next_month
         ))
         .order_by(CircuitIncident.started_at.desc())
     )
     incidents_list = incidents_list_result.all()
 
-    # 到期事项（使用 date 比较，避免 datetime 时区兼容问题）
+    # 到期事项（naive datetime 范围比较，日期粒度用当日 23:59:59 作上界）
     thirty_days_later = bj_now.date() + timedelta(days=30)
     sixty_days_later = bj_now.date() + timedelta(days=60)
     bj_today = bj_now.date()
+    thirty_days_dt = datetime.combine(thirty_days_later, time(23, 59, 59))
+    sixty_days_dt = datetime.combine(sixty_days_later, time(23, 59, 59))
 
     urgent_circuits_result = await db.execute(
         select(Circuit.name, Circuit.contract_end, Circuit.provider)
         .where(and_(
             Circuit.contract_end != None,
-            cast(Circuit.contract_end, Date) <= thirty_days_later
+            Circuit.contract_end <= thirty_days_dt
         ))
     )
     urgent_items = []
@@ -245,7 +247,7 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
         select(Device.name, Device.warranty_end, Device.model)
         .where(and_(
             Device.warranty_end != None,
-            cast(Device.warranty_end, Date) <= thirty_days_later
+            Device.warranty_end <= thirty_days_dt
         ))
     )
     for d in urgent_warranties_result.all():
@@ -264,8 +266,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
         select(Circuit.name, Circuit.contract_end, Circuit.provider)
         .where(and_(
             Circuit.contract_end != None,
-            cast(Circuit.contract_end, Date) <= sixty_days_later,
-            cast(Circuit.contract_end, Date) > thirty_days_later
+            Circuit.contract_end <= sixty_days_dt,
+            Circuit.contract_end > thirty_days_dt
         ))
     )
     for c in warning_circuits_result.all():
@@ -283,8 +285,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
         select(Device.name, Device.warranty_end, Device.model)
         .where(and_(
             Device.warranty_end != None,
-            cast(Device.warranty_end, Date) <= sixty_days_later,
-            cast(Device.warranty_end, Date) > thirty_days_later
+            Device.warranty_end <= sixty_days_dt,
+            Device.warranty_end > thirty_days_dt
         ))
     )
     for d in warning_warranties_result.all():
