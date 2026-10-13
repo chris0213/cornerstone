@@ -42,6 +42,17 @@
             <el-icon><Plus /></el-icon>
             {{ t('knowledge.newArticle') }}
           </el-button>
+          <el-button @click="triggerImport" :loading="importing">
+            <el-icon><Upload /></el-icon>
+            {{ t('knowledge.import') }}
+          </el-button>
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept=".md,.markdown,.txt,.docx"
+            style="display: none"
+            @change="handleImport"
+          >
         </div>
 
         <div v-loading="loading" class="kb-list">
@@ -165,9 +176,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { Search, Plus, Files } from '@element-plus/icons-vue'
+import { Search, Plus, Files, Upload } from '@element-plus/icons-vue'
 import {
-  listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle,
+  listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle, importArticle,
   type KnowledgeArticle, type KnowledgeCategory,
 } from '@/api/knowledge'
 import { formatDateTime } from '@/lib/utils'
@@ -283,9 +294,28 @@ const renderedContent = computed(() => {
   const lines = escaped.split('\n')
   const out: string[] = []
   let inCode = false
+  let tableBuffer: string[] = []
+
+  const flushTable = () => {
+    if (!tableBuffer.length) return
+    const rows = tableBuffer
+      .filter(l => !/^\s*\|[\s\-:|]+\|\s*$/.test(l))  // 去掉 --- 分隔行
+      .map(l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()))
+    if (rows.length) {
+      const head = rows[0]
+      const body = rows.slice(1)
+      out.push('<table><thead><tr>' + head.map(c => `<th>${inlineMd(c)}</th>`).join('') + '</tr></thead><tbody>')
+      for (const r of body) {
+        out.push('<tr>' + r.map(c => `<td>${inlineMd(c)}</td>`).join('') + '</tr>')
+      }
+      out.push('</tbody></table>')
+    }
+    tableBuffer = []
+  }
 
   for (const line of lines) {
     if (line.trim().startsWith('```')) {
+      flushTable()
       inCode = !inCode
       out.push(inCode ? '<pre><code>' : '</code></pre>')
       continue
@@ -294,15 +324,26 @@ const renderedContent = computed(() => {
       out.push(line + '\n')
       continue
     }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      tableBuffer.push(line)
+      continue
+    }
+    flushTable()
+
     if (line.startsWith('### ')) out.push(`<h4>${inlineMd(line.slice(4))}</h4>`)
     else if (line.startsWith('## ')) out.push(`<h3>${inlineMd(line.slice(3))}</h3>`)
     else if (line.startsWith('# ')) out.push(`<h2>${inlineMd(line.slice(2))}</h2>`)
     else if (/^\s*[-*] /.test(line)) out.push(`<li>${inlineMd(line.replace(/^\s*[-*] /, ''))}</li>`)
+    else if (/^\s*\d+\.\s/.test(line)) out.push(`<li class="ordered">${inlineMd(line.replace(/^\s*\d+\.\s/, ''))}</li>`)
     else if (line.trim() === '') out.push('')
     else out.push(`<p>${inlineMd(line)}</p>`)
   }
-  // 相邻 li 合并为 ul
-  return out.join('\n').replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+  flushTable()
+
+  // 相邻列表项合并包裹（先有序后无序，避免吞掉 class）
+  return out.join('\n')
+    .replace(/(<li class="ordered">[\s\S]*?<\/li>\n?)+/g, m => `<ol>${m.replace(/ class="ordered"/g, '')}</ol>`)
+    .replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
 })
 
 // ===== 编辑 =====
@@ -351,6 +392,38 @@ async function handleSave() {
     ElMessage.error(error.response?.data?.detail || t('common.error'))
   } finally {
     saving.value = false
+  }
+}
+
+// ===== 导入 =====
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const importing = ref(false)
+
+function triggerImport() {
+  fileInputRef.value?.click()
+}
+
+async function handleImport(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''  // 允许重复选择同一文件
+  if (!file) return
+  const ext = file.name.toLowerCase().split('.').pop()
+  if (!['md', 'markdown', 'txt', 'docx'].includes(ext || '')) {
+    ElMessage.error(t('knowledge.importUnsupported'))
+    return
+  }
+  importing.value = true
+  try {
+    const article = await importArticle(file, activeCategory.value || undefined)
+    ElMessage.success(t('knowledge.importSuccess', { title: article.title }))
+    await Promise.all([loadArticles(), loadCategories()])
+    openRead(article)  // 导入后直接打开，方便核对排版
+  } catch (error: any) {
+    console.error('Failed to import article:', error)
+    ElMessage.error(error.response?.data?.detail || t('common.error'))
+  } finally {
+    importing.value = false
   }
 }
 
@@ -571,6 +644,34 @@ onMounted(() => {
 .reader-body :deep(pre code) {
   background: transparent;
   padding: 0;
+}
+
+.reader-body :deep(table) {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+}
+
+.reader-body :deep(th),
+.reader-body :deep(td) {
+  border: 1px solid var(--el-border-color-lighter);
+  padding: 6px 10px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.reader-body :deep(th) {
+  background: var(--el-fill-color-light);
+  font-weight: 500;
+}
+
+.reader-body :deep(ol) {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.reader-body :deep(ol li) {
+  margin: 2px 0;
 }
 
 /* 编辑弹窗 */

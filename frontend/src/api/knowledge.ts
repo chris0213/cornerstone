@@ -63,3 +63,13 @@ export async function updateArticle(id: number, payload: Partial<ArticlePayload>
 export async function deleteArticle(id: number): Promise<void> {
   await request.delete(`/knowledge/${id}`)
 }
+
+export async function importArticle(file: File, category?: string): Promise<KnowledgeArticle> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (category) formData.append('category', category)
+  const response = await request.post('/knowledge/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}

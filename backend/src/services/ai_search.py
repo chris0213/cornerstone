@@ -547,3 +547,119 @@ def _generate_fallback_answer(data_type: str, raw_data: list, question: str) -> 
     lines = [f"- {_row_summary(data_type, r)}" for r in show]
     tail = f"\n…（还有 {count - 5} 条，可以让我缩小范围）" if count > 5 else ""
     return f"共找到 {count} 条{label}：\n" + "\n".join(lines) + tail
+
+
+# ──────────────────────────────────────────────
+# 知识库检索（RAG）：操作类问题优先命中内部沉淀的处置经验
+# ──────────────────────────────────────────────
+
+_KB_STOPWORDS = {
+    "如何", "怎么", "怎样", "怎么办", "什么", "哪些", "请问", "帮我", "告诉", "一下",
+    "可以", "是否", "有没有", "是不是", "的", "了", "吗", "呢", "啊", "？", "?",
+}
+
+_HOWTO_HINTS = (
+    "如何", "怎么", "怎样", "怎么办", "排查", "处理", "恢复", "解决", "步骤",
+    "配置", "教程", "指南", "sop", "报错", "错误", "失败", "无法", "不能",
+    "不通", "不了", "指南", "手册", "如何做", "怎么办",
+)
+
+
+def _kb_normalize(text: str) -> str:
+    """归一化：去标点/空白并转小写，便于 n-gram 匹配"""
+    import re
+    return re.sub(r"[\s，。！？、,.!?\"'（）()【】\[\]：:；;#*|>_~`]+", "", text or "").lower()
+
+
+def _looks_like_howto(question: str) -> bool:
+    """问题是否偏操作/经验类（而非实时数据查询）"""
+    q = question.lower()
+    return any(h in q for h in _HOWTO_HINTS)
+
+
+def _question_ngrams(question: str) -> set[str]:
+    """问题去掉疑问词后切 2/3-gram（中文无空格，LIKE 整句无法命中，需 n-gram 打分）"""
+    core = question
+    for hint in sorted(_HOWTO_HINTS, key=len, reverse=True):
+        core = core.replace(hint, " ")
+    for sw in sorted(_KB_STOPWORDS, key=len, reverse=True):
+        core = core.replace(sw, " ")
+    core = _kb_normalize(core)
+    grams = {core[i:i + 2] for i in range(max(0, len(core) - 1))}
+    grams |= {core[i:i + 3] for i in range(max(0, len(core) - 2))}
+    return grams
+
+
+async def search_knowledge_articles(db: AsyncSession, question: str, limit: int = 3) -> list[dict]:
+    """检索已发布知识库文章：拉取候选后用问题 n-gram 与正文重叠度打分排序
+
+    团队知识库规模有限，候选上限 200 篇在 Python 侧打分，
+    比 SQL LIKE 拼接（中文问题切不出有效片段）更可靠。
+    """
+    from ..models import KnowledgeArticle
+
+    grams = _question_ngrams(question)
+    if not grams:
+        return []
+
+    rows = (await db.execute(
+        select(KnowledgeArticle)
+        .where(KnowledgeArticle.is_published.is_(True))
+        .order_by(KnowledgeArticle.updated_at.desc())
+        .limit(200)
+    )).scalars().all()
+
+    scored = []
+    for a in rows:
+        text = _kb_normalize(
+            f"{a.title}\n{a.summary or ''}\n{a.tags or ''}\n{(a.content or '')[:5000]}"
+        )
+        matched = [g for g in grams if g in text]
+        # 需至少命中 2 个片段且累计长度足够，避免"如何/处理"这类泛词误召回
+        score = sum(len(g) for g in matched)
+        if len(matched) >= 2 and score >= 5:
+            scored.append((score, a))
+
+    scored.sort(key=lambda x: (-x[0], x[1].updated_at))
+    return [
+        {"id": a.id, "title": a.title, "category": a.category or "其他",
+         "summary": a.summary or "", "content": a.content or ""}
+        for _, a in scored[:limit]
+    ]
+
+
+KB_SYSTEM_PROMPT = """你是基石（Cornerstone）企业级IT基础设施智能运维平台的智能助手。
+用户询问的是运维操作/故障处置类问题，下面提供了内部知识库中相关的文章内容。
+要求：
+1. 优先依据知识库内容回答，操作步骤必须忠于原文，不得臆造步骤或命令
+2. 回答末尾注明来源文章标题（格式：来源：《标题》）
+3. 知识库内容与问题无关时如实说明"知识库中暂无相关沉淀"，并给出通用建议
+4. 用简洁中文回答，步骤用编号列表"""
+
+
+async def answer_from_knowledge(db: AsyncSession, question: str) -> Optional[dict]:
+    """知识库 RAG：命中文章时返回 {answer_text, data_type="knowledge"}，否则 None 走原查询链路"""
+    articles = await search_knowledge_articles(db, question)
+    if not articles:
+        return None
+
+    ai_config = await get_ai_config(db)
+    if ai_config and ai_config.is_configured():
+        kb_text = "\n\n".join(
+            f"《{a['title']}》（{a['category']}）\n{(a['content'] or a['summary'])[:1500]}"
+            for a in articles
+        )
+        prompt = f"用户问题：{question}\n\n内部知识库相关文章：\n{kb_text}"
+        try:
+            answer = await call_ai(prompt, KB_SYSTEM_PROMPT, ai_config, max_tokens=1200, timeout=20)
+            return {"answer_text": answer.strip(), "data_type": "knowledge"}
+        except Exception as e:
+            logger.warning(f"Knowledge RAG AI call failed, fallback to list: {e}")
+
+    # 未配置 AI 或调用失败：直接给出检索结果列表
+    lines = [f"在知识库中找到 {len(articles)} 篇相关文章："]
+    for i, a in enumerate(articles, 1):
+        summary = (a["summary"] or a["content"])[:120]
+        lines.append(f"{i}. 《{a['title']}》（{a['category']}）— {summary}")
+    lines.append("打开知识库页面可查看全文。")
+    return {"answer_text": "\n".join(lines), "data_type": "knowledge"}

@@ -39,6 +39,7 @@ reportlab = "^4.2.0"
 scapy = "^2.5.0"
 ldap3 = "^2.9.1"
 pyasn1 = ">=0.6.4"  # 修复 4 个 CVE (paramiko/python-jose 传递依赖)
+python-docx = "^1.2.0"  # 知识库导入：.docx 转 Markdown（排版还原）
 
 [tool.poetry.dev-dependencies]
 pytest = "^9.0.3"  # 修复 PYSEC-2026-1845

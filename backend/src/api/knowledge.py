@@ -4,7 +4,7 @@
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -148,6 +148,57 @@ async def update_article(
     if "is_published" in payload:
         article.is_published = bool(payload.get("is_published"))
 
+    await db.commit()
+    await db.refresh(article)
+    return _article_brief(article)
+
+
+MAX_IMPORT_SIZE = 5 * 1024 * 1024  # 导入文件上限 5MB
+ALLOWED_IMPORT_EXT = (".md", ".markdown", ".txt", ".docx")
+
+
+@router.post("/import")
+async def import_article(
+    file: UploadFile = File(...),
+    category: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """导入文档为知识库文章（支持 .md/.txt/.docx；docx 自动还原标题/列表/表格/代码排版）"""
+    filename = file.filename or ""
+    if not filename.lower().endswith(ALLOWED_IMPORT_EXT):
+        raise HTTPException(status_code=400, detail=f"仅支持 {', '.join(ALLOWED_IMPORT_EXT)} 格式")
+    raw = await file.read()
+    if len(raw) > MAX_IMPORT_SIZE:
+        raise HTTPException(status_code=400, detail="文件不能超过 5MB")
+
+    from src.services.knowledge_import import import_text_to_markdown, derive_article_fields
+    try:
+        content = import_text_to_markdown(filename, raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"文档解析失败：{e}")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="文档内容为空")
+
+    # 标题：文件名（去扩展名）优先，正文 H1 兜底；摘要取正文前 200 字
+    stem = filename.rsplit("/", 1)[-1]
+    for ext in ALLOWED_IMPORT_EXT:
+        if stem.lower().endswith(ext):
+            stem = stem[: -len(ext)]
+            break
+    title, _ = derive_article_fields(stem, content)
+    _, summary = derive_article_fields("", content)
+
+    article = KnowledgeArticle(
+        title=title[:200] or "未命名导入",
+        category=str(category or "其他").strip(),
+        tags="",
+        summary=summary[:500],
+        content=content,
+        author=current_user.username,
+        is_published=False,  # 导入默认草稿，人工确认后再发布
+    )
+    db.add(article)
     await db.commit()
     await db.refresh(article)
     return _article_brief(article)

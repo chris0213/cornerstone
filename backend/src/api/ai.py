@@ -122,18 +122,34 @@ async def ai_search(
     answer_text = ""
     data_type = "unknown"
     try:
-        # Step 1: 解析意图（带上上一轮的数据类型，支持追问）
-        intent = await parse_user_query(req.question.strip(), (req.last_data_type or "").strip())
+        # Step 0: 操作/故障处置类问题优先命中内部知识库（RAG）
+        from ..services.ai_search import _looks_like_howto, answer_from_knowledge
+        kb_result = None
+        if _looks_like_howto(req.question):
+            kb_result = await answer_from_knowledge(db, req.question.strip())
 
-        # Step 2: 执行查询
-        raw_data = await execute_query(intent, db)
+        if kb_result:
+            answer_text = kb_result["answer_text"]
+            data_type = kb_result["data_type"]
+            payload = {"code": 0, "data": {
+                "answer_text": answer_text,
+                "data": [],
+                "data_type": data_type,
+                "suggestions": [],
+            }}
+        else:
+            # Step 1: 解析意图（带上上一轮的数据类型，支持追问）
+            intent = await parse_user_query(req.question.strip(), (req.last_data_type or "").strip())
 
-        # Step 3: 格式化回答
-        result = await format_answer(intent, raw_data, req.question)
+            # Step 2: 执行查询
+            raw_data = await execute_query(intent, db)
 
-        answer_text = result.get("answer_text", "")
-        data_type = result.get("data_type", "unknown")
-        payload = {"code": 0, "data": result}
+            # Step 3: 格式化回答
+            result = await format_answer(intent, raw_data, req.question)
+
+            answer_text = result.get("answer_text", "")
+            data_type = result.get("data_type", "unknown")
+            payload = {"code": 0, "data": result}
     except Exception as e:
         logger.error(f"AI search failed: {e}")
         answer_text = "查询失败，请稍后重试或换个问法。"
@@ -202,9 +218,15 @@ async def _persist_chat_log(
         db.add(log)
         await db.flush()
 
-        # 30 天保留期：每次写入顺手清理过期记录
+        # 30 天保留期：每次写入顺手清理过期记录。
+        # synchronize_session=False：会话里已有刚 flush 的日志对象（SQLite 返回 naive
+        # created_at），默认 evaluate 会在 Python 里比较 naive/aware datetime 抛 TypeError
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-        await db.execute(delete(AIChatLog).where(AIChatLog.created_at < cutoff))
+        await db.execute(
+            delete(AIChatLog)
+            .where(AIChatLog.created_at < cutoff)
+            .execution_options(synchronize_session=False)
+        )
         await db.commit()
     except Exception as e:
         logger.warning(f"Failed to persist AI chat log: {e}")
