@@ -5,6 +5,7 @@ import { ElMessage, ElTree, ElDialog } from 'element-plus';
 import { Plus, Edit, Delete } from '@element-plus/icons-vue';
 import { applyKeywordFilter } from '../../lib/filters';
 import { confirmAndRun } from '../../lib/confirm';
+import { useCrudForm } from '../../lib/useCrudForm';
 
 const { t } = useI18n();
 import type { VlanGroup, Vlan, Prefix } from '../../types/domain';
@@ -30,25 +31,56 @@ const vlans = ref<Vlan[]>([]);
 
 const activeGroupId = ref<number | null>(null);
 const searchQuery = ref('');
-const showGroupDialog = ref(false);
-const showVlanDialog = ref(false);
-const editingGroup = ref<VlanGroup | null>(null);
-const editingVlan = ref<Vlan | null>(null);
 const sidebarCollapsed = ref(false);
-const groupForm = ref({
- id: 0,
- name: '',
- siteId: undefined as number | undefined,
- description: ''
+
+type GroupForm = { id: number; name: string; siteId: number | undefined; description: string };
+type VlanForm = { id: number; vid: number; name: string; groupId: number | undefined; siteId: number | undefined; status: string; description: string };
+
+// 分组弹窗状态
+const {
+  showDialog: showGroupDialog,
+  editing: editingGroup,
+  form: groupForm,
+  openCreate: openCreateGroupDialog,
+  openEdit: openEditGroupDialog,
+  closeDialog: closeGroupDialog,
+} = useCrudForm<VlanGroup, GroupForm>({
+  createDefaults: () => ({ id: 0, name: '', siteId: undefined, description: '' }),
+  toForm: (group) => ({
+    id: group.id,
+    name: group.name,
+    siteId: group.siteId,
+    description: group.description || ''
+  }),
 });
-const vlanForm = ref({
- id: 0,
- vid: 0,
- name: '',
- groupId: undefined as number | undefined,
- siteId: undefined as number | undefined,
- status: 'active',
- description: ''
+
+// VLAN 弹窗状态
+const {
+  showDialog: showVlanDialog,
+  editing: editingVlan,
+  form: vlanForm,
+  openCreate: openCreateVlanDialog,
+  openEdit: openEditVlanDialog,
+  closeDialog: closeVlanDialog,
+} = useCrudForm<Vlan, VlanForm>({
+  createDefaults: () => ({
+    id: 0,
+    vid: 0,
+    name: '',
+    groupId: activeGroupId.value || undefined,
+    siteId: undefined,
+    status: 'active',
+    description: ''
+  }),
+  toForm: (vlan) => ({
+    id: vlan.id,
+    vid: vlan.vid,
+    name: vlan.name || '',
+    groupId: vlan.groupId || undefined,
+    siteId: vlan.siteId || undefined,
+    status: vlan.status,
+    description: vlan.description || ''
+  }),
 });
 
 const filteredVlans = computed(() => {
@@ -86,50 +118,6 @@ const groupTreeData = computed(() => {
   ];
 });
 
-const resetGroupForm = () => {
-  groupForm.value = {
-    id: 0,
-    name: '',
-    siteId: undefined,
-    description: ''
-  };
-  editingGroup.value = null;
-};
-
-const resetVlanForm = () => {
-  vlanForm.value = {
-    id: 0,
-    vid: 0,
-    name: '',
-    groupId: activeGroupId.value || undefined,
-    siteId: undefined,
-    status: 'active',
-    description: ''
-  };
-  editingVlan.value = null;
-};
-
-const openCreateGroupDialog = () => {
-  resetGroupForm();
-  showGroupDialog.value = true;
-};
-
-const openEditGroupDialog = (group: VlanGroup) => {
-  editingGroup.value = group;
-  groupForm.value = {
-    id: group.id,
-    name: group.name,
-    siteId: group.siteId,
-    description: group.description || ''
-  };
-  showGroupDialog.value = true;
-};
-
-const closeGroupDialog = () => {
-  showGroupDialog.value = false;
-  resetGroupForm();
-};
-
 const handleSaveGroup = async () => {
   if (!groupForm.value.name.trim()) {
     ElMessage.error(t('vlan.groupNameRequired'));
@@ -160,30 +148,6 @@ const handleSaveGroup = async () => {
     console.error('Failed to save VLAN group:', error);
     ElMessage.error(t('vlan.saveFailed'));
   }
-};
-
-const openCreateVlanDialog = () => {
-  resetVlanForm();
-  showVlanDialog.value = true;
-};
-
-const openEditVlanDialog = (vlan: Vlan) => {
-  editingVlan.value = vlan;
-  vlanForm.value = {
-    id: vlan.id,
-    vid: vlan.vid,
-    name: vlan.name || '',
-    groupId: vlan.groupId || undefined,
-    siteId: vlan.siteId || undefined,
-    status: vlan.status,
-    description: vlan.description || ''
-  };
-  showVlanDialog.value = true;
-};
-
-const closeVlanDialog = () => {
-  showVlanDialog.value = false;
-  resetVlanForm();
 };
 
 const handleSaveVlan = async () => {

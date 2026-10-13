@@ -7,6 +7,7 @@ import { Plus, Download, Upload, Edit, Delete, MagicStick } from '@element-plus/
 import { formatDate } from '../../lib/utils'
 import { applyKeywordFilter } from '../../lib/filters'
 import { confirmAndRun } from '../../lib/confirm'
+import { useCrudForm } from '../../lib/useCrudForm'
 import type { Device, IPAddress, Site } from '../../types/domain'
 import { getIPAddresses, createIPAddress } from '../../api/ipam'
 import { getDevices, createDevice, updateDevice, deleteDevice, type DeviceResponse } from '../../api/devices'
@@ -47,11 +48,11 @@ const ipAddresses = ref<IPAddress[]>([])
 
 const searchQuery = ref('')
 const selectedSiteId = ref<number | null>(null)
-const showDialog = ref(false)
 const showQuickAddWizard = ref(false)
-const editingDevice = ref<Device | null>(null)
 const loading = ref(false)
-const form = ref({
+
+// 表单弹窗状态（新建/编辑/关闭）
+const defaultDeviceForm = () => ({
   name: '',
   type: t('devices.typeSwitch'),
   vendor: '',
@@ -67,6 +68,35 @@ const form = ref({
   purchaseAmount: 0,
   owner: '',
   note: '',
+})
+type DeviceForm = ReturnType<typeof defaultDeviceForm>
+
+const {
+  showDialog,
+  editing: editingDevice,
+  form,
+  openCreate: openCreateDialog,
+  openEdit: openEditDialog,
+  closeDialog,
+} = useCrudForm<Device, DeviceForm>({
+  createDefaults: defaultDeviceForm,
+  toForm: (device) => ({
+    name: device.name,
+    type: device.type,
+    vendor: device.vendor,
+    model: device.model,
+    sn: device.sn,
+    siteId: device.siteId,
+    location: device.location,
+    mgmtIpId: device.mgmtIpId,
+    mgmtIpAddress: getIpAddress(device.mgmtIpId || 0) !== '-' ? getIpAddress(device.mgmtIpId || 0) : '',
+    status: device.status,
+    purchaseDate: device.purchaseDate,
+    warrantyEnd: device.warrantyEnd,
+    purchaseAmount: device.purchaseAmount,
+    owner: device.owner,
+    note: device.note,
+  }),
 })
 
 // 厂商选项
@@ -181,60 +211,6 @@ function getStatusType(status: string): string {
     default:
       return 'info'
   }
-}
-
-function resetForm() {
-  form.value = {
-    name: '',
-    type: t('devices.typeSwitch'),
-    vendor: '',
-    model: '',
-    sn: '',
-    siteId: null,
-    location: '',
-    mgmtIpId: null,
-    mgmtIpAddress: '',
-    status: t('devices.statusOnline'),
-    purchaseDate: '',
-    warrantyEnd: '',
-    purchaseAmount: 0,
-    owner: '',
-    note: '',
-  }
-  editingDevice.value = null
-}
-
-function openCreateDialog() {
-  resetForm()
-  showDialog.value = true
-}
-
-function openEditDialog(device: Device) {
-  editingDevice.value = device
-  const mgmtIpAddress = getIpAddress(device.mgmtIpId || 0)
-  form.value = {
-    name: device.name,
-    type: device.type,
-    vendor: device.vendor,
-    model: device.model,
-    sn: device.sn,
-    siteId: device.siteId,
-    location: device.location,
-    mgmtIpId: device.mgmtIpId,
-    mgmtIpAddress: mgmtIpAddress !== '-' ? mgmtIpAddress : '',
-    status: device.status,
-    purchaseDate: device.purchaseDate,
-    warrantyEnd: device.warrantyEnd,
-    purchaseAmount: device.purchaseAmount,
-    owner: device.owner,
-    note: device.note,
-  }
-  showDialog.value = true
-}
-
-function closeDialog() {
-  showDialog.value = false
-  resetForm()
 }
 
 async function handleSave() {

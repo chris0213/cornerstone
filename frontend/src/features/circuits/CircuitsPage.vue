@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
+import { useCrudForm } from '@/lib/useCrudForm'
 import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { Plus, Download, Upload, Clock, Warning, WarningFilled, ArrowDown, View, Edit, Document, Delete } from '@element-plus/icons-vue'
@@ -34,14 +35,14 @@ const filterStatus = ref('')
 const filterSiteId = ref('')
 const filterExpiry = ref('')
 const selectedRows = ref<string[]>([])
-const showDialog = ref(false)
 const showImportDialog = ref(false)
 const importLoading = ref(false)
 const importFile = ref<File | null>(null)
 const importResult = ref<any>(null)
-const editingCircuit = ref<Circuit | null>(null)
 const viewMode = ref(false)
-const form = ref({
+
+// 表单弹窗状态（新建/编辑/关闭）
+const defaultCircuitForm = () => ({
   name: '',
   provider: t('circuits.providerTelecom'),
   type: t('circuits.typeInternet'),
@@ -56,6 +57,25 @@ const form = ref({
   status: t('circuits.statusNormal'),
   note: '',
 })
+type CircuitForm = ReturnType<typeof defaultCircuitForm>
+
+const {
+  showDialog,
+  editing: editingCircuit,
+  form,
+  openCreate: openCreateDialog,
+  openEdit: openEditDialog,
+  closeDialog: closeCircuitDialog,
+} = useCrudForm<Circuit, CircuitForm>({
+  createDefaults: defaultCircuitForm,
+  toForm: (row) => ({ ...row }),
+})
+
+// 关闭时额外退出查看模式
+const closeDialog = () => {
+  viewMode.value = false
+  closeCircuitDialog()
+}
 
 const totalCount = computed(() => circuits.value.length)
 const onlineCount = computed(() => circuits.value.filter(c => c.status === t('circuits.statusNormal')).length)
@@ -114,42 +134,6 @@ function getExpiryDisplay(date: string) {
   if (days === 0) return { text: t('circuits.expireToday'), type: 'danger', icon: WarningFilled }
   if (days <= 7) return { text: `${t('circuits.expireDays', { days })}`, type: 'warning', icon: Clock }
   return { text: `${t('circuits.expireRemaining', { days })}`, type: 'info', icon: Clock }
-}
-
-function resetForm() {
-  form.value = {
-    name: '',
-    provider: t('circuits.providerTelecom'),
-    type: t('circuits.typeInternet'),
-    siteId: 0,
-    bandwidth: 100,
-    monthlyCost: 0,
-    contractStart: '',
-    contractEnd: '',
-    circuitNo: '',
-    supportPhone: '',
-    publicIp: '',
-    status: t('circuits.statusNormal'),
-    note: '',
-  }
-  editingCircuit.value = null
-}
-
-function openCreateDialog() {
-  resetForm()
-  showDialog.value = true
-}
-
-function openEditDialog(row: Circuit) {
-  editingCircuit.value = row
-  form.value = { ...row }
-  showDialog.value = true
-}
-
-function closeDialog() {
-  showDialog.value = false
-  viewMode.value = false
-  resetForm()
 }
 
 async function handleSave() {

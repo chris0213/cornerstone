@@ -6,6 +6,7 @@ import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
 import { confirmAndRun } from '@/lib/confirm'
+import { useCrudForm } from '@/lib/useCrudForm'
 import type { Site } from '../../types/domain'
 import { getSites, createSite, updateSite, deleteSite, type SiteResponse } from '../../api/sites'
 import { ElMessage } from 'element-plus'
@@ -19,22 +20,30 @@ const { circuits } = storeToRefs(store)
 const sites = ref<Site[]>([])
 const searchQuery = ref('')
 const statusFilter = ref<'all' | 'alert'>('all')
-const showDialog = ref(false)
-const editingSite = ref<Site | null>(null)
 const loading = ref(false)
 
 const isViewer = computed(() => authStore.isReadOnly())
 
-const form = ref<Partial<Site>>({
-  id: 0,
-  name: '',
-  location: '',
-  city: '',
-  room: '',
-  contact: '',
-  contactPhone: '',
-  status: 'online',
-  alertCount: 0,
+// 表单弹窗状态（新建/编辑/关闭）
+const {
+  showDialog,
+  editing: editingSite,
+  form,
+  openCreate: openCreateDialog,
+  openEdit: openEditDialog,
+  closeDialog,
+} = useCrudForm<Site, Partial<Site>>({
+  createDefaults: () => ({
+    id: 0,
+    name: '',
+    location: '',
+    city: '',
+    room: '',
+    contact: '',
+    contactPhone: '',
+    status: 'online',
+    alertCount: 0,
+  }),
 })
 
 const filteredSites = computed(() => {
@@ -52,32 +61,6 @@ const filteredSites = computed(() => {
 const alertSiteCount = computed(() => {
   return sites.value.filter(s => s.status === 'alert').length
 })
-
-const resetForm = () => {
-  form.value = { 
-    name: '', 
-    location: '',
-    city: '',
-    room: '',
-    contact: '',
-    contactPhone: '',
-    status: 'online',
-    alertCount: 0,
-  }
-  editingSite.value = null
-  showDialog.value = false
-}
-
-const openCreateDialog = () => {
-  resetForm()
-  showDialog.value = true
-}
-
-const openEditDialog = (site: Site) => {
-  editingSite.value = site
-  form.value = { ...site }
-  showDialog.value = true
-}
 
 const handleSave = async () => {
   if (!form.value.name?.trim()) {
@@ -144,8 +127,7 @@ const handleSave = async () => {
       
       ElMessage.success(t('sites.createSuccess'))
     }
-    showDialog.value = false
-    resetForm()
+    closeDialog()
   } catch (error) {
     console.error('Failed to save site:', error)
     ElMessage.error(t('sites.saveFailed'))
@@ -446,7 +428,7 @@ onMounted(() => {
       </el-form>
 
       <template #footer>
-        <el-button @click="resetForm">{{ t('common.cancel') }}</el-button>
+        <el-button @click="closeDialog">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>

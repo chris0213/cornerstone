@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { getBackupTasks, createBackupTask, updateBackupTask, deleteBackupTask, toggleBackupTask, runBackupTaskNow, getBackupTaskHistory, getCredentials } from '@/api/backups'
 import { formatDateTime } from '@/lib/utils'
 import { confirmAndRun } from '@/lib/confirm'
+import { useCrudForm } from '@/lib/useCrudForm'
 import { getDevices, type DeviceResponse } from '@/api/devices'
 import { getSites, type SiteResponse } from '@/api/sites'
 import type { BackupTask, Credential, Device, Site } from '@/types/domain'
@@ -15,9 +16,7 @@ const credentials = ref<Credential[]>([])
 const devices = ref<Device[]>([])
 const sites = ref<Site[]>([])
 const loading = ref(false)
-const showDialog = ref(false)
 const showHistoryDialog = ref(false)
-const editingTask = ref<BackupTask | null>(null)
 const taskHistory = ref<any[]>([])
 const historyLoading = ref(false)
 const selectedTaskIds = ref<number[]>([])
@@ -25,34 +24,48 @@ const selectedTaskIds = ref<number[]>([])
 // 用于跟踪是否使用自定义Cron表达式
 const useCustomCron = ref(false)
 
-const form = ref<{
-  name: string
-  cronExpr: string
-  customCronExpr: string
-  credentialId: string | number
-  backupScope: 'devices' | 'site'
-  deviceIds: number[]
-  siteId: string | number
-  vendor: string
-  retentionCount: number
-  retentionDays: number
-  notifyOnChange: boolean
-  notifyOnFail: boolean
-  isEnabled: boolean
-}>({
+// 表单弹窗状态（新建/编辑/关闭）
+const defaultTaskForm = () => ({
   name: '',
   cronExpr: '0 2 * * *',
   customCronExpr: '',
-  credentialId: '',
-  backupScope: 'devices',
-  deviceIds: [],
-  siteId: '',
+  credentialId: '' as string | number,
+  backupScope: 'devices' as 'devices' | 'site',
+  deviceIds: [] as number[],
+  siteId: '' as string | number,
   vendor: '',
   retentionCount: 30,
   retentionDays: 90,
   notifyOnChange: true,
   notifyOnFail: true,
   isEnabled: true,
+})
+type TaskForm = ReturnType<typeof defaultTaskForm>
+
+const {
+  showDialog,
+  editing: editingTask,
+  form,
+  openCreate: openCreateDialog,
+  openEdit: openEditDialog,
+  closeDialog,
+} = useCrudForm<BackupTask, TaskForm>({
+  createDefaults: defaultTaskForm,
+  toForm: (task) => ({
+    name: task.name,
+    cronExpr: task.cronExpr,
+    customCronExpr: '',
+    credentialId: task.credentialId,
+    backupScope: task.siteId ? 'site' : 'devices',
+    deviceIds: task.deviceIds ? JSON.parse(task.deviceIds) : [],
+    siteId: task.siteId || '',
+    vendor: task.vendor || '',
+    retentionCount: task.retentionCount,
+    retentionDays: task.retentionDays,
+    notifyOnChange: task.notifyOnChange,
+    notifyOnFail: task.notifyOnFail,
+    isEnabled: task.isEnabled,
+  }),
 })
 
 // 厂商选项
@@ -146,56 +159,6 @@ const cronPresets = [
   { value: '0 2 * * 1', label: t('backups.cronWeeklyMon2am') },
   { value: 'custom', label: t('backups.cronCustom') },
 ]
-
-function resetForm() {
-  form.value = {
-    name: '',
-    cronExpr: '0 2 * * *',
-    customCronExpr: '',
-    credentialId: '',
-    backupScope: 'devices',
-    deviceIds: [],
-    siteId: '',
-    vendor: '',
-    retentionCount: 30,
-    retentionDays: 90,
-    notifyOnChange: true,
-    notifyOnFail: true,
-    isEnabled: true,
-  }
-  editingTask.value = null
-}
-
-function openCreateDialog() {
-  resetForm()
-  showDialog.value = true
-}
-
-function openEditDialog(task: BackupTask) {
-  editingTask.value = task
-  const deviceIds = task.deviceIds ? JSON.parse(task.deviceIds) : []
-  form.value = {
-    name: task.name,
-    cronExpr: task.cronExpr,
-    customCronExpr: '',
-    credentialId: task.credentialId,
-    backupScope: task.siteId ? 'site' : 'devices',
-    deviceIds: deviceIds,
-    siteId: task.siteId || '',
-    vendor: task.vendor || '',
-    retentionCount: task.retentionCount,
-    retentionDays: task.retentionDays,
-    notifyOnChange: task.notifyOnChange,
-    notifyOnFail: task.notifyOnFail,
-    isEnabled: task.isEnabled,
-  }
-  showDialog.value = true
-}
-
-function closeDialog() {
-  showDialog.value = false
-  resetForm()
-}
 
 async function handleSave() {
   if (!form.value.name) {
