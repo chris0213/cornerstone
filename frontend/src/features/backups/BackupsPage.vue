@@ -5,6 +5,7 @@ import { Monitor, Connection, Box, MapLocation } from '@element-plus/icons-vue'
 import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup } from '@/api/backups'
 import { formatDateTime } from '@/lib/utils'
 import { applyKeywordFilter } from '@/lib/filters'
+import { confirmAndRun } from '@/lib/confirm'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -189,33 +190,30 @@ function closeDiffDialog() {
 }
 
 async function handleDelete(backup: Backup) {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除该备份记录吗？此操作不可撤销。`,
-      '确认删除',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-    )
-    await deleteBackup(parseInt(backup.id))
-    
-    // 添加操作日志
-    store.addAuditLog({
-      user: authStore.user?.username || 'system',
-      action: '删除备份记录',
-      resource: '配置备份',
-      detail: `删除设备 ${backup.deviceId} 的备份记录 (v${backup.version})`,
-      ipAddress: null,
-      createdAt: new Date().toISOString(),
-      success: 'true'
-    })
-    
-    ElMessage.success('备份记录删除成功')
-    await loadBackups()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete backup:', error)
-      ElMessage.error('删除备份失败')
-    }
-  }
+  await confirmAndRun({
+    message: `确定要删除该备份记录吗？此操作不可撤销。`,
+    title: '确认删除',
+    confirmText: '删除',
+    cancelText: '取消',
+    action: async () => {
+      await deleteBackup(parseInt(backup.id))
+
+      // 添加操作日志
+      store.addAuditLog({
+        user: authStore.user?.username || 'system',
+        action: '删除备份记录',
+        resource: '配置备份',
+        detail: `删除设备 ${backup.deviceId} 的备份记录 (v${backup.version})`,
+        ipAddress: null,
+        createdAt: new Date().toISOString(),
+        success: 'true'
+      })
+
+      await loadBackups()
+    },
+    successMessage: '备份记录删除成功',
+    errorMessage: '删除备份失败',
+  })
 }
 
 function showTagInput(backup: Backup) {

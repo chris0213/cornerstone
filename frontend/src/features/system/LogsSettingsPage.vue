@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Clock, Lock, Document } from '@element-plus/icons-vue'
 import api from '../../api/axios'
+import { confirmAndRun } from '../../lib/confirm'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -109,24 +110,18 @@ const saveLevelSettings = async () => {
 // 手动清理日志
 const handleCleanup = async () => {
   const days = retentionSettings.value.log_retention_days
-  try {
-    await ElMessageBox.confirm(
-      t('system.logsConfig.cleanupConfirm', { days }),
-      t('system.logsConfig.confirmCleanup'),
-      {
-        confirmButtonText: t('common.confirm'),
-        cancelButtonText: t('common.cancel'),
-        type: 'warning'
-      }
-    )
-    
-    const response = await api.post('/settings/logs/cleanup')
-    ElMessage.success(t('system.logsConfig.cleanupSuccess', { count: response.data.deleted_count }))
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error(t('common.error'))
-    }
-  }
+  // 成功文案含清理条数（来自响应），toast 在 action 内自理，不传 successMessage
+  await confirmAndRun({
+    message: t('system.logsConfig.cleanupConfirm', { days }),
+    title: t('system.logsConfig.confirmCleanup'),
+    confirmText: t('common.confirm'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      const response = await api.post('/settings/logs/cleanup')
+      ElMessage.success(t('system.logsConfig.cleanupSuccess', { count: response.data.deleted_count }))
+    },
+    errorMessage: t('common.error'),
+  })
 }
 
 onMounted(() => {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElMessage, ElMessageBox, ElTree, ElDialog } from 'element-plus';
+import { ElMessage, ElTree, ElDialog } from 'element-plus';
 import { Plus, Edit, Delete } from '@element-plus/icons-vue';
 import { applyKeywordFilter } from '../../lib/filters';
+import { confirmAndRun } from '../../lib/confirm';
 
 const { t } = useI18n();
 import type { VlanGroup, Vlan, Prefix } from '../../types/domain';
@@ -226,21 +227,18 @@ const handleSaveVlan = async () => {
 };
 
 const handleDeleteVlan = async (vlan: Vlan) => {
-  try {
-    await ElMessageBox.confirm(
-      t('vlan.confirmDeleteVlan', { vid: vlan.vid }), 
-      t('common.confirmDelete'), 
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    );
-    await deleteVlan(vlan.id);
-    vlans.value = vlans.value.filter(v => v.id !== vlan.id);
-    ElMessage.success(t('vlan.vlanDeleteSuccess'));
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete VLAN:', error);
-      ElMessage.error(t('vlan.vlanDeleteFailed'));
-    }
-  }
+  await confirmAndRun({
+    message: t('vlan.confirmDeleteVlan', { vid: vlan.vid }),
+    title: t('common.confirmDelete'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      await deleteVlan(vlan.id);
+      vlans.value = vlans.value.filter(v => v.id !== vlan.id);
+    },
+    successMessage: t('vlan.vlanDeleteSuccess'),
+    errorMessage: t('vlan.vlanDeleteFailed'),
+  });
 };
 
 const getStatusTag = (status: string) => {

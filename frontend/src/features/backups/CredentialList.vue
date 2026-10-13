@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getCredentials, createCredential, updateCredential, deleteCredential, testCredential } from '@/api/backups'
+import { confirmAndRun } from '@/lib/confirm'
 import type { Credential } from '@/types/domain'
 import { useI18n } from 'vue-i18n'
 
@@ -158,21 +159,18 @@ async function handleSave() {
 }
 
 async function handleDelete(credential: Credential) {
-  try {
-    await ElMessageBox.confirm(
-      t('backups.confirmDelete', { name: credential.name }),
-      t('backups.deleteTitle'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    await deleteCredential(parseInt(credential.id))
-    ElMessage.success(t('backups.deleteSuccess'))
-    await loadCredentials()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete credential:', error)
-      ElMessage.error(t('backups.deleteFailed'))
-    }
-  }
+  await confirmAndRun({
+    message: t('backups.confirmDelete', { name: credential.name }),
+    title: t('backups.deleteTitle'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      await deleteCredential(parseInt(credential.id))
+      await loadCredentials()
+    },
+    successMessage: t('backups.deleteSuccess'),
+    errorMessage: t('backups.deleteFailed'),
+  })
 }
 
 // 处理选择变化
@@ -182,25 +180,22 @@ const handleSelectionChange = (val: any[]) => {
 
 // 批量删除
 async function handleBatchDelete() {
-  try {
-    await ElMessageBox.confirm(
-      t('backups.confirmBatchDelete', { count: selectedCredentialIds.value.length }),
-      t('backups.batchDeleteTitle'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    // 逐个删除（可以优化为批量API）
-    for (const id of selectedCredentialIds.value) {
-      await deleteCredential(id)
-    }
-    ElMessage.success(t('backups.batchDeleteSuccess', { count: selectedCredentialIds.value.length }))
-    selectedCredentialIds.value = []
-    await loadCredentials()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to batch delete credentials:', error)
-      ElMessage.error(t('backups.batchDeleteFailed'))
-    }
-  }
+  await confirmAndRun({
+    message: t('backups.confirmBatchDelete', { count: selectedCredentialIds.value.length }),
+    title: t('backups.batchDeleteTitle'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      // 逐个删除（可以优化为批量API）
+      for (const id of selectedCredentialIds.value) {
+        await deleteCredential(id)
+      }
+      selectedCredentialIds.value = []
+      await loadCredentials()
+    },
+    successMessage: t('backups.batchDeleteSuccess', { count: selectedCredentialIds.value.length }),
+    errorMessage: t('backups.batchDeleteFailed'),
+  })
 }
 
 function openTestDialog(credential: Credential) {

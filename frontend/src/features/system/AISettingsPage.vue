@@ -253,8 +253,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { InfoFilled, View } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import api from '../../api/axios'
+import { confirmAndRun } from '../../lib/confirm'
 
 interface AIConfig {
   id: number
@@ -489,19 +490,16 @@ const toggleEnabled = async (config: AIConfig) => {
 }
 
 const deleteConfig = async (config: AIConfig) => {
-  try {
-    await ElMessageBox.confirm(`确定要删除配置 "${config.name}" 吗？`, '确认删除', {
-      type: 'warning',
-    })
-    await api.delete(`/ai/config/${config.id}`)
-    ElMessage.success('已删除')
-    await fetchConfigs()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('删除失败:', error)
-      ElMessage.error('删除失败')
-    }
-  }
+  await confirmAndRun({
+    message: `确定要删除配置 "${config.name}" 吗？`,
+    title: '确认删除',
+    action: async () => {
+      await api.delete(`/ai/config/${config.id}`)
+      await fetchConfigs()
+    },
+    successMessage: '已删除',
+    errorMessage: '删除失败',
+  })
 }
 
 interface AlertRuleRow {

@@ -2,10 +2,11 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus, Download, Upload, Edit, Delete, MagicStick } from '@element-plus/icons-vue'
 import { formatDate } from '../../lib/utils'
 import { applyKeywordFilter } from '../../lib/filters'
+import { confirmAndRun } from '../../lib/confirm'
 import type { Device, IPAddress, Site } from '../../types/domain'
 import { getIPAddresses, createIPAddress } from '../../api/ipam'
 import { getDevices, createDevice, updateDevice, deleteDevice, type DeviceResponse } from '../../api/devices'
@@ -335,34 +336,29 @@ async function handleSave() {
 }
 
 const handleDelete = async (device: Device) => {
-  try {
-    await ElMessageBox.confirm(
-      `${t('common.confirm')} ${t('common.delete')} ${t('devices.device')} "${device.name}"?`,
-      t('common.confirm'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    await deleteDevice(device.id as number)
-    devices.value = devices.value.filter(d => d.id !== device.id)
-    
-    // 添加操作日志
-    store.addAuditLog({
-      user: authStore.user?.username || 'system',
-      action: t('auditActions.deleteDevice'),
-      resource: t('auditResources.deviceManagement'),
-      detail: `${t('auditActions.deleteDevice')}: ${device.name}`,
-      ipAddress: null,
-      createdAt: new Date().toISOString(),
-      success: 'true'
-    })
-    
-    ElMessage.success(t('common.success'))
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete device:', error)
-      ElMessage.error(t('common.error'))
-    }
-    // 用户取消删除
-  }
+  await confirmAndRun({
+    message: `${t('common.confirm')} ${t('common.delete')} ${t('devices.device')} "${device.name}"?`,
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      await deleteDevice(device.id as number)
+      devices.value = devices.value.filter(d => d.id !== device.id)
+
+      // 添加操作日志
+      store.addAuditLog({
+        user: authStore.user?.username || 'system',
+        action: t('auditActions.deleteDevice'),
+        resource: t('auditResources.deviceManagement'),
+        detail: `${t('auditActions.deleteDevice')}: ${device.name}`,
+        ipAddress: null,
+        createdAt: new Date().toISOString(),
+        success: 'true'
+      })
+    },
+    successMessage: t('common.success'),
+    errorMessage: t('common.error'),
+  })
 }
 
 // 将后端响应转换为前端Device类型

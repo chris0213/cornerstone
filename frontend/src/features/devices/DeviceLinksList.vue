@@ -149,7 +149,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
   getDeviceLinks,
@@ -163,6 +163,7 @@ import {
 } from '@/api/topology'
 import { getDevices, type DeviceResponse } from '@/api/devices'
 import { getCircuits, type CircuitResponse } from '@/api/circuits'
+import { confirmAndRun } from '@/lib/confirm'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -404,22 +405,18 @@ const handleSubmit = async () => {
 }
 
 const confirmDelete = async (link: DeviceLink) => {
-  try {
-    await ElMessageBox.confirm(`确定要删除设备连接吗？`, '确认删除', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    await deleteDeviceLink(link.id)
-    ElMessage.success('删除成功')
-    await loadDeviceLinks()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete device link:', error)
-      ElMessage.error('删除失败')
-    }
-  }
+  await confirmAndRun({
+    message: `确定要删除设备连接吗？`,
+    title: '确认删除',
+    confirmText: '确定',
+    cancelText: '取消',
+    action: async () => {
+      await deleteDeviceLink(link.id)
+      await loadDeviceLinks()
+    },
+    successMessage: '删除成功',
+    errorMessage: '删除失败',
+  })
 }
 
 const runLldpDiscovery = async () => {

@@ -5,9 +5,10 @@ import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
+import { confirmAndRun } from '@/lib/confirm'
 import type { Site } from '../../types/domain'
 import { getSites, createSite, updateSite, deleteSite, type SiteResponse } from '../../api/sites'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Location, Plus, Edit, Delete, Check, Warning, HelpFilled, DocumentCopy } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
@@ -158,38 +159,29 @@ const handleDelete = async (site: Site) => {
     return
   }
 
-  try {
-    await ElMessageBox.confirm(
-      t('sites.confirmDelete', { name: site.name }),
-      t('sites.deleteConfirmTitle'),
-      {
-        confirmButtonText: t('sites.deleteButton'),
-        cancelButtonText: t('sites.cancelButton'),
-        type: 'warning',
-      }
-    )
-    await deleteSite(site.id as number)
-    sites.value = sites.value.filter(s => s.id !== site.id)
-    
-    // 添加操作日志
-    store.addAuditLog({
-      user: authStore.user?.username || 'system',
-      action: t('sites.deleteSite'),
-      resource: t('sites.siteManagement'),
-      detail: `${t('sites.deleteSite')}: ${site.name}`,
-      ipAddress: null,
-      createdAt: new Date().toISOString(),
-      success: 'true'
-    })
-    
-    ElMessage.success(t('sites.deleteSuccess'))
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete site:', error)
-      ElMessage.error(t('sites.deleteFailed'))
-    }
-    // 用户取消删除
-  }
+  await confirmAndRun({
+    message: t('sites.confirmDelete', { name: site.name }),
+    title: t('sites.deleteConfirmTitle'),
+    confirmText: t('sites.deleteButton'),
+    cancelText: t('sites.cancelButton'),
+    action: async () => {
+      await deleteSite(site.id as number)
+      sites.value = sites.value.filter(s => s.id !== site.id)
+
+      // 添加操作日志
+      store.addAuditLog({
+        user: authStore.user?.username || 'system',
+        action: t('sites.deleteSite'),
+        resource: t('sites.siteManagement'),
+        detail: `${t('sites.deleteSite')}: ${site.name}`,
+        ipAddress: null,
+        createdAt: new Date().toISOString(),
+        success: 'true'
+      })
+    },
+    successMessage: t('sites.deleteSuccess'),
+    errorMessage: t('sites.deleteFailed'),
+  })
 }
 
 const getCircuitCount = (siteId: string | number) => {

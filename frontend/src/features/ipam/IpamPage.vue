@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox, ElEmpty } from 'element-plus'
+import { ElMessage, ElEmpty } from 'element-plus'
 import { useAuthStore } from '../../store/auth'
 import { Search as SearchIcon, User, Edit, Plus, Delete, Connection, Download, Upload } from '@element-plus/icons-vue'
 import api from '../../api/axios'
+import { confirmAndRun } from '../../lib/confirm'
 import type { Prefix, IPAddress } from '../../types/domain'
 import IpMatrix from './components/IpMatrix.vue'
 import ScanProgress from './components/ScanProgress.vue'
@@ -355,25 +356,21 @@ const handleSavePrefix = async () => {
 }
 
 const handleDeletePrefix = async (prefix: Prefix) => {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除子网「${prefix.network}」吗？此操作不可撤销。`,
-      t('common.confirm'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    await deletePrefix(prefix.id)
-    const index = prefixes.value.findIndex(p => p.id === prefix.id)
-    if (index !== -1) {
-      prefixes.value.splice(index, 1)
-    }
-    ElMessage.success(t('ipam.deletePrefixSuccess'))
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete prefix:', error)
-      ElMessage.error(t('ipam.deletePrefixFailed'))
-    }
-    // 用户取消删除
-  }
+  await confirmAndRun({
+    message: `确定要删除子网「${prefix.network}」吗？此操作不可撤销。`,
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      await deletePrefix(prefix.id)
+      const index = prefixes.value.findIndex(p => p.id === prefix.id)
+      if (index !== -1) {
+        prefixes.value.splice(index, 1)
+      }
+    },
+    successMessage: t('ipam.deletePrefixSuccess'),
+    errorMessage: t('ipam.deletePrefixFailed'),
+  })
 }
 
 function openCreateIPDialog() {
@@ -571,25 +568,21 @@ const handleSaveIP = async () => {
 }
 
 const handleDeleteIP = async (ip: IPAddress) => {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除 IP 地址「${ip.address}」吗？此操作不可撤销。`,
-      '确认删除',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-    )
-    await deleteIPAddress(ip.id)
-    const index = ipAddresses.value.findIndex(ipItem => ipItem.id === ip.id)
-    if (index !== -1) {
-      ipAddresses.value.splice(index, 1)
-    }
-    ElMessage.success('IP 删除成功')
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete IP:', error)
-      ElMessage.error('删除IP失败')
-    }
-    // 用户取消删除
-  }
+  await confirmAndRun({
+    message: `确定要删除 IP 地址「${ip.address}」吗？此操作不可撤销。`,
+    title: '确认删除',
+    confirmText: '删除',
+    cancelText: '取消',
+    action: async () => {
+      await deleteIPAddress(ip.id)
+      const index = ipAddresses.value.findIndex(ipItem => ipItem.id === ip.id)
+      if (index !== -1) {
+        ipAddresses.value.splice(index, 1)
+      }
+    },
+    successMessage: 'IP 删除成功',
+    errorMessage: '删除IP失败',
+  })
 }
 </script>
 

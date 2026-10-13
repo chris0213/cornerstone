@@ -1,5 +1,6 @@
 <script setup lang="ts">import { ref, computed, onMounted } from 'vue';
-import { ElMessage, ElMessageBox, ElIcon } from 'element-plus';
+import { ElMessage, ElIcon } from 'element-plus';
+import { confirmAndRun } from '@/lib/confirm';
 import { Warning, Clock, Cpu, TrendCharts, Promotion } from '@element-plus/icons-vue';
 import { getTasks, getRecords, getFingerprints, getAlertCount, createTask, updateTask, deleteTask, executeTask, toggleTask, getInspectionCategories, getDevicesByCategory, type InspectionTask, type InspectionTaskCreate, type InspectionRecord, type DeviceFingerprint, type AlertCount, type ExecuteResponse, type InspectionCategory, type InspectionDeviceResult } from '@/api/inspection';
 import { getSites, type SiteResponse } from '@/api/sites';
@@ -307,17 +308,16 @@ async function saveTask() {
 }
 // 删除任务
 async function handleDelete(taskId: number) {
- try {
- await ElMessageBox.confirm(t('inspection.confirmDelete'), t('common.confirm'), {
- type: 'warning'
- });
- await deleteTask(taskId);
- await loadTasks();
- ElMessage.success(t('inspection.deleteSuccess'));
- }
- catch {
- // 用户取消删除
- }
+  // 失败静默与原行为一致：不传 errorMessage
+  await confirmAndRun({
+    message: t('inspection.confirmDelete'),
+    title: t('common.confirm'),
+    action: async () => {
+      await deleteTask(taskId);
+      await loadTasks();
+    },
+    successMessage: t('inspection.deleteSuccess'),
+  });
 }
 // 切换任务启用状态
 async function handleToggle(task: InspectionTask) {
@@ -349,20 +349,21 @@ function handleSelectionChange(val: any[]) {
 // 批量删除
 async function handleBatchDelete() {
  if (selectedTaskIds.value.length === 0) return;
- try {
- await ElMessageBox.confirm(t('inspection.confirmBatchDelete', { count: selectedTaskIds.value.length }), t('inspection.confirmBatchDeleteTitle'), { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' })
- for (const id of selectedTaskIds.value) {
- await deleteTask(id)
- }
- ElMessage.success(t('inspection.batchDeleteSuccess', { count: selectedTaskIds.value.length }))
- selectedTaskIds.value = []
- await loadTasks()
- } catch (error: any) {
- if (error !== 'cancel') {
- console.error(t('inspection.batchDeleteFailed'), error)
- ElMessage.error(t('inspection.batchDeleteFailed'))
- }
- }
+ await confirmAndRun({
+   message: t('inspection.confirmBatchDelete', { count: selectedTaskIds.value.length }),
+   title: t('inspection.confirmBatchDeleteTitle'),
+   confirmText: t('common.delete'),
+   cancelText: t('common.cancel'),
+   action: async () => {
+     for (const id of selectedTaskIds.value) {
+       await deleteTask(id)
+     }
+     selectedTaskIds.value = []
+     await loadTasks()
+   },
+   successMessage: t('inspection.batchDeleteSuccess', { count: selectedTaskIds.value.length }),
+   errorMessage: t('inspection.batchDeleteFailed'),
+ })
 }
 
 // 复制任务

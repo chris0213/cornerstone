@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getBackupTasks, createBackupTask, updateBackupTask, deleteBackupTask, toggleBackupTask, runBackupTaskNow, getBackupTaskHistory, getCredentials } from '@/api/backups'
 import { formatDateTime } from '@/lib/utils'
+import { confirmAndRun } from '@/lib/confirm'
 import { getDevices, type DeviceResponse } from '@/api/devices'
 import { getSites, type SiteResponse } from '@/api/sites'
 import type { BackupTask, Credential, Device, Site } from '@/types/domain'
@@ -252,21 +253,18 @@ async function handleSave() {
 }
 
 async function handleDelete(task: BackupTask) {
-  try {
-    await ElMessageBox.confirm(
-      t('backups.confirmDelete', { name: task.name }),
-      t('common.confirm'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    await deleteBackupTask(parseInt(task.id))
-    ElMessage.success(t('backups.taskDeleted'))
-    await loadTasks()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete task:', error)
-      ElMessage.error(t('backups.deleteFailed'))
-    }
-  }
+  await confirmAndRun({
+    message: t('backups.confirmDelete', { name: task.name }),
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      await deleteBackupTask(parseInt(task.id))
+      await loadTasks()
+    },
+    successMessage: t('backups.taskDeleted'),
+    errorMessage: t('backups.deleteFailed'),
+  })
 }
 
 // 处理选择变化
@@ -276,25 +274,22 @@ const handleSelectionChange = (val: any[]) => {
 
 // 批量删除
 async function handleBatchDelete() {
-  try {
-    await ElMessageBox.confirm(
-      t('backups.confirmBatchDelete', { count: selectedTaskIds.value.length }),
-      t('common.confirm'),
-      { confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    // 逐个删除（可以优化为批量API）
-    for (const id of selectedTaskIds.value) {
-      await deleteBackupTask(id)
-    }
-    ElMessage.success(t('backups.batchDeleted', { count: selectedTaskIds.value.length }))
-    selectedTaskIds.value = []
-    await loadTasks()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('Failed to batch delete tasks:', error)
-      ElMessage.error(t('backups.batchDeleteFailed'))
-    }
-  }
+  await confirmAndRun({
+    message: t('backups.confirmBatchDelete', { count: selectedTaskIds.value.length }),
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      // 逐个删除（可以优化为批量API）
+      for (const id of selectedTaskIds.value) {
+        await deleteBackupTask(id)
+      }
+      selectedTaskIds.value = []
+      await loadTasks()
+    },
+    successMessage: t('backups.batchDeleted', { count: selectedTaskIds.value.length }),
+    errorMessage: t('backups.batchDeleteFailed'),
+  })
 }
 
 async function handleToggle(task: BackupTask) {

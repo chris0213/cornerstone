@@ -1,7 +1,8 @@
 <script setup lang="ts">import { ref, onMounted, reactive, computed } from 'vue';
 import { useAuthStore } from '../../store/auth';
 import { useAppStore } from '../../store';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAndRun } from '../../lib/confirm';
 import { User, Plus, Edit, Delete, Lock, Key, Refresh, CopyDocument } from '@element-plus/icons-vue';
 import api from '../../api/axios';
 import { useI18n } from 'vue-i18n';
@@ -148,24 +149,22 @@ function handleSelectionChange(val: UserItem[]) {
 }
 async function handleBatchDelete() {
   if (selectedUsers.value.length === 0) return;
-  try {
-    await ElMessageBox.confirm(t('common.confirmDelete'), t('common.confirm'), {
-      confirmButtonText: t('common.delete'),
-      cancelButtonText: t('common.cancel'),
-      type: 'warning'
-    });
-    for (const user of selectedUsers.value) {
-      if (user.id === authStore.user?.id || user.is_superuser) continue;
-      await api.delete(`/users/${user.id}`);
-    }
-    ElMessage.success(t('system.deleteSuccess'));
-    loadUsers();
-    selectedUsers.value = [];
-  } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(t('system.operationFailed'));
-    }
-  }
+  await confirmAndRun({
+    message: t('common.confirmDelete'),
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      for (const user of selectedUsers.value) {
+        if (user.id === authStore.user?.id || user.is_superuser) continue;
+        await api.delete(`/users/${user.id}`);
+      }
+      loadUsers();
+      selectedUsers.value = [];
+    },
+    successMessage: t('system.deleteSuccess'),
+    errorMessage: t('system.operationFailed'),
+  });
 }
 async function loadUsers() {
  if (!authStore.token)
@@ -422,36 +421,30 @@ async function openSessionsModal(user: UserItem) {
   showSessionsModal.value = true;
 }
 async function revokeSession(sessionId: string) {
- try {
- await ElMessageBox.confirm(t('system.confirmRevokeSession'), t('system.confirmRevoke'), {
- confirmButtonText: t('system.revoke'),
- cancelButtonText: t('common.cancel'),
- type: 'warning'
- });
- sessions.value = sessions.value.filter(s => s.id !== sessionId);
- ElMessage.success(t('system.sessionRevoked'));
- }
- catch (error) {
- if (error !== 'cancel') {
- ElMessage.error(t('system.operationFailed'));
- }
- }
+  await confirmAndRun({
+    message: t('system.confirmRevokeSession'),
+    title: t('system.confirmRevoke'),
+    confirmText: t('system.revoke'),
+    cancelText: t('common.cancel'),
+    action: () => {
+      sessions.value = sessions.value.filter(s => s.id !== sessionId);
+    },
+    successMessage: t('system.sessionRevoked'),
+    errorMessage: t('system.operationFailed'),
+  });
 }
 async function revokeAllSessions() {
- try {
- await ElMessageBox.confirm(t('system.confirmRevokeAll'), t('system.confirmRevoke'), {
- confirmButtonText: t('system.revoke'),
- cancelButtonText: t('common.cancel'),
- type: 'warning'
- });
- sessions.value = sessions.value.filter(s => s.is_current);
- ElMessage.success(t('system.otherSessionsRevoked'));
- }
- catch (error) {
- if (error !== 'cancel') {
- ElMessage.error(t('system.operationFailed'));
- }
- }
+  await confirmAndRun({
+    message: t('system.confirmRevokeAll'),
+    title: t('system.confirmRevoke'),
+    confirmText: t('system.revoke'),
+    cancelText: t('common.cancel'),
+    action: () => {
+      sessions.value = sessions.value.filter(s => s.is_current);
+    },
+    successMessage: t('system.otherSessionsRevoked'),
+    errorMessage: t('system.operationFailed'),
+  });
 }
 function getRoleType(roleName: string): string {
  const types: Record<string, string> = {

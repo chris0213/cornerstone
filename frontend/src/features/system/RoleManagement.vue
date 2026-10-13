@@ -2,7 +2,8 @@
 import { ref, onMounted, reactive, computed } from 'vue'
 import { useAuthStore } from '../../store/auth'
 import { useAppStore } from '../../store'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { confirmAndRun } from '../../lib/confirm'
+import { ElMessage } from 'element-plus'
 import { Plus, Edit, Delete, InfoFilled } from '@element-plus/icons-vue'
 import api from '../../api/axios'
 import { useI18n } from 'vue-i18n'
@@ -193,36 +194,35 @@ async function handleEditRole() {
 
 async function handleDeleteRole(roleId: number) {
   const roleToDelete = roles.value.find(r => r.id === roleId)
-  try {
-    await ElMessageBox.confirm(t('system.confirmDeleteRole'), t('system.confirmDelete'), {
-      confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), type: 'warning'
-    })
-    const response = await fetch(`/api/v1/users/roles/${roleId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${authStore.token}` }
-    })
-    if (response.ok) {
-      appStore.addAuditLog({
-        user: authStore.user?.username || 'system',
-        action: t('system.action.deleteRole'),
-        resource: t('system.roleManagement'),
-        detail: `${t('system.action.deleteRole')}: ${roleToDelete?.display_name || roleId}`,
-        ipAddress: null,
-        createdAt: new Date().toISOString(),
-        success: 'true'
+  // 请求分支在 action 内自理（失败文案含后端 detail），故不传 success/errorMessage
+  await confirmAndRun({
+    message: t('system.confirmDeleteRole'),
+    title: t('system.confirmDelete'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    action: async () => {
+      const response = await fetch(`/api/v1/users/roles/${roleId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authStore.token}` }
       })
-      await loadRoles()
-      ElMessage.success(t('system.roleDeleted'))
-    } else {
-      const error = await response.json()
-      ElMessage.error(`${t('system.deleteFailed')}: ${error.detail || t('system.unknownError')}`)
-    }
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Delete role failed:', error)
-      ElMessage.error(t('system.deleteFailed'))
-    }
-  }
+      if (response.ok) {
+        appStore.addAuditLog({
+          user: authStore.user?.username || 'system',
+          action: t('system.action.deleteRole'),
+          resource: t('system.roleManagement'),
+          detail: `${t('system.action.deleteRole')}: ${roleToDelete?.display_name || roleId}`,
+          ipAddress: null,
+          createdAt: new Date().toISOString(),
+          success: 'true'
+        })
+        await loadRoles()
+        ElMessage.success(t('system.roleDeleted'))
+      } else {
+        const error = await response.json()
+        ElMessage.error(`${t('system.deleteFailed')}: ${error.detail || t('system.unknownError')}`)
+      }
+    },
+  })
 }
 
 const displayRoles = computed(() => {
