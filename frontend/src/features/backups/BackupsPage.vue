@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, Connection, Box, MapLocation } from '@element-plus/icons-vue'
 import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup } from '@/api/backups'
 import { formatDateTime } from '@/lib/utils'
+import { applyKeywordFilter } from '@/lib/filters'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -111,23 +112,17 @@ const filteredBackups = computed(() => {
   let result = backups.value
   
   if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase()
-    result = result.filter(b => {
-      const device = getDeviceInfo(b.deviceId)
-      const siteName = getSiteName(device?.site_id)
-      const ipAddr = getIpAddress(device?.mgmt_ip_id ?? undefined)
-      return (
-        b.deviceId?.toString().includes(q) ||
-        b.operator?.toLowerCase().includes(q) ||
-        b.tag?.toLowerCase().includes(q) ||
-        device?.name?.toLowerCase().includes(q) ||
-        device?.type?.toLowerCase().includes(q) ||
-        device?.vendor?.toLowerCase().includes(q) ||
-        device?.model?.toLowerCase().includes(q) ||
-        siteName?.toLowerCase().includes(q) ||
-        ipAddr?.toLowerCase().includes(q)
-      )
-    })
+    result = applyKeywordFilter(result, searchQuery.value, [
+      (b) => b.deviceId,
+      'operator',
+      'tag',
+      (b) => getDeviceInfo(b.deviceId)?.name,
+      (b) => getDeviceInfo(b.deviceId)?.type,
+      (b) => getDeviceInfo(b.deviceId)?.vendor,
+      (b) => getDeviceInfo(b.deviceId)?.model,
+      (b) => getSiteName(getDeviceInfo(b.deviceId)?.site_id),
+      (b) => getIpAddress(getDeviceInfo(b.deviceId)?.mgmt_ip_id ?? undefined),
+    ])
   }
   
   if (filterStatus.value) {

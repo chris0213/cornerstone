@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/store/auth'
 
 import { getDashboardStats, getPrefixesUsage, getRecentLogs, getDeviceTypes, getCircuitTypes, type DashboardStats, type PrefixUsage, type AuditLogItem, type DeviceTypeItem, type CircuitTypeItem } from '@/api/dashboard'
+import { applyKeywordFilter } from '@/lib/filters'
 import EventTimeline from './EventTimeline.vue'
 import { useRouter } from 'vue-router'
 import { Plus, MapLocation, Connection, Clock, DataBoard, FolderOpened, Lightning } from '@element-plus/icons-vue'
@@ -123,14 +124,9 @@ const deviceTypeColors: Record<string, string> = {
 
 
 
-const filteredLogs = computed(() => {
-  if (!searchQuery.value) return recentLogs.value
-  return recentLogs.value.filter(log => 
-    log.action.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-    log.resource.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-    log.detail.toLowerCase().includes(searchQuery.value.toLowerCase())
-  )
-})
+const filteredLogs = computed(() =>
+  applyKeywordFilter(recentLogs.value, searchQuery.value, ['action', 'resource', 'detail'])
+)
 
 // 格式化时间
 function formatTime(dateString: string) {

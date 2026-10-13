@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Download, Upload, Edit, Delete, MagicStick } from '@element-plus/icons-vue'
 import { formatDate } from '../../lib/utils'
+import { applyKeywordFilter } from '../../lib/filters'
 import type { Device, IPAddress, Site } from '../../types/domain'
 import { getIPAddresses, createIPAddress } from '../../api/ipam'
 import { getDevices, createDevice, updateDevice, deleteDevice, type DeviceResponse } from '../../api/devices'
@@ -90,19 +91,12 @@ const filteredDevices = computed(() => {
   }
   
   // 按搜索关键词筛选
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(d =>
-      (d.name?.toLowerCase() || '').includes(query) ||
-      (d.type?.toLowerCase() || '').includes(query) ||
-      (d.vendor?.toLowerCase() || '').includes(query) ||
-      (d.model?.toLowerCase() || '').includes(query) ||
-      (d.sn?.toLowerCase() || '').includes(query) ||
-      siteName(d.siteId || 0).toLowerCase().includes(query) ||
-      getIpAddress(d.mgmtIpId || 0).toLowerCase().includes(query)
-    )
-  }
-  
+  result = applyKeywordFilter(result, searchQuery.value, [
+    'name', 'type', 'vendor', 'model', 'sn',
+    (d) => siteName(d.siteId || 0),
+    (d) => getIpAddress(d.mgmtIpId || 0),
+  ])
+
   return result
 })
 

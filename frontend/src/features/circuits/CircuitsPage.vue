@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
+import { applyKeywordFilter } from '@/lib/filters'
 import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { Plus, Download, Upload, Clock, Warning, WarningFilled, ArrowDown, View, Edit, Document, Delete } from '@element-plus/icons-vue'
@@ -66,17 +67,8 @@ const expiryCount = computed(() => circuits.value.filter(c => {
 const totalCost = computed(() => circuits.value.reduce((sum, c) => sum + (c.monthlyCost || 0), 0))
 
 const filteredCircuits = computed(() => {
-  let items = [...circuits.value]
-  
-  if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase()
-    items = items.filter(c =>
-      c.name.toLowerCase().includes(q) ||
-      c.circuitNo.toLowerCase().includes(q) ||
-      c.publicIp.toLowerCase().includes(q)
-    )
-  }
-  
+  let items = applyKeywordFilter([...circuits.value], searchQuery.value, ['name', 'circuitNo', 'publicIp'])
+
   if (filterOperator.value) {
     items = items.filter(c => c.provider === filterOperator.value)
   }

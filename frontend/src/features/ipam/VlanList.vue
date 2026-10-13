@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox, ElTree, ElDialog } from 'element-plus';
 import { Plus, Edit, Delete } from '@element-plus/icons-vue';
+import { applyKeywordFilter } from '../../lib/filters';
 
 const { t } = useI18n();
 import type { VlanGroup, Vlan, Prefix } from '../../types/domain';
@@ -58,12 +59,12 @@ const filteredVlans = computed(() => {
     const query = searchQuery.value.toLowerCase();
     const rangeMatch = query.match(/^(\d+)-(\d+)$/);
     if (rangeMatch) {
+      // VID 范围查询（如 10-20），业务特化逻辑保留
       const start = parseInt(rangeMatch[1]);
       const end = parseInt(rangeMatch[2]);
       result = result.filter(v => v.vid >= start && v.vid <= end);
     } else {
-      result = result.filter(v => v.vid.toString().includes(query) ||
-        (v.name && v.name.toLowerCase().includes(query)));
+      result = applyKeywordFilter(result, searchQuery.value, ['vid', 'name']);
     }
   }
   return result;

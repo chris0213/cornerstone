@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
+import { applyKeywordFilter } from '@/lib/filters'
 import { Files, User, Clock, Warning, Check, Edit } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { getLocale } from '@/i18n'
@@ -53,14 +54,7 @@ const filteredLogs = computed(() => {
   }
 
   // 搜索过滤
-  if (searchQuery.value) {
-    logs = logs.filter(log =>
-      log.action.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      log.resource.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      log.user.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      log.detail.toLowerCase().includes(searchQuery.value.toLowerCase())
-    )
-  }
+  logs = applyKeywordFilter(logs, searchQuery.value, ['action', 'resource', 'user', 'detail'])
 
   return logs
 })

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
+import { applyKeywordFilter } from '@/lib/filters'
 import type { Site } from '../../types/domain'
 import { getSites, createSite, updateSite, deleteSite, type SiteResponse } from '../../api/sites'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -37,23 +38,14 @@ const form = ref<Partial<Site>>({
 
 const filteredSites = computed(() => {
   let items = [...sites.value]
-  
+
   // 状态过滤
   if (statusFilter.value === 'alert') {
     items = items.filter(site => site.status === 'alert')
   }
-  
+
   // 搜索过滤
-  if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase()
-    items = items.filter(site => 
-      site.name.toLowerCase().includes(q) ||
-      site.location.toLowerCase().includes(q) ||
-      site.contact.toLowerCase().includes(q)
-    )
-  }
-  
-  return items
+  return applyKeywordFilter(items, searchQuery.value, ['name', 'location', 'contact'])
 })
 
 const alertSiteCount = computed(() => {
