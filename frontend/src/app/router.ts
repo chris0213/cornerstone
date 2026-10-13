@@ -25,6 +25,7 @@ const DeviceTopology = () => import('../features/topology/DeviceTopology.vue')
 const ProfilePage = () => import('../features/system/ProfilePage.vue')
 const RackViewPage = () => import('../features/rack/RackView.vue')
 const ReportCenterPage = () => import('../features/reports/ReportCenterPage.vue')
+const ChangesPage = () => import('../features/changes/ChangesPage.vue')
 const UserManagement = () => import('../features/system/UserManagement.vue')
 const RoleManagement = () => import('../features/system/RoleManagement.vue')
 const SSOSettingsPage = () => import('../features/system/SSOSettingsPage.vue')
@@ -70,6 +71,7 @@ const router = createRouter({
     { path: '/topology', redirect: '/topology/sites' },
     { path: '/inspection', redirect: '/reports' },
     { path: '/reports', name: 'reports', component: ReportCenterPage, meta: { requiresAuth: true, permission: 'reports:read', titleKey: 'reports.title' } },
+    { path: '/changes', name: 'changes', component: ChangesPage, meta: { requiresAuth: true, permission: 'logs:read', titleKey: 'changes.title' } },
     { path: '/rack-view', redirect: '/topology/rack' }
   ]
 })

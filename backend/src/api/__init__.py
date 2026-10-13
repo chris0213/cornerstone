@@ -26,6 +26,7 @@ from .ai import router as ai_router
 from .timeline import router as timeline_router
 from .quick_add import router as quick_add_router
 from .reports import router as reports_router
+from .changes import router as changes_router
 
 api_router = APIRouter()
 
@@ -55,3 +56,4 @@ api_router.include_router(ai_router, prefix="/ai", tags=["ai"])
 api_router.include_router(timeline_router, prefix="/timeline", tags=["timeline"])
 api_router.include_router(quick_add_router, prefix="/devices", tags=["quick-add"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
+api_router.include_router(changes_router, prefix="/changes", tags=["changes"])

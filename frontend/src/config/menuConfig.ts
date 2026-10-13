@@ -72,6 +72,7 @@ export const menuConfig: MenuGroup[] = [
         ]
       },
       { path: '/alerts', nameKey: 'alerts.title', permission: 'alerts:read' },
+      { path: '/changes', nameKey: 'changes.title', permission: 'logs:read' },
       { path: '/reports', nameKey: 'reports.title', permission: 'reports:read' }
     ]
   },
