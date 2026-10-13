@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
-import { ElMessage, ElMessageBox, ElDialog, ElButton, ElDatePicker, ElTabPane, ElTabs, ElBadge } from 'element-plus'
+import { ElMessage, ElDialog, ElButton, ElDatePicker, ElTabPane, ElTabs, ElBadge } from 'element-plus'
+import { confirmAndRun } from '@/lib/confirm'
 import { Bell, Refresh, CircleClose, Warning, DataLine, Connection, View, InfoFilled, Calendar, Monitor, DocumentCopy, SetUp, BellFilled, WarningFilled, ArrowDown } from '@element-plus/icons-vue'
 import AIPrediction from '../../components/AIPrediction.vue'
 import AnomalyCard, { type Anomaly } from './AnomalyCard.vue'
@@ -545,23 +546,23 @@ function closeRenewDialog() {
 }
 
 const handleReleaseIP = async (ip: ExpiringIP) => {
-  try {
-    await ElMessageBox.confirm(
-      t('alerts.confirmReleaseIP', { address: ip.address }),
-      t('common.confirm'),
-      { confirmButtonText: t('alerts.release'), cancelButtonText: t('common.cancel'), type: 'warning' }
-    )
-    updateIPAddress(String(ip.id), {
-      deviceId: null,
-      usage: '',
-      owner: '',
-      status: 'available',
-      expireAt: ''
-    })
-    ElMessage.success(t('alerts.ipReleased'))
-  } catch {
-    // 用户取消
-  }
+  // 失败静默与原行为一致：不传 errorMessage
+  await confirmAndRun({
+    message: t('alerts.confirmReleaseIP', { address: ip.address }),
+    title: t('common.confirm'),
+    confirmText: t('alerts.release'),
+    cancelText: t('common.cancel'),
+    action: () => {
+      updateIPAddress(String(ip.id), {
+        deviceId: null,
+        usage: '',
+        owner: '',
+        status: 'available',
+        expireAt: ''
+      })
+    },
+    successMessage: t('alerts.ipReleased'),
+  })
 }
 
 const handleViewDevice = (deviceId: string | number | undefined) => {
