@@ -103,6 +103,7 @@ async def startup_event():
     from .models.backup_analysis import BackupAnalysis
     from .models.inspection import InspectionTask, InspectionResult, InspectionDeviceResult, DeviceFingerprint
     from .models.rack import Rack
+    from .models.knowledge import KnowledgeArticle
     
     # 初始化权限和角色
     async with async_session() as session:

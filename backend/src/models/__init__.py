@@ -23,6 +23,7 @@ from .alert import AlertRule, AlertRecord, AlertNotification
 from .metric_sample import MetricSample
 from .report import MonthlyReport
 from .ai_chat_log import AIChatLog
+from .knowledge import KnowledgeArticle
 
 __all__ = [
     'User', 'Role', 'Permission', 'RolePermission', 'UserSession',
@@ -34,5 +35,6 @@ __all__ = [
     'AlertRule', 'AlertRecord', 'AlertNotification',
     'MetricSample',
     'MonthlyReport',
-    'AIChatLog'
+    'AIChatLog',
+    'KnowledgeArticle'
 ]
