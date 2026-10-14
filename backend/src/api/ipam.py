@@ -376,17 +376,21 @@ async def websocket_scan(
 ):
     """WebSocket实时推送扫描进度"""
     await websocket.accept()
-    
+    logger.info(f"[scan] WS accepted task_id={task_id} active_keys={list(scan_manager.active_tasks.keys())}")
+
     # 验证用户身份
     from .dependencies import get_ws_user
     try:
         await get_ws_user(websocket, db)
+        logger.info(f"[scan] WS auth ok task_id={task_id}")
     except Exception as e:
+        logger.warning(f"[scan] WS auth failed task_id={task_id}: {e}")
         await websocket.send_json({"type": "error", "message": f"认证失败: {e}"})
         await websocket.close(code=1008, reason="认证失败")
         return
-    
+
     if task_id not in scan_manager.active_tasks:
+        logger.warning(f"[scan] WS task not in active_tasks task_id={task_id}")
         await websocket.send_json({"type": "error", "message": "扫描任务不存在"})
         await websocket.close()
         return
