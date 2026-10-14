@@ -42,6 +42,9 @@ export interface Prefix {
   siteId: number | null
   vlan: string
   usage: string
+  customScanPorts?: string | null
+  autoScanEnabled?: boolean
+  scanCron?: string
 }
 
 export interface IPAddress {

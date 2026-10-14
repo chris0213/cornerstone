@@ -9,13 +9,25 @@ export async function getPrefixes(): Promise<Prefix[]> {
 }
 
 export async function createPrefix(prefix: Omit<Prefix, 'id'>): Promise<Prefix> {
-  const payload = {
+  const payload: any = {
     ...prefix,
     aggregate_id: prefix.aggregateId,
     site_id: prefix.siteId,
   }
-  delete (payload as any).aggregateId
-  delete (payload as any).siteId
+  delete payload.aggregateId
+  delete payload.siteId
+  if (prefix.customScanPorts !== undefined) {
+    payload.custom_scan_ports = prefix.customScanPorts
+    delete payload.customScanPorts
+  }
+  if (prefix.autoScanEnabled !== undefined) {
+    payload.auto_scan_enabled = prefix.autoScanEnabled
+    delete payload.autoScanEnabled
+  }
+  if (prefix.scanCron !== undefined) {
+    payload.scan_cron = prefix.scanCron
+    delete payload.scanCron
+  }
   const response = await api.post('/ipam/prefixes/', payload)
   return snakeToCamel(response.data)
 }
@@ -29,6 +41,18 @@ export async function updatePrefix(id: string | number, data: Partial<Prefix>): 
   if (data.siteId !== undefined) {
     payload.site_id = data.siteId ? Number(data.siteId) : null
     delete payload.siteId
+  }
+  if (data.customScanPorts !== undefined) {
+    payload.custom_scan_ports = data.customScanPorts
+    delete payload.customScanPorts
+  }
+  if (data.autoScanEnabled !== undefined) {
+    payload.auto_scan_enabled = data.autoScanEnabled
+    delete payload.autoScanEnabled
+  }
+  if (data.scanCron !== undefined) {
+    payload.scan_cron = data.scanCron
+    delete payload.scanCron
   }
   const response = await api.put(`/ipam/prefixes/${id}`, payload)
   return snakeToCamel(response.data)

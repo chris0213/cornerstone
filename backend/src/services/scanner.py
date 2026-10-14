@@ -8,6 +8,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 默认 TCP 探测端口组（服务器/网络设备/办公设备全覆盖）
+DEFAULT_TCP_PORTS = [22, 80, 443, 8080, 445, 139, 161, 3389, 5060]
+
+
+def parse_custom_ports(raw: Optional[str]) -> Optional[List[int]]:
+    """把字符串 "22,80,443" 解析为 [22, 80, 443]，无效值跳过；None/空串返回 None（用默认）"""
+    if not raw:
+        return None
+    ports: List[int] = []
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            p = int(piece)
+            if 1 <= p <= 65535:
+                ports.append(p)
+        except ValueError:
+            continue
+    return ports or None
+
 # 尝试导入scapy用于ARP探测，失败时静默降级
 try:
     from scapy.all import ARP, Ether, srp
@@ -137,7 +158,7 @@ async def probe_single_ip(ip: str, tcp_ports: List[int] = None, timeout: float =
     }
     """
     if tcp_ports is None:
-        tcp_ports = [22, 80, 443, 445, 3389, 8080]
+        tcp_ports = DEFAULT_TCP_PORTS
     
     start_time = datetime.now()
     result = {
@@ -180,24 +201,32 @@ async def probe_single_ip(ip: str, tcp_ports: List[int] = None, timeout: float =
     return result
 
 
-async def scan_prefix(prefix_network: str, ip_records: List[Dict], max_concurrent: int = 30) -> AsyncGenerator[Dict, None]:
+async def scan_prefix(
+    prefix_network: str,
+    ip_records: List[Dict],
+    max_concurrent: int = 30,
+    tcp_ports: Optional[List[int]] = None,
+) -> AsyncGenerator[Dict, None]:
     """
-    扫描整个子网
-    
+    扫描整个子网（全量展开，包括未登记 IP）
+
     Args:
         prefix_network: CIDR格式的子网，如 "192.0.2.0/24"
-        ip_records: 已有的IP记录列表，包含id等信息
+        ip_records: 已有的IP记录列表（用于关联 record_id，不是扫描范围）
         max_concurrent: 最大并发数
-    
-    Yields:
-        每个IP的扫描结果，供实时推送
+        tcp_ports: 自定义 TCP 探测端口；None 则用 DEFAULT_TCP_PORTS
     """
     try:
         network = IPv4Network(prefix_network)
     except ValueError:
         raise ValueError(f"Invalid network: {prefix_network}")
-    
-    logger.info(f"Starting scan for network: {prefix_network}")
+
+    # 安全阈值：/16（65534 主机）以上拒绝，避免打爆网络
+    if network.prefixlen < 16:
+        raise ValueError(f"Network too large for scan: /{network.prefixlen} (max /16 allowed)")
+
+    ports = tcp_ports or DEFAULT_TCP_PORTS
+    logger.info(f"Starting scan for network: {prefix_network} ports={ports}")
     
     # 创建IP到记录的映射
     ip_to_record = {record["address"]: record for record in ip_records}
@@ -214,11 +243,11 @@ async def scan_prefix(prefix_network: str, ip_records: List[Dict], max_concurren
     
     # 创建扫描任务
     async def scan_ip(ip: str):
-        nonlocal scanned, online_count
-        
-        async with semaphore:
-            result = await probe_single_ip(ip)
-            scanned += 1
+            nonlocal scanned, online_count
+
+            async with semaphore:
+                result = await probe_single_ip(ip, tcp_ports=ports)
+                scanned += 1
             
             if result["is_online"]:
                 online_count += 1

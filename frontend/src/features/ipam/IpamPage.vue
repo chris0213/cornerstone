@@ -92,6 +92,9 @@ const prefixForm = ref<Partial<Prefix>>({
   siteId: null,
   vlan: '',
   usage: '',
+  customScanPorts: '',
+  autoScanEnabled: false,
+  scanCron: '0 */6 * * *',
 })
 
 const ipForm = ref<{
@@ -269,6 +272,9 @@ function resetPrefixForm() {
     siteId: null,
     vlan: '',
     usage: '',
+    customScanPorts: '',
+    autoScanEnabled: false,
+    scanCron: '0 */6 * * *',
   }
   editingPrefix.value = null
 }
@@ -309,6 +315,9 @@ function handleEditPrefix(prefix: Prefix) {
     siteId: prefix.siteId,
     vlan: prefix.vlan,
     usage: prefix.usage,
+    customScanPorts: prefix.customScanPorts || '',
+    autoScanEnabled: !!prefix.autoScanEnabled,
+    scanCron: prefix.scanCron || '0 */6 * * *',
   }
   showPrefixDialog.value = true
 }
@@ -344,6 +353,9 @@ const handleSavePrefix = async () => {
         siteId: prefixForm.value.siteId || null,
         vlan: prefixForm.value.vlan || '',
         usage: prefixForm.value.usage || '',
+        customScanPorts: prefixForm.value.customScanPorts || null,
+        autoScanEnabled: !!prefixForm.value.autoScanEnabled,
+        scanCron: prefixForm.value.scanCron || '0 */6 * * *',
       })
       prefixes.value.push(newPrefix)
       ElMessage.success(t('ipam.createPrefixSuccess'))
@@ -895,6 +907,27 @@ const handleDeleteIP = async (ip: IPAddress) => {
           <el-col :span="12">
             <el-form-item label="用途">
               <el-input v-model="prefixForm.usage" placeholder="如：办公网" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-divider content-position="left">自动发现扫描</el-divider>
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="自定义 TCP 端口" label-width="130px">
+              <el-input v-model="prefixForm.customScanPorts" placeholder="留空用默认 [22,80,443,8080,445,139,161,3389,5060]；自定义如 22,443,161" />
+              <div class="form-tip">跨网段探测主要靠 TCP 端口，ARP 只在同二层有效。禁 ping 段也要能探测到。</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="启用自动扫描" label-width="130px">
+              <el-switch v-model="prefixForm.autoScanEnabled" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="扫描 Cron" label-width="90px" :disabled="!prefixForm.autoScanEnabled">
+              <el-input v-model="prefixForm.scanCron" placeholder="如 0 */6 * * *（每6小时）" :disabled="!prefixForm.autoScanEnabled" />
             </el-form-item>
           </el-col>
         </el-row>

@@ -10,6 +10,7 @@ from .utils.ip_whitelist import check_ip_allowed
 from .tasks.backup_scheduler import start_scheduler as start_backup_scheduler, reload_tasks, scheduler as backup_scheduler
 from .services.scheduler_service import start_scheduler as start_monitor_scheduler
 from .tasks.inspection_scheduler import init_inspection_scheduler, reload_inspection_tasks
+from .tasks.ipam_scheduler import init_ipam_scheduler, reload_ipam_scan
 from .tasks.log_cleanup import start_log_cleanup_scheduler
 from .database import async_session
 from .database import get_db
@@ -134,6 +135,12 @@ async def startup_event():
     async with async_session() as session:
         await reload_inspection_tasks(session)
     logger.info("Inspection scheduler initialized")
+
+    # 初始化 IPAM 自动扫描调度器
+    init_ipam_scheduler(backup_scheduler)
+    async with async_session() as session:
+        await reload_ipam_scan(db=session)
+    logger.info("IPAM scan scheduler initialized")
     
     # 启动日志清理定时任务
     await start_log_cleanup_scheduler()

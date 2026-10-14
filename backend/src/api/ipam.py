@@ -13,7 +13,7 @@ from ..schemas import (
     IPAddressCreate, IPAddressUpdate, IPAddressResponse, IPExpiringResponse
 )
 from .dependencies import get_current_active_user, PageParams, pagination
-from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task
+from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task, parse_custom_ports
 
 router = APIRouter()
 
@@ -40,12 +40,15 @@ class ScanManager:
         ip_records = result.scalars().all()
         
         ip_list = [{"id": ip.id, "address": ip.address} for ip in ip_records]
-        
+
+        # 解析自定义端口组
+        tcp_ports = parse_custom_ports(prefix.custom_scan_ports)
+
         # 创建任务ID
         task_id = str(uuid.uuid4())
-        
+
         # 创建扫描生成器
-        scanner = scan_prefix(prefix.network, ip_list)
+        scanner = scan_prefix(prefix.network, ip_list, tcp_ports=tcp_ports)
         
         # 保存任务
         self.active_tasks[task_id] = {
@@ -201,7 +204,13 @@ async def create_prefix(
     stmt = insert(Prefix).values(**prefix.model_dump()).returning(Prefix)
     result = await db.execute(stmt)
     await db.commit()
-    return result.scalar_one()
+    created = result.scalar_one()
+
+    # 如果启用了自动扫描，注册到调度器
+    from ..tasks.ipam_scheduler import reload_ipam_scan
+    await reload_ipam_scan(created.id, db)
+
+    return created
 
 @router.put("/prefixes/{prefix_id}", response_model=PrefixResponse)
 async def update_prefix(
@@ -212,11 +221,16 @@ async def update_prefix(
 ):
     stmt = update(Prefix).where(Prefix.id == prefix_id).values(**prefix.model_dump(exclude_unset=True)).returning(Prefix)
     result = await db.execute(stmt)
-    prefix = result.scalar_one_or_none()
-    if prefix is None:
+    prefix_obj = result.scalar_one_or_none()
+    if prefix_obj is None:
         raise HTTPException(status_code=404, detail="Prefix not found")
     await db.commit()
-    return prefix
+
+    # 自动扫描相关字段变更时，同步调度器
+    from ..tasks.ipam_scheduler import reload_ipam_scan
+    await reload_ipam_scan(prefix_id, db)
+
+    return prefix_obj
 
 @router.delete("/prefixes/{prefix_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_prefix(
@@ -233,6 +247,10 @@ async def delete_prefix(
     await db.execute(delete(IPAddress).where(IPAddress.prefix_id == prefix_id))
     await db.execute(delete(Prefix).where(Prefix.id == prefix_id))
     await db.commit()
+
+    # 注销对应的调度器 job
+    from ..tasks.ipam_scheduler import reload_ipam_scan
+    await reload_ipam_scan(prefix_id, db)
 
 # IP Address routes
 @router.get("/addresses/", response_model=list[IPAddressResponse])
