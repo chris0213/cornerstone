@@ -260,6 +260,9 @@ const filteredIPs = computed(() => {
 })
 
 function getIPCount(prefixId: string | number) {
+  // 优先用后端聚合的 ipCount（不依赖前端懒加载的 ipAddresses 数组）
+  const prefix = prefixes.value.find(p => String(p.id) === String(prefixId))
+  if (prefix?.ipCount !== undefined) return prefix.ipCount
   return ipAddresses.value.filter((ip) => String(ip.prefixId) === String(prefixId)).length
 }
 

@@ -45,6 +45,7 @@ export interface Prefix {
   customScanPorts?: string | null
   autoScanEnabled?: boolean
   scanCron?: string
+  ipCount?: number
 }
 
 export interface IPAddress {

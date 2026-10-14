@@ -31,6 +31,7 @@ class PrefixResponse(BaseModel):
     custom_scan_ports: str | None = None
     auto_scan_enabled: bool = False
     scan_cron: str = "0 */6 * * *"
+    ip_count: int = 0
     created_at: datetime
     updated_at: datetime | None
 

@@ -247,7 +247,21 @@ async def read_prefixes(
         ))
     stmt = stmt.offset(page.skip).limit(page.limit)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    prefixes = result.scalars().all()
+
+    # 每个子网的 IP 记录数（一条 GROUP BY，避免前端懒加载导致计数为 0）
+    count_result = await db.execute(
+        select(IPAddress.prefix_id, func.count(IPAddress.id))
+        .group_by(IPAddress.prefix_id)
+    )
+    count_map = {pid: cnt for pid, cnt in count_result.all()}
+
+    out = []
+    for p in prefixes:
+        item = PrefixResponse.model_validate(p)
+        item.ip_count = count_map.get(p.id, 0)
+        out.append(item)
+    return out
 
 @router.post("/prefixes/", response_model=PrefixResponse, status_code=status.HTTP_201_CREATED)
 async def create_prefix(
