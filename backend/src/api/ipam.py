@@ -25,20 +25,27 @@ class ScanManager:
     """扫描管理器"""
     def __init__(self):
         self.active_tasks = {}
-    
+
     async def start_scan(self, prefix_id: int, db: AsyncSession):
         """启动子网扫描任务"""
         # 获取子网信息
         result = await db.execute(select(Prefix).where(Prefix.id == prefix_id))
         prefix = result.scalar_one_or_none()
-        
+
         if not prefix:
             raise HTTPException(status_code=404, detail="Prefix not found")
-        
+
+        # 提前验证 CIDR（async generator 惰性执行，错了要等到消费才炸）
+        from ipaddress import IPv4Network, AddressValueError, NetmaskValueError
+        try:
+            IPv4Network(prefix.network)
+        except (AddressValueError, NetmaskValueError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"子网 CIDR 无效: {prefix.network} ({e})")
+
         # 获取该子网下的所有IP记录
         result = await db.execute(select(IPAddress).where(IPAddress.prefix_id == prefix_id))
         ip_records = result.scalars().all()
-        
+
         ip_list = [{"id": ip.id, "address": ip.address} for ip in ip_records]
 
         # 解析自定义端口组
@@ -47,88 +54,100 @@ class ScanManager:
         # 创建任务ID
         task_id = str(uuid.uuid4())
 
-        # 创建扫描生成器
+        # 创建扫描生成器（惰性——这里还没开始探测任何 IP）
         scanner = scan_prefix(prefix.network, ip_list, tcp_ports=tcp_ports)
-        
-        # 保存任务
+
+        # 关键：不存 HTTP 请求注入的 db session（请求结束即关闭），
+        # 让 _save_scan_result 在消费时自己开独立 session
         self.active_tasks[task_id] = {
             "scanner": scanner,
             "prefix_id": prefix_id,
             "network": prefix.network,
             "started_at": datetime.now(),
-            "db": db
         }
-        
+
+        logger.info(f"[scan] task created task_id={task_id} network={prefix.network}")
         return task_id
-    
-    async def _save_scan_result(self, db: AsyncSession, prefix_id: int, ip: str, is_online: bool, mac_address: str = None, open_ports: List[int] = None):
-        """保存扫描结果到数据库"""
-        # 检查IP是否已存在
-        result = await db.execute(select(IPAddress).where(
-            IPAddress.prefix_id == prefix_id,
-            IPAddress.address == ip
-        ))
-        existing_ip = result.scalar_one_or_none()
-        
-        if existing_ip:
-            # 更新现有记录
-            update_data = {
-                "is_online": is_online,
-                "mac_address": mac_address,
-                "open_ports": open_ports,
-                "updated_at": func.now()
-            }
-            # 如果状态是英文的，转换为中文
-            if existing_ip.status == "assigned":
-                update_data["status"] = "已分配"
-            elif existing_ip.status == "reserved":
-                update_data["status"] = "预留"
-            elif existing_ip.status == "available":
-                update_data["status"] = "未分配"
-            
-            stmt = update(IPAddress).where(IPAddress.id == existing_ip.id).values(**update_data)
-            await db.execute(stmt)
-        else:
-            # 创建新记录（仅当IP在线时）
-            if is_online:
-                stmt = insert(IPAddress).values(
-                    prefix_id=prefix_id,
-                    address=ip,
-                    status="已分配",
-                    is_online=is_online,
-                    mac_address=mac_address,
-                    open_ports=open_ports,
-                    created_at=func.now(),
-                    updated_at=func.now()
-                )
+
+    async def _save_scan_result(self, prefix_id: int, ip: str, is_online: bool, mac_address: str = None, open_ports: List[int] = None):
+        """保存扫描结果到数据库（自己开 session，不依赖 HTTP 请求注入的 session）"""
+        from ..database import async_session
+        async with async_session() as db:
+            result = await db.execute(select(IPAddress).where(
+                IPAddress.prefix_id == prefix_id,
+                IPAddress.address == ip
+            ))
+            existing_ip = result.scalar_one_or_none()
+
+            if existing_ip:
+                update_data = {
+                    "is_online": is_online,
+                    "mac_address": mac_address,
+                    "open_ports": open_ports,
+                    "updated_at": func.now()
+                }
+                # 如果状态是英文的，转换为中文
+                if existing_ip.status == "assigned":
+                    update_data["status"] = "已分配"
+                elif existing_ip.status == "reserved":
+                    update_data["status"] = "预留"
+                elif existing_ip.status == "available":
+                    update_data["status"] = "未分配"
+
+                stmt = update(IPAddress).where(IPAddress.id == existing_ip.id).values(**update_data)
                 await db.execute(stmt)
-    
+            else:
+                # 创建新记录（仅当IP在线时）
+                if is_online:
+                    stmt = insert(IPAddress).values(
+                        prefix_id=prefix_id,
+                        address=ip,
+                        status="已分配",
+                        is_online=is_online,
+                        mac_address=mac_address,
+                        open_ports=open_ports,
+                        created_at=func.now(),
+                        updated_at=func.now()
+                    )
+                    await db.execute(stmt)
+            await db.commit()
+
     async def get_scan_results(self, task_id: str):
         """获取扫描结果（异步生成）"""
         if task_id not in self.active_tasks:
             raise HTTPException(status_code=404, detail="Scan task not found")
-        
+
         task_info = self.active_tasks[task_id]
         scanner = task_info["scanner"]
-        db = task_info["db"]
         prefix_id = task_info["prefix_id"]
-        
-        async for result in scanner:
-            # 如果是扫描结果，保存到数据库
-            if result.get("type") == "result":
-                await self._save_scan_result(
-                    db=db,
-                    prefix_id=prefix_id,
-                    ip=result.get("ip", ""),
-                    is_online=result.get("is_online", False),
-                    mac_address=result.get("mac_address"),
-                    open_ports=result.get("open_ports")
-                )
-                await db.commit()
-            yield result
-        
-        # 扫描完成，清理任务
-        del self.active_tasks[task_id]
+        network = task_info["network"]
+
+        logger.info(f"[scan] task start streaming task_id={task_id} network={network}")
+
+        try:
+            async for result in scanner:
+                # 如果是扫描结果，保存到数据库
+                if result.get("type") == "result":
+                    try:
+                        await self._save_scan_result(
+                            prefix_id=prefix_id,
+                            ip=result.get("ip", ""),
+                            is_online=result.get("is_online", False),
+                            mac_address=result.get("mac_address"),
+                            open_ports=result.get("open_ports")
+                        )
+                    except Exception as e:
+                        # 单条保存失败不影响整个扫描
+                        logger.warning(f"[scan] save result failed ip={result.get('ip')}: {e}")
+                yield result
+
+            logger.info(f"[scan] task done task_id={task_id} network={network}")
+        except Exception as e:
+            logger.exception(f"[scan] task error task_id={task_id} network={network}: {e}")
+            yield {"type": "error", "message": str(e)}
+        finally:
+            # 扫描完成（或中途报错）都清理任务
+            self.active_tasks.pop(task_id, None)
 
 
 scan_manager = ScanManager()
