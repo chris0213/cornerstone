@@ -80,7 +80,7 @@ async def parse_user_query(question: str, last_data_type: str = "") -> dict:
 
     if ai_config and ai_config.is_configured():
         try:
-            raw = await call_ai(prompt, SYSTEM_PROMPT, ai_config, max_tokens=1000, timeout=10)
+            raw = await call_ai(prompt, SYSTEM_PROMPT, ai_config, max_tokens=1000, timeout=6)
             # 提取 JSON
             raw = raw.strip()
             if raw.startswith("```"):
@@ -431,7 +431,7 @@ async def format_answer(intent: dict, raw_data: list, question: str) -> dict:
         )
         format_system = "你是一位IT运维助手。根据数据和用户问题，生成简洁的自然语言回答和建议追问。只返回JSON。"
         try:
-            raw = await call_ai(format_prompt, format_system, ai_config, max_tokens=1000, timeout=10)
+            raw = await call_ai(format_prompt, format_system, ai_config, max_tokens=1000, timeout=6)
             raw = raw.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -651,7 +651,7 @@ async def answer_from_knowledge(db: AsyncSession, question: str) -> Optional[dic
         )
         prompt = f"用户问题：{question}\n\n内部知识库相关文章：\n{kb_text}"
         try:
-            answer = await call_ai(prompt, KB_SYSTEM_PROMPT, ai_config, max_tokens=1200, timeout=20)
+            answer = await call_ai(prompt, KB_SYSTEM_PROMPT, ai_config, max_tokens=1200, timeout=12)
             return {"answer_text": answer.strip(), "data_type": "knowledge"}
         except Exception as e:
             logger.warning(f"Knowledge RAG AI call failed, fallback to list: {e}")

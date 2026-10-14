@@ -129,13 +129,13 @@ async def call_ai(
     """
     统一 AI 调用入口
     自动适配不同提供商的 API 格式
-    超时、重试（最多2次）、错误处理统一在此处理
+    重试仅 1 次（fail fast，避免前端 60s 超时），错误日志详尽
     返回模型的文本响应
     """
     provider = ai_config.provider
     model = ai_config.model
-    max_retries = 2
-    last_error = None
+    max_retries = 0  # 只调 1 次，fail fast，上层 catch 后降级
+    last_error: Exception | None = None
 
     logger.info(f"[call_ai] provider={provider} model={model} max_tokens={max_tokens} timeout={timeout} max_retries={max_retries} starting")
 
@@ -153,14 +153,20 @@ async def call_ai(
             return result
         except Exception as e:
             last_error = e
+            err_type = type(e).__name__
+            err_str = str(e)
+            import traceback as _tb
+            tb_tail = " | ".join(_tb.format_exc().strip().split("\n")[-3:])
+            err_detail = f"type={err_type} str='{err_str}' tail={tb_tail}"
+
             if attempt < max_retries:
-                logger.warning(f"[call_ai] provider={provider} model={model} attempt={attempt+1} failed: {e}, retrying in 1s...")
+                logger.warning(f"[call_ai] provider={provider} model={model} attempt={attempt+1} failed ({err_detail}), retrying...")
                 await asyncio.sleep(1)
             else:
-                logger.error(f"[call_ai] provider={provider} model={model} all {max_retries+1} attempts failed: {e}")
+                logger.error(f"[call_ai] provider={provider} model={model} all {max_retries+1} attempts failed: {err_detail}")
 
     # 所有重试都失败
-    raise last_error
+    raise last_error  # type: ignore[misc]
 
 
 async def _call_openai_compatible(
