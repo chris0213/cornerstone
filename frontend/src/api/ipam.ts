@@ -62,12 +62,30 @@ export async function deletePrefix(id: string | number): Promise<void> {
   await api.delete(`/ipam/prefixes/${id}`)
 }
 
+// 后端 open_ports 存的是 JSON 字符串（如 "[22, 80]"），解析为数组
+function normalizeOpenPortsOne(ip: IPAddress): IPAddress {
+  const v = (ip as any).openPorts
+  if (typeof v === 'string') {
+    try {
+      ;(ip as any).openPorts = JSON.parse(v)
+    } catch {
+      ;(ip as any).openPorts = []
+    }
+  }
+  return ip
+}
+
+function normalizeOpenPorts(list: IPAddress[]): IPAddress[] {
+  for (const item of list) normalizeOpenPortsOne(item)
+  return list
+}
+
 // IP Address API
 export async function getIPAddresses(prefixId?: number): Promise<IPAddress[]> {
   const params: any = {}
   if (prefixId !== undefined) params.prefix_id = prefixId
   const response = await api.get('/ipam/addresses/', { params })
-  return snakeToCamel(response.data)
+  return normalizeOpenPorts(snakeToCamel(response.data))
 }
 
 export async function createIPAddress(ip: Omit<IPAddress, 'id'>): Promise<IPAddress> {
@@ -79,7 +97,7 @@ export async function createIPAddress(ip: Omit<IPAddress, 'id'>): Promise<IPAddr
   delete (payload as any).prefixId
   delete (payload as any).deviceId
   const response = await api.post('/ipam/addresses/', payload)
-  return snakeToCamel(response.data)
+  return normalizeOpenPortsOne(snakeToCamel(response.data))
 }
 
 export async function updateIPAddress(id: string | number, data: Partial<IPAddress>): Promise<IPAddress> {
@@ -93,7 +111,7 @@ export async function updateIPAddress(id: string | number, data: Partial<IPAddre
     delete payload.deviceId
   }
   const response = await api.put(`/ipam/addresses/${id}`, payload)
-  return snakeToCamel(response.data)
+  return normalizeOpenPortsOne(snakeToCamel(response.data))
 }
 
 export async function deleteIPAddress(id: string | number): Promise<void> {
