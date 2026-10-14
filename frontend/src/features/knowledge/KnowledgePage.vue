@@ -151,12 +151,20 @@
           <el-input v-model="form.summary" type="textarea" :rows="2" :placeholder="t('knowledge.summaryPlaceholder')" maxlength="500" show-word-limit />
         </el-form-item>
         <el-form-item :label="t('knowledge.content')">
-          <el-input
-            v-model="form.content"
-            type="textarea"
-            :rows="14"
-            :placeholder="t('knowledge.contentPlaceholder')"
-          />
+          <div class="editor-content">
+            <el-radio-group v-model="editorMode" size="small" class="editor-mode">
+              <el-radio-button value="edit">{{ t('knowledge.modeEdit') }}</el-radio-button>
+              <el-radio-button value="preview">{{ t('knowledge.modePreview') }}</el-radio-button>
+            </el-radio-group>
+            <el-input
+              v-if="editorMode === 'edit'"
+              v-model="form.content"
+              type="textarea"
+              :rows="14"
+              :placeholder="t('knowledge.contentPlaceholder')"
+            />
+            <div v-else class="reader-body editor-preview" v-html="editorPreview"></div>
+          </div>
         </el-form-item>
         <el-form-item>
           <el-checkbox v-model="form.is_published">{{ t('knowledge.isPublished') }}</el-checkbox>
@@ -198,6 +206,8 @@ const reading = ref<KnowledgeArticle | null>(null)
 
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
+const editorMode = ref<'edit' | 'preview'>('edit')  // 编辑/预览切换（预览渲染 Markdown，核对排版）
+const editorPreview = computed(() => renderMarkdown(form.value.content))
 const form = ref({
   title: '',
   category: '其他',
@@ -287,8 +297,7 @@ function inlineMd(s: string): string {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 }
 
-const renderedContent = computed(() => {
-  const raw = reading.value?.content || ''
+function renderMarkdown(raw: string): string {
   if (!raw) return ''
   const escaped = escapeHtml(raw)
   const lines = escaped.split('\n')
@@ -344,11 +353,14 @@ const renderedContent = computed(() => {
   return out.join('\n')
     .replace(/(<li class="ordered">[\s\S]*?<\/li>\n?)+/g, m => `<ol>${m.replace(/ class="ordered"/g, '')}</ol>`)
     .replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
-})
+}
+
+const renderedContent = computed(() => renderMarkdown(reading.value?.content || ''))
 
 // ===== 编辑 =====
 function openCreate() {
   editingId.value = null
+  editorMode.value = 'edit'
   form.value = { title: '', category: '其他', tags: '', summary: '', content: '', is_published: true }
   showEditor.value = true
 }
@@ -601,6 +613,23 @@ onMounted(() => {
 
 .reader-meta-right {
   margin-left: auto;
+}
+
+.editor-content {
+  width: 100%;
+}
+
+.editor-mode {
+  margin-bottom: 8px;
+}
+
+.editor-preview {
+  min-height: 340px;
+  max-height: 480px;
+  padding: 8px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
 }
 
 .reader-body {

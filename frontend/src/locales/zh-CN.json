@@ -1377,6 +1377,8 @@
     "import": "导入",
     "importSuccess": "已导入《{title}》，默认草稿，确认排版后可发布",
     "importSuccessMulti": "已导入 {count} 篇文章（每个工作表一篇，如《{title}》），默认草稿，确认后可发布",
+    "modeEdit": "编辑",
+    "modePreview": "预览",
     "importUnsupported": "仅支持 .md / .txt / .docx / .xlsx 文件",
     "catTroubleshoot": "故障处理",
     "catConfig": "配置手册",

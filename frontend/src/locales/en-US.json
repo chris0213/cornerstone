@@ -978,6 +978,8 @@
     "import": "Import",
     "importSuccess": "Imported \"{title}\" as a draft — review the layout, then publish",
     "importSuccessMulti": "Imported {count} articles (one per worksheet, e.g. \"{title}\") as drafts — review, then publish",
+    "modeEdit": "Edit",
+    "modePreview": "Preview",
     "importUnsupported": "Only .md / .txt / .docx / .xlsx files are supported",
     "catTroubleshoot": "Troubleshooting",
     "catConfig": "Config guide",
