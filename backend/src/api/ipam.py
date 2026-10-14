@@ -3,7 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update, delete, func
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from ..models import Aggregate, Prefix, IPAddress, Device
