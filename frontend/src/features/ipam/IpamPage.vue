@@ -249,14 +249,50 @@ const filteredPrefixes = computed(() => {
   )
 })
 
+// IP 列表筛选：子网 + 在线状态
+const filterPrefixId = ref<string>('')
+const filterOnline = ref<string>('')
+
+// IP 地址转数值用于排序（按扫描完成顺序入库会乱，显示时按 IP 大小排）
+const ipSortKey = (address: string): number => {
+  const o = address.split('.').map(Number)
+  if (o.length !== 4 || o.some(n => isNaN(n))) return -1
+  return ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0
+}
+
 const filteredIPs = computed(() => {
-  if (!searchIPQuery.value) return ipAddresses.value
-  return ipAddresses.value.filter(ip => 
-    ip.address.toLowerCase().includes(searchIPQuery.value.toLowerCase()) ||
-    ip.usage.toLowerCase().includes(searchIPQuery.value.toLowerCase()) ||
-    ip.owner.toLowerCase().includes(searchIPQuery.value.toLowerCase()) ||
-    deviceName(ip.deviceId).toLowerCase().includes(searchIPQuery.value.toLowerCase())
-  )
+  let list = ipAddresses.value
+  if (filterPrefixId.value) {
+    list = list.filter(ip => String(ip.prefixId) === filterPrefixId.value)
+  }
+  if (filterOnline.value === 'online') list = list.filter(ip => ip.isOnline === true)
+  else if (filterOnline.value === 'offline') list = list.filter(ip => ip.isOnline === false)
+  else if (filterOnline.value === 'unscanned') list = list.filter(ip => ip.isOnline === undefined)
+  
+  if (searchIPQuery.value) {
+    const q = searchIPQuery.value.toLowerCase()
+    list = list.filter(ip => 
+      ip.address.toLowerCase().includes(q) ||
+      ip.usage.toLowerCase().includes(q) ||
+      ip.owner.toLowerCase().includes(q) ||
+      deviceName(ip.deviceId).toLowerCase().includes(q)
+    )
+  }
+  return [...list].sort((a, b) => ipSortKey(a.address) - ipSortKey(b.address))
+})
+
+// 切换子网筛选时按需加载该子网的 IP
+watch(filterPrefixId, async (pid) => {
+  if (!pid) return
+  try {
+    const data = await getIPAddresses(Number(pid))
+    ipAddresses.value = [
+      ...ipAddresses.value.filter(ip => String(ip.prefixId) !== pid),
+      ...data,
+    ]
+  } catch (e) {
+    console.error('Failed to load prefix IPs:', e)
+  }
 })
 
 // CIDR → 可用主机容量（/24 → 254，/22 → 1022；无效时退回 254）
@@ -268,6 +304,14 @@ function getPrefixCapacity(network: string): number {
   if (o.length !== 4 || o.some(n => isNaN(n) || n < 0 || n > 255)) return 254
   return Math.max(2 ** (32 - mask) - 2, 1)
 }
+
+// 概览统计：用后端聚合的 ipCount 求和（ipAddresses 是懒加载碎片，直接 length 会不准）
+const totalIPCount = computed(() =>
+  prefixes.value.reduce((sum, p) => sum + (p.ipCount ?? 0), 0)
+)
+const totalCapacity = computed(() =>
+  prefixes.value.reduce((sum, p) => sum + getPrefixCapacity(p.network), 0)
+)
 
 function getIPCount(prefixId: string | number) {
   // 优先用后端聚合的 ipCount（不依赖前端懒加载的 ipAddresses 数组）
@@ -651,13 +695,13 @@ const handleDeleteIP = async (ip: IPAddress) => {
       </div>
       <div class="overview-card overview-card-blue">
         <div class="overview-card-label">{{ t('ipam.assignedIPsLabel') }}</div>
-        <div class="overview-card-value">{{ ipAddresses.length }}</div>
+        <div class="overview-card-value">{{ totalIPCount }}</div>
         <div class="overview-card-trend">{{ t('ipam.ipTotal') }}</div>
       </div>
       <div class="overview-card overview-card-warning">
         <div class="overview-card-label">{{ t('ipam.avgUsageLabel') }}</div>
         <div class="overview-card-value">
-          {{ prefixes.length > 0 ? Math.round((ipAddresses.length / (prefixes.length * 254)) * 100) : 0 }}%
+          {{ totalCapacity > 0 ? Math.round((totalIPCount / totalCapacity) * 100) : 0 }}%
         </div>
         <div class="overview-card-trend">{{ t('ipam.usageTrend') }}</div>
       </div>
@@ -863,6 +907,30 @@ const handleDeleteIP = async (ip: IPAddress) => {
 
       <template v-else>
         <div class="table-filters">
+          <el-select
+            v-model="filterPrefixId"
+            placeholder="全部子网"
+            clearable
+            filterable
+            style="width: 220px"
+          >
+            <el-option
+              v-for="p in prefixes"
+              :key="p.id"
+              :label="p.network"
+              :value="String(p.id)"
+            />
+          </el-select>
+          <el-select
+            v-model="filterOnline"
+            placeholder="全部状态"
+            clearable
+            style="width: 160px"
+          >
+            <el-option label="在线" value="online" />
+            <el-option label="离线" value="offline" />
+            <el-option label="未扫描" value="unscanned" />
+          </el-select>
           <el-input
             v-model="searchIPQuery"
             placeholder="搜索 IP 地址、用途、负责人..."
@@ -896,11 +964,34 @@ const handleDeleteIP = async (ip: IPAddress) => {
           <el-table-column prop="owner" label="负责人" min-width="140">
             <template #default="{ row }">{{ row.owner || '-' }}</template>
           </el-table-column>
-          <el-table-column prop="status" label="状态" min-width="120">
+          <el-table-column prop="status" label="状态" min-width="100">
             <template #default="{ row }">
               <el-tag :type="getStatusType(row.status)" effect="light">
                 {{ getStatusText(row.status) }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="在线" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag
+                v-if="row.isOnline === true"
+                type="success"
+                effect="dark"
+                size="small"
+              >在线</el-tag>
+              <el-tag
+                v-else-if="row.isOnline === false"
+                type="danger"
+                effect="plain"
+                size="small"
+              >离线</el-tag>
+              <span v-else style="color: rgba(0,0,0,0.35)">未扫描</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="开放端口" min-width="110">
+            <template #default="{ row }">
+              <span v-if="row.openPorts?.length">{{ row.openPorts.join(', ') }}</span>
+              <span v-else>-</span>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="140" fixed="right" align="center">
@@ -1317,6 +1408,9 @@ const handleDeleteIP = async (ip: IPAddress) => {
 
 .table-filters {
   margin-bottom: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 .network-cell {
