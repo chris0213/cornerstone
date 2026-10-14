@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import type { IPAddress } from '../../../types/domain'
 import { ElTooltip } from 'element-plus'
-import { Plus, User } from '@element-plus/icons-vue'
 
 const props = defineProps<{
   prefixId: number
@@ -63,7 +62,7 @@ const getStatusColor = (ip: { address: string; data?: IPAddress }) => {
 // 获取工具提示内容
 const getTooltipContent = (ip: { address: string; data?: IPAddress }) => {
   if (!ip.data) {
-    return `<div><strong>${ip.address}</strong></div><div>状态: 未分配</div>`
+    return `<div><strong>${ip.address}</strong></div><div>状态: 未分配（点击分配）</div>`
   }
   
   const { data } = ip
@@ -94,19 +93,25 @@ const handleClick = (ip: { address: string; data?: IPAddress }) => {
     <!-- 矩阵网格 -->
     <div class="matrix-grid">
       <div v-for="(row, rowIndex) in rows" :key="rowIndex" class="matrix-row">
-        <div 
-          v-for="ip in row" 
-          :key="ip.address" 
-          class="ip-block" 
-          :style="{ backgroundColor: getStatusColor(ip) }"
-          @click="handleClick(ip)"
+        <ElTooltip
+          v-for="ip in row"
+          :key="ip.address"
+          :content="getTooltipContent(ip)"
+          placement="top"
+          effect="dark"
+          raw-content
+          :show-after="150"
+          :hide-after="0"
         >
-          <ElTooltip :content="getTooltipContent(ip)" placement="top" effect="dark" html>
-            <span class="ip-tooltip-trigger">
-              <component :is="ip.data ? User : Plus" class="ip-icon" />
-            </span>
-          </ElTooltip>
-        </div>
+          <div 
+            class="ip-block" 
+            :class="{ 'ip-block-assigned': !!ip.data }"
+            :style="{ backgroundColor: getStatusColor(ip) }"
+            @click="handleClick(ip)"
+          >
+            <span class="ip-last-octet">{{ ip.address.split('.').pop() }}</span>
+          </div>
+        </ElTooltip>
       </div>
     </div>
     
@@ -170,9 +175,16 @@ const handleClick = (ip: { address: string; data?: IPAddress }) => {
   z-index: 10;
 }
 
-.ip-icon {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.5);
+.ip-last-octet {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.55);
+  line-height: 1;
+  user-select: none;
+}
+
+.ip-block-assigned .ip-last-octet {
+  color: #fff;
 }
 
 .matrix-legend {
