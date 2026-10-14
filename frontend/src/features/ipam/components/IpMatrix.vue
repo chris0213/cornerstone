@@ -17,23 +17,45 @@ const emit = defineEmits<{
   (e: 'view', ip: IPAddress): void
 }>()
 
-// 生成所有254个IP地址
+// 解析 CIDR：网络地址转长整型 + 主机容量
+const ipToLong = (ip: string): number | null => {
+  const o = ip.split('.').map(Number)
+  if (o.length !== 4 || o.some(n => isNaN(n) || n < 0 || n > 255)) return null
+  return ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0
+}
+const longToIp = (n: number) =>
+  [`${(n >>> 24) & 255}`, `${(n >>> 16) & 255}`, `${(n >>> 8) & 255}`, `${n & 255}`].join('.')
+
+const cidrInfo = computed(() => {
+  const [ipStr, maskStr] = props.network.split('/')
+  const base = ipToLong(ipStr || '')
+  const mask = Number(maskStr)
+  if (base === null || !Number.isInteger(mask) || mask < 8 || mask > 32) {
+    // 无效 CIDR（脏数据如 "192.168.16/23"）退回 /24 行为
+    const legacyBase = ipStr ? ipToLong(ipStr.split('.').slice(0, 3).concat('0').join('.')) ?? 0 : 0
+    return { base: legacyBase, totalHosts: 254, valid: false }
+  }
+  return { base, totalHosts: Math.max(2 ** (32 - mask) - 2, 1), valid: true }
+})
+
+const isLargeNetwork = computed(() => cidrInfo.value.totalHosts > 512)
+
+// 生成子网内所有主机地址（跳过网络地址，末尾广播地址自然落在范围外）
 const allIPs = computed(() => {
+  const { base, totalHosts, valid } = cidrInfo.value
   const ips: { address: string; data?: IPAddress }[] = []
-  // 从网络地址中提取前三个八位组
-  const parts = props.network.split('/')[0].split('.')
-  if (parts.length >= 3) {
-    const base = parts.slice(0, 3).join('.')
-    for (let i = 1; i <= 254; i++) {
-      const address = `${base}.${i}`
-      // 尝试匹配，同时处理可能的字段名不一致问题
-      const found = props.ipList.find(ip => 
-        ip.address === address || 
-        (ip as any).Address === address ||
-        (ip as any).ip === address
-      )
-      ips.push({ address, data: found })
-    }
+  for (let i = 0; i < totalHosts; i++) {
+    // 有效 CIDR：从网络地址+1 开始；无效退回旧逻辑（前3段.1-254）
+    const address = valid
+      ? longToIp(((base + 1 + i) >>> 0))
+      : `${props.network.split('/')[0].split('.').slice(0, 3).join('.')}.${i + 1}`
+    // 尝试匹配，同时处理可能的字段名不一致问题
+    const found = props.ipList.find(ip => 
+      ip.address === address || 
+      (ip as any).Address === address ||
+      (ip as any).ip === address
+    )
+    ips.push({ address, data: found })
   }
   return ips
 })
@@ -41,11 +63,22 @@ const allIPs = computed(() => {
 // 按16列分组
 const rows = computed(() => {
   const result: { address: string; data?: IPAddress }[][] = []
-  for (let i = 0; i < 254; i += 16) {
-    result.push(allIPs.value.slice(i, Math.min(i + 16, 254)))
+  for (let i = 0; i < allIPs.value.length; i += 16) {
+    result.push(allIPs.value.slice(i, i + 16))
   }
   return result
 })
+
+// 跨多个 /24 时，在第三个八位组变化处插入分组标题（如 192.168.9.x）
+const rowHeader = (rowIndex: number): string | null => {
+  if (cidrInfo.value.totalHosts <= 256) return null
+  const first = rows.value[rowIndex]?.[0]?.address
+  if (!first) return null
+  const o = first.split('.')
+  if (rowIndex === 0) return `${o[0]}.${o[1]}.${o[2]}.x`
+  const prev = rows.value[rowIndex - 1]?.[0]?.address.split('.')
+  return prev && prev[2] !== o[2] ? `${o[0]}.${o[1]}.${o[2]}.x` : null
+}
 
 // 获取状态颜色
 const getStatusColor = (ip: { address: string; data?: IPAddress }) => {
@@ -125,31 +158,36 @@ watch(() => props.scanningCurrentIp, async (ip) => {
     </div>
 
     <!-- 矩阵网格 -->
-    <div class="matrix-grid" ref="gridRef" :class="{ 'matrix-scanning': isScanning }">
-      <div v-for="(row, rowIndex) in rows" :key="rowIndex" class="matrix-row">
-        <ElTooltip
-          v-for="ip in row"
-          :key="ip.address"
-          :content="getTooltipContent(ip)"
-          placement="top"
-          effect="dark"
-          raw-content
-          :show-after="150"
-          :hide-after="0"
-        >
-          <div 
-            :data-ip="ip.address"
-            class="ip-block" 
-            :class="[
-              { 'ip-block-assigned': !!ip.data, 'ip-block-scanning': isCurrentScanning(ip.address) },
-              getScanResultClass(ip.address),
-            ]"
-            :style="{ backgroundColor: getStatusColor(ip) }"
-            @click="handleClick(ip)"
-          >
-            <span class="ip-last-octet">{{ ip.address.split('.').pop() }}</span>
+    <div class="matrix-scroll" :class="{ 'matrix-scroll-large': isLargeNetwork }">
+      <div class="matrix-grid" ref="gridRef" :class="{ 'matrix-scanning': isScanning }">
+        <template v-for="(row, rowIndex) in rows" :key="rowIndex">
+          <div v-if="rowHeader(rowIndex)" class="matrix-row-header">{{ rowHeader(rowIndex) }}</div>
+          <div class="matrix-row">
+            <ElTooltip
+              v-for="ip in row"
+              :key="ip.address"
+              :content="getTooltipContent(ip)"
+              placement="top"
+              effect="dark"
+              raw-content
+              :show-after="150"
+              :hide-after="0"
+            >
+              <div 
+                :data-ip="ip.address"
+                class="ip-block" 
+                :class="[
+                  { 'ip-block-assigned': !!ip.data, 'ip-block-scanning': isCurrentScanning(ip.address), 'ip-block-small': isLargeNetwork },
+                  getScanResultClass(ip.address),
+                ]"
+                :style="{ backgroundColor: getStatusColor(ip) }"
+                @click="handleClick(ip)"
+              >
+                <span class="ip-last-octet">{{ ip.address.split('.').pop() }}</span>
+              </div>
+            </ElTooltip>
           </div>
-        </ElTooltip>
+        </template>
       </div>
     </div>
     
@@ -190,9 +228,42 @@ watch(() => props.scanningCurrentIp, async (ip) => {
   gap: 4px;
 }
 
+/* 大网络（>512 主机）：限高限宽滚动 */
+.matrix-scroll-large {
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.matrix-row-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 8px;
+  padding-bottom: 2px;
+  border-bottom: 1px dashed #e8e8e8;
+}
+
 .matrix-row {
   display: flex;
   gap: 4px;
+}
+
+/* 大网络小格子（隐藏末段数字改为 hover 显示） */
+.ip-block-small {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+}
+
+.ip-block-small .ip-last-octet {
+  display: none;
+}
+
+.ip-block-small:hover .ip-last-octet {
+  display: block;
 }
 
 .ip-block {

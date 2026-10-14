@@ -259,6 +259,16 @@ const filteredIPs = computed(() => {
   )
 })
 
+// CIDR → 可用主机容量（/24 → 254，/22 → 1022；无效时退回 254）
+function getPrefixCapacity(network: string): number {
+  const [ipStr, maskStr] = network.split('/')
+  const mask = Number(maskStr)
+  if (!ipStr || !Number.isInteger(mask) || mask < 8 || mask > 32) return 254
+  const o = ipStr.split('.').map(Number)
+  if (o.length !== 4 || o.some(n => isNaN(n) || n < 0 || n > 255)) return 254
+  return Math.max(2 ** (32 - mask) - 2, 1)
+}
+
 function getIPCount(prefixId: string | number) {
   // 优先用后端聚合的 ipCount（不依赖前端懒加载的 ipAddresses 数组）
   const prefix = prefixes.value.find(p => String(p.id) === String(prefixId))
@@ -267,7 +277,9 @@ function getIPCount(prefixId: string | number) {
 }
 
 function getUsagePercent(prefixId: string) {
-  return Math.round((getIPCount(prefixId) / 254) * 100)
+  const prefix = prefixes.value.find(p => String(p.id) === String(prefixId))
+  const capacity = prefix ? getPrefixCapacity(prefix.network) : 254
+  return Math.round((getIPCount(prefixId) / capacity) * 100)
 }
 
 function getStatusText(status: string): string {
@@ -798,7 +810,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
                       :style="{ width: getUsagePercent(row.id) + '%' }"
                     ></div>
                   </div>
-                  <span class="usage-text">{{ getIPCount(row.id) }}/254</span>
+                  <span class="usage-text">{{ getIPCount(row.id) }}/{{ getPrefixCapacity(row.network) }}</span>
                 </div>
               </div>
             </template>
