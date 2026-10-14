@@ -356,8 +356,10 @@ def xlsx_to_markdown(raw: bytes) -> str:
     """
     from openpyxl import load_workbook
 
-    wb_v = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-    wb_f = load_workbook(io.BytesIO(raw), read_only=True, data_only=False)
+    # 不用 read_only：其读取范围依赖文件内 <dimension> 声明，WPS/系统导出的文件
+    # 常把 dimension 写成 A1 导致整表只剩首格；普通模式按实际单元格解析（5MB 上限内存可控）
+    wb_v = load_workbook(io.BytesIO(raw), data_only=True)
+    wb_f = load_workbook(io.BytesIO(raw), data_only=False)
     try:
         val_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_v.worksheets}
         frm_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_f.worksheets}
