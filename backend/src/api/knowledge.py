@@ -154,7 +154,7 @@ async def update_article(
 
 
 MAX_IMPORT_SIZE = 5 * 1024 * 1024  # 导入文件上限 5MB
-ALLOWED_IMPORT_EXT = (".md", ".markdown", ".txt", ".docx")
+ALLOWED_IMPORT_EXT = (".md", ".markdown", ".txt", ".docx", ".xlsx", ".xlsm")
 
 
 @router.post("/import")
@@ -164,7 +164,7 @@ async def import_article(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """导入文档为知识库文章（支持 .md/.txt/.docx；docx 自动还原标题/列表/表格/代码排版）"""
+    """导入文档为知识库文章（.md/.txt 原文、.docx 还原排版、.xlsx 每个工作表转表格）"""
     filename = file.filename or ""
     if not filename.lower().endswith(ALLOWED_IMPORT_EXT):
         raise HTTPException(status_code=400, detail=f"仅支持 {', '.join(ALLOWED_IMPORT_EXT)} 格式")

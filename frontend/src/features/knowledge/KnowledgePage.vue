@@ -49,7 +49,7 @@
           <input
             ref="fileInputRef"
             type="file"
-            accept=".md,.markdown,.txt,.docx"
+            accept=".md,.markdown,.txt,.docx,.xlsx,.xlsm"
             style="display: none"
             @change="handleImport"
           >
@@ -409,7 +409,7 @@ async function handleImport(e: Event) {
   input.value = ''  // 允许重复选择同一文件
   if (!file) return
   const ext = file.name.toLowerCase().split('.').pop()
-  if (!['md', 'markdown', 'txt', 'docx'].includes(ext || '')) {
+  if (!['md', 'markdown', 'txt', 'docx', 'xlsx', 'xlsm'].includes(ext || '')) {
     ElMessage.error(t('knowledge.importUnsupported'))
     return
   }

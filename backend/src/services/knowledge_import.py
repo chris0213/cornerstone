@@ -1,6 +1,7 @@
 """知识库导入：文档 → Markdown 转换
 
-支持 .md/.markdown（原文）、.txt（原文）、.docx（python-docx 解析并还原排版）。
+支持 .md/.markdown（原文）、.txt（原文）、.docx（python-docx 解析并还原排版）、
+.xlsx/.xlsm（openpyxl 解析，每个工作表转一个 Markdown 表格）。
 docx 排版还原规则：
 - Heading 1-6 → # ~ ######
 - List Bullet / List Number → - / 1.（多级缩进保留）
@@ -8,9 +9,14 @@ docx 排版还原规则：
 - 连续等宽字体段落（Courier/Consolas/等宽）→ ``` 代码块
 - 粗体/斜体 run → **加粗** / *斜体*
 - 内嵌图片 → [图片] 占位符（正文无法承载图片）
+xlsx 还原规则：
+- 首个非空行作为表头，全空行/全空列剔除
+- 多个工作表 → 每个表前加 `## 工作表名` 分节
+- 日期单元格无时分秒时只显示日期
 """
 import io
 import re
+from datetime import date, datetime
 from typing import Optional
 
 MONO_FONTS = {"courier new", "consolas", "menlo", "monaco", "sf mono", "source code pro", "lucida console"}
@@ -21,6 +27,8 @@ def import_text_to_markdown(filename: str, raw: bytes) -> str:
     name = (filename or "").lower()
     if name.endswith(".docx"):
         return docx_to_markdown(raw)
+    if name.endswith((".xlsx", ".xlsm")):
+        return xlsx_to_markdown(raw)
     # md / txt / 其他：按 UTF-8 解码（容忍 BOM 与轻微乱码）
     return raw.decode("utf-8-sig", errors="replace").strip()
 
@@ -166,6 +174,70 @@ def docx_to_markdown(raw: bytes) -> str:
             continue
         result.append(line)
     return "\n".join(result).strip()
+
+
+def _cell_to_text(value) -> str:
+    """xlsx 单元格值 → 文本（日期只显示到日；None/公式缓存缺失给空串）"""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M") if (value.hour or value.minute or value.second) else value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _sheet_to_markdown(rows: list[list]) -> str:
+    """工作表二维数据 → Markdown 表格（剔除全空行列，首个非空行作表头）"""
+    grid = [[_cell_to_text(v) for v in row] for row in rows]
+    # 剔除全空行
+    grid = [r for r in grid if any(c.strip() for c in r)]
+    if not grid:
+        return ""
+    # 剔除全空列
+    width = max(len(r) for r in grid)
+    grid = [r + [""] * (width - len(r)) for r in grid]
+    keep = [j for j in range(width) if any(r[j].strip() for r in grid)]
+    grid = [[r[j] for j in keep] for r in grid]
+    if not grid:
+        return ""
+    width = len(grid[0])
+
+    header, body = grid[0], grid[1:]
+    lines = [
+        "| " + " | ".join(c.replace("|", "\\|") for c in header) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    lines += ["| " + " | ".join(c.replace("|", "\\|") for c in r) + " |" for r in body]
+    return "\n".join(lines)
+
+
+def xlsx_to_markdown(raw: bytes) -> str:
+    """xlsx/xlsm → Markdown：每个工作表转一个表格，多表用 `## 工作表名` 分节"""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    try:
+        sheets = [ws for ws in wb.worksheets if ws.max_row]  # 跳过无数据工作表
+        if not sheets:
+            return ""
+        # 单表且无意义表名（Sheet1 等）：不加分节标题
+        multi = len(sheets) > 1
+        out: list[str] = []
+        for ws in sheets:
+            md = _sheet_to_markdown(list(ws.iter_rows(values_only=True)))
+            if not md:
+                continue
+            if multi:
+                if out:
+                    out.append("")
+                out.append(f"## {ws.title}")
+            out.append(md)
+        return "\n".join(out).strip()
+    finally:
+        wb.close()
 
 
 def derive_article_fields(title: str, content: str) -> tuple[str, str]:

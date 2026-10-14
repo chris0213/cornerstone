@@ -977,7 +977,7 @@
     "titleRequired": "Title is required",
     "import": "Import",
     "importSuccess": "Imported \"{title}\" as a draft — review the layout, then publish",
-    "importUnsupported": "Only .md / .txt / .docx files are supported",
+    "importUnsupported": "Only .md / .txt / .docx / .xlsx files are supported",
     "catTroubleshoot": "Troubleshooting",
     "catConfig": "Config guide",
     "catSop": "SOP",
