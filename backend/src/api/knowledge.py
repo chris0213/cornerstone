@@ -16,6 +16,16 @@ from .dependencies import PageParams, pagination
 router = APIRouter()
 
 
+def stem_of(filename: str, exts: tuple) -> str:
+    """文件名去掉扩展名（用于生成文章标题）"""
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    for ext in exts:
+        if stem.lower().endswith(ext):
+            stem = stem[: -len(ext)]
+            break
+    return stem
+
+
 def _article_brief(a: KnowledgeArticle) -> dict:
     """列表用精简结构（不含正文）"""
     return {
@@ -164,7 +174,7 @@ async def import_article(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """导入文档为知识库文章（.md/.txt 原文、.docx 还原排版、.xlsx 每个工作表转表格）"""
+    """导入文档为知识库文章（.md/.txt 原文、.docx 还原排版、.xlsx 每个工作表一篇独立文章）"""
     filename = file.filename or ""
     if not filename.lower().endswith(ALLOWED_IMPORT_EXT):
         raise HTTPException(status_code=400, detail=f"仅支持 {', '.join(ALLOWED_IMPORT_EXT)} 格式")
@@ -172,36 +182,44 @@ async def import_article(
     if len(raw) > MAX_IMPORT_SIZE:
         raise HTTPException(status_code=400, detail="文件不能超过 5MB")
 
-    from src.services.knowledge_import import import_text_to_markdown, derive_article_fields
+    stem = stem_of(filename, ALLOWED_IMPORT_EXT)
+    from src.services.knowledge_import import import_text_to_markdown, derive_article_fields, xlsx_sheets_to_markdown
     try:
-        content = import_text_to_markdown(filename, raw)
+        if filename.lower().endswith((".xlsx", ".xlsm")):
+            # 每个工作表独立成篇，避免多表拼一篇文章排版混乱
+            sheets = xlsx_sheets_to_markdown(raw)
+            multi = len(sheets) > 1
+            # 单表直接用文件名（Sheet1 等默认表名无意义）；多表标题加表名后缀便于区分
+            contents = [(f"{stem}（{sheet_name}）" if multi else stem, md) for sheet_name, md in sheets]
+        else:
+            contents = [(stem, import_text_to_markdown(filename, raw))]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"文档解析失败：{e}")
-    if not content.strip():
+    if not any(md.strip() for _, md in contents):
         raise HTTPException(status_code=400, detail="文档内容为空")
 
-    # 标题：文件名（去扩展名）优先，正文 H1 兜底；摘要取正文前 200 字
-    stem = filename.rsplit("/", 1)[-1]
-    for ext in ALLOWED_IMPORT_EXT:
-        if stem.lower().endswith(ext):
-            stem = stem[: -len(ext)]
-            break
-    title, _ = derive_article_fields(stem, content)
-    _, summary = derive_article_fields("", content)
-
-    article = KnowledgeArticle(
-        title=title[:200] or "未命名导入",
-        category=str(category or "其他").strip(),
-        tags="",
-        summary=summary[:500],
-        content=content,
-        author=current_user.username,
-        is_published=False,  # 导入默认草稿，人工确认后再发布
-    )
-    db.add(article)
+    articles = []
+    for sheet_title, content in contents:
+        if not content.strip():
+            continue
+        _, summary = derive_article_fields("", content)
+        article = KnowledgeArticle(
+            title=(sheet_title or stem)[:200] or "未命名导入",
+            category=str(category or "其他").strip(),
+            tags="",
+            summary=summary[:500],
+            content=content,
+            author=current_user.username,
+            is_published=False,  # 导入默认草稿，人工确认后再发布
+        )
+        db.add(article)
+        articles.append(article)
     await db.commit()
-    await db.refresh(article)
-    return _article_brief(article)
+    results = []
+    for article in articles:
+        await db.refresh(article)
+        results.append(_article_brief(article))
+    return results
 
 
 @router.delete("/{article_id}")

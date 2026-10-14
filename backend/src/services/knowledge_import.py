@@ -11,7 +11,7 @@ docx 排版还原规则：
 - 内嵌图片 → [图片] 占位符（正文无法承载图片）
 xlsx 还原规则：
 - 首个非空行作为表头，全空行/全空列剔除
-- 多个工作表 → 每个表前加 `## 工作表名` 分节
+- 每个工作表一个独立 Markdown 表格（导入接口将多表拆为多篇文章）
 - 日期单元格无时分秒时只显示日期
 - 公式单元格优先取缓存计算结果；无缓存（非 Excel 原生保存的系统导出文件
   不写公式缓存值）时解析引用兜底：纯引用取值、函数公式拼接引用值与引号
@@ -349,9 +349,10 @@ def _sheet_to_markdown(rows: list[list]) -> str:
     return "\n".join(lines)
 
 
-def xlsx_to_markdown(raw: bytes) -> str:
-    """xlsx/xlsm → Markdown：每个工作表转一个表格，多表用 `## 工作表名` 分节
+def xlsx_sheets_to_markdown(raw: bytes) -> list[tuple[str, str]]:
+    """xlsx/xlsm → 每个工作表一个 (表名, Markdown 表格) 项
 
+    每个 sheet 独立成篇，避免多表拼一篇文章排版混乱。
     同时加载值模式与公式模式两份网格：缓存值为空的公式单元格走引用解析兜底。
     """
     from openpyxl import load_workbook
@@ -363,11 +364,9 @@ def xlsx_to_markdown(raw: bytes) -> str:
     try:
         val_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_v.worksheets}
         frm_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_f.worksheets}
-        if not val_grids:
-            return ""
         resolver = _XlsxResolver(val_grids, frm_grids)
 
-        converted: list[tuple[str, str]] = []  # (表名, markdown)
+        out: list[tuple[str, str]] = []  # (表名, markdown)
         for title, vals in val_grids.items():
             frm = frm_grids.get(title) or []
             resolved = []
@@ -382,21 +381,27 @@ def xlsx_to_markdown(raw: bytes) -> str:
                 resolved.append(new_row)
             md = _sheet_to_markdown(resolved)
             if md:
-                converted.append((title, md))
-
-        # 单表不加分节标题，多表用 `## 表名` 分节
-        multi = len(converted) > 1
-        out: list[str] = []
-        for title, md in converted:
-            if multi:
-                if out:
-                    out.append("")
-                out.append(f"## {title}")
-            out.append(md)
-        return "\n".join(out).strip()
+                out.append((title, md))
+        return out
     finally:
         wb_v.close()
         wb_f.close()
+
+
+def xlsx_to_markdown(raw: bytes) -> str:
+    """xlsx/xlsm → 单个 Markdown 字符串（多表用 `## 表名` 分节；导入接口拆分时用 xlsx_sheets_to_markdown）"""
+    converted = xlsx_sheets_to_markdown(raw)
+    if not converted:
+        return ""
+    multi = len(converted) > 1
+    out: list[str] = []
+    for title, md in converted:
+        if multi:
+            if out:
+                out.append("")
+            out.append(f"## {title}")
+        out.append(md)
+    return "\n".join(out).strip()
 
 
 def derive_article_fields(title: str, content: str) -> tuple[str, str]:

@@ -415,10 +415,15 @@ async function handleImport(e: Event) {
   }
   importing.value = true
   try {
-    const article = await importArticle(file, activeCategory.value || undefined)
-    ElMessage.success(t('knowledge.importSuccess', { title: article.title }))
+    const articles = await importArticle(file, activeCategory.value || undefined)
     await Promise.all([loadArticles(), loadCategories()])
-    openRead(article)  // 导入后直接打开，方便核对排版
+    if (articles && articles.length) {
+      const msg = articles.length > 1
+        ? t('knowledge.importSuccessMulti', { title: articles[0].title, count: articles.length })
+        : t('knowledge.importSuccess', { title: articles[0].title })
+      ElMessage.success(msg)
+      openRead(articles[0])  // 打开第一篇，方便核对排版
+    }
   } catch (error: any) {
     console.error('Failed to import article:', error)
     ElMessage.error(error.response?.data?.detail || t('common.error'))
