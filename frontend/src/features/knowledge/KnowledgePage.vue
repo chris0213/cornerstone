@@ -206,7 +206,7 @@ const reading = ref<KnowledgeArticle | null>(null)
 
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
-const editorMode = ref<'edit' | 'preview'>('edit')  // 编辑/预览切换（预览渲染 Markdown，核对排版）
+const editorMode = ref<'edit' | 'preview'>('preview')  // 默认预览（与阅读排版一致），改内容再切「编辑」
 const editorPreview = computed(() => renderMarkdown(form.value.content))
 const form = ref({
   title: '',
@@ -360,7 +360,7 @@ const renderedContent = computed(() => renderMarkdown(reading.value?.content || 
 // ===== 编辑 =====
 function openCreate() {
   editingId.value = null
-  editorMode.value = 'edit'
+  editorMode.value = 'preview'
   form.value = { title: '', category: '其他', tags: '', summary: '', content: '', is_published: true }
   showEditor.value = true
 }
@@ -370,6 +370,7 @@ async function openEdit(article: KnowledgeArticle) {
     // 列表接口不含正文，必须拉详情，否则保存会清空 content
     const detail = await getArticle(article.id)
     editingId.value = detail.id
+    editorMode.value = 'preview'  // 默认预览渲染，改源码再切「编辑」
     form.value = {
       title: detail.title,
       category: detail.category,
