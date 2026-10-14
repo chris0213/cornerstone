@@ -39,7 +39,8 @@ const connectWebSocket = () => {
     // 动态拼 WebSocket 地址：http→ws、https→wss，复用浏览器当前 host
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const wsUrl = `${proto}//${host}/api/v1/ipam/ws/scan/${props.taskId}`
+    const token = localStorage.getItem('access_token') || ''
+    const wsUrl = `${proto}//${host}/api/v1/ipam/ws/scan/${props.taskId}?token=${encodeURIComponent(token)}`
     console.log('WebSocket URL:', wsUrl)
     ws = new WebSocket(wsUrl)
     ws.onopen = () => {
