@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update, delete, func
+from sqlalchemy import select, insert, update, delete, func, or_
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
@@ -227,10 +227,26 @@ async def delete_aggregate(
 @router.get("/prefixes/", response_model=list[PrefixResponse])
 async def read_prefixes(
     page: PageParams = Depends(pagination()),
+    site_id: int | None = None,
+    network: str | None = None,
+    keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Prefix).offset(page.skip).limit(page.limit))
+    stmt = select(Prefix)
+    if site_id is not None:
+        stmt = stmt.where(Prefix.site_id == site_id)
+    if network:
+        stmt = stmt.where(Prefix.network.ilike(f"%{network}%"))
+    if keyword:
+        like = f"%{keyword}%"
+        stmt = stmt.where(or_(
+            Prefix.network.ilike(like),
+            Prefix.usage.ilike(like),
+            Prefix.custom_scan_ports.ilike(like),
+        ))
+    stmt = stmt.offset(page.skip).limit(page.limit)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 @router.post("/prefixes/", response_model=PrefixResponse, status_code=status.HTTP_201_CREATED)
@@ -294,10 +310,33 @@ async def delete_prefix(
 @router.get("/addresses/", response_model=list[IPAddressResponse])
 async def read_addresses(
     page: PageParams = Depends(pagination()),
+    prefix_id: int | None = None,
+    device_id: int | None = None,
+    status: str | None = None,
+    is_online: bool | None = None,
+    keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(IPAddress).offset(page.skip).limit(page.limit))
+    stmt = select(IPAddress)
+    if prefix_id is not None:
+        stmt = stmt.where(IPAddress.prefix_id == prefix_id)
+    if device_id is not None:
+        stmt = stmt.where(IPAddress.device_id == device_id)
+    if status:
+        stmt = stmt.where(IPAddress.status == status)
+    if is_online is not None:
+        stmt = stmt.where(IPAddress.is_online == is_online)
+    if keyword:
+        like = f"%{keyword}%"
+        stmt = stmt.where(or_(
+            IPAddress.address.ilike(like),
+            IPAddress.usage.ilike(like),
+            IPAddress.owner.ilike(like),
+            IPAddress.mac_address.ilike(like),
+        ))
+    stmt = stmt.offset(page.skip).limit(page.limit)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 @router.post("/addresses/", response_model=IPAddressResponse, status_code=status.HTTP_201_CREATED)
