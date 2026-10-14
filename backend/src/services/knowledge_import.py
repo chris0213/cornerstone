@@ -13,6 +13,9 @@ xlsx 还原规则：
 - 首个非空行作为表头，全空行/全空列剔除
 - 多个工作表 → 每个表前加 `## 工作表名` 分节
 - 日期单元格无时分秒时只显示日期
+- 公式单元格优先取缓存计算结果；无缓存（非 Excel 原生保存的系统导出文件
+  不写公式缓存值）时解析引用兜底：纯引用取值、函数公式拼接引用值与引号
+  常量、ROW() 换算行号，仍无法解析则显示公式文本
 """
 import io
 import re
@@ -189,6 +192,138 @@ def _cell_to_text(value) -> str:
     return str(value)
 
 
+# 公式解析用正则：字符串常量 / 单元格引用（可带表名前缀与范围）
+_TOKEN_RE = re.compile(
+    r'"[^"]*"'
+    r"|(?:(?P<sheet>'[^']+'|[^'!=+\-*/&(),\s]+)!)?"
+    r"(?P<col>\$?[A-Z]{1,3})\$?(?P<row>\d+)"
+    r"(?::\$?(?P<col2>\$?[A-Z]{1,3})\$?(?P<row2>\d+))?"
+)
+_ROWFN_RE = re.compile(
+    r"\b(?P<fn>ROW|COLUMN)\s*\(\s*(?:(?P<sheet>'[^']+'|[^'!=+\-*/&(),\s]+)!)?"
+    r"(?P<col>\$?[A-Z]{1,3})?(?P<row>\d+)?\s*\)",
+    re.IGNORECASE,
+)
+
+
+class _XlsxResolver:
+    """公式无缓存值时的引用解析（系统导出的 xlsx 常不写公式缓存）"""
+
+    def __init__(self, val_grids: dict, frm_grids: dict):
+        self.val_grids = val_grids
+        self.frm_grids = frm_grids
+
+    def cell_val(self, sheet: str, row: int, col: int, depth: int = 0):
+        """取单元格值：缓存值优先，公式单元格递归解析（最多 5 层防环）"""
+        vals = self.val_grids.get(sheet) or []
+        v = vals[row][col] if row < len(vals) and col < len(vals[row]) else None
+        if v is not None:
+            return v
+        frms = self.frm_grids.get(sheet) or []
+        f = frms[row][col] if row < len(frms) and col < len(frms[row]) else None
+        if isinstance(f, str) and f.startswith("="):
+            return self.resolve_formula(f, sheet, depth + 1, cur_row=row + 1)
+        return f
+
+    def resolve_formula(self, formula: str, cur_sheet: str, depth: int = 0, cur_row: Optional[int] = None):
+        """解析公式：拼接引用值与引号常量；含算术运算等无法安全解析时保留公式文本"""
+        from openpyxl.utils import column_index_from_string
+
+        if depth > 5:
+            return formula
+        f = formula[1:].strip() if formula.startswith("=") else formula.strip()
+        orig = f  # 未替换 ROW() 的原始公式，算术路径需要（其 _rowfn 产出裸数字）
+
+        # ROW()/COLUMN() 先换算成带引号的常量（裸数字不会被 token 收集导致拼接丢值）
+        def _rowfn(m):
+            fn = m.group("fn").upper()
+            col = (m.group("col") or "").replace("$", "")
+            row = m.group("row") or (str(cur_row) if (fn == "ROW" and cur_row) else None)
+            if fn == "ROW":
+                return f'"{row}"' if row else '""'
+            if col:
+                try:
+                    return f'"{column_index_from_string(col)}"'
+                except Exception:
+                    return '""'
+            return '""'
+
+        f = _ROWFN_RE.sub(_rowfn, f)
+
+        parts: list[str] = []
+        pos = 0
+        for m in _TOKEN_RE.finditer(f):
+            # token 之间只允许 & 、逗号、函数名与括号；出现算术/比较符号则转算术路径
+            if re.search(r"[+\-*/^%<>]", f[pos:m.start()]):
+                return self._resolve_arithmetic(orig, cur_sheet, cur_row, depth) or formula
+            if m.group(0).startswith('"'):
+                parts.append(m.group(0)[1:-1])
+            else:
+                sheet = (m.group("sheet") or cur_sheet).strip("'")
+                if m.group("col2"):  # 区域引用（A1:B2）不支持拼接，保留原文
+                    parts.append(m.group(0))
+                else:
+                    col = (m.group("col") or "").replace("$", "")
+                    try:
+                        v = self.cell_val(sheet, int(m.group("row")) - 1,
+                                          column_index_from_string(col) - 1, depth)
+                    except Exception:
+                        v = None
+                    parts.append(_cell_to_text(v))
+            pos = m.end()
+        if re.search(r"[+\-*/^%<>]", f[pos:]):
+            return self._resolve_arithmetic(orig, cur_sheet, cur_row, depth) or formula
+        return "".join(parts)
+
+    def _resolve_arithmetic(self, f: str, cur_sheet: str, cur_row, depth: int):
+        """路径 B：仅数字/引用 + 四则运算的安全求值（如 =ROW()-1）；解析失败返回 None"""
+        from openpyxl.utils import column_index_from_string
+
+        def _rowfn(m):
+            fn = m.group("fn").upper()
+            row = m.group("row") or (str(cur_row) if (fn == "ROW" and cur_row) else None)
+            if fn == "ROW":
+                return row or m.group(0)
+            col = (m.group("col") or "").replace("$", "")
+            if col:
+                try:
+                    return str(column_index_from_string(col))
+                except Exception:
+                    return m.group(0)
+            return m.group(0)
+
+        expr = _ROWFN_RE.sub(_rowfn, f)
+        # 引用替换为其数值
+        parts: list[str] = []
+        pos = 0
+        for m in _TOKEN_RE.finditer(expr):
+            if m.group(0).startswith('"'):
+                return None  # 算术路径不支持字符串常量
+            if m.group("col2"):
+                return None
+            sheet = (m.group("sheet") or cur_sheet).strip("'")
+            col = (m.group("col") or "").replace("$", "")
+            try:
+                v = self.cell_val(sheet, int(m.group("row")) - 1,
+                                  column_index_from_string(col) - 1, depth)
+                num = float(v)
+            except Exception:
+                return None
+            parts.append(expr[pos:m.start()])
+            parts.append(str(num))
+            pos = m.end()
+        parts.append(expr[pos:])
+        expr = "".join(parts)
+        # 只允许数字与四则运算字符，杜绝任意代码执行
+        if not re.fullmatch(r"[\d\s+\-*/().]+", expr) or not expr.strip():
+            return None
+        try:
+            val = eval(expr, {"__builtins__": {}}, {})  # noqa: S307 已白名单限制字符集
+        except Exception:
+            return None
+        return _cell_to_text(val)
+
+
 def _sheet_to_markdown(rows: list[list]) -> str:
     """工作表二维数据 → Markdown 表格（剔除全空行列，首个非空行作表头）"""
     grid = [[_cell_to_text(v) for v in row] for row in rows]
@@ -215,29 +350,51 @@ def _sheet_to_markdown(rows: list[list]) -> str:
 
 
 def xlsx_to_markdown(raw: bytes) -> str:
-    """xlsx/xlsm → Markdown：每个工作表转一个表格，多表用 `## 工作表名` 分节"""
+    """xlsx/xlsm → Markdown：每个工作表转一个表格，多表用 `## 工作表名` 分节
+
+    同时加载值模式与公式模式两份网格：缓存值为空的公式单元格走引用解析兜底。
+    """
     from openpyxl import load_workbook
 
-    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    wb_v = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    wb_f = load_workbook(io.BytesIO(raw), read_only=True, data_only=False)
     try:
-        sheets = [ws for ws in wb.worksheets if ws.max_row]  # 跳过无数据工作表
-        if not sheets:
+        val_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_v.worksheets}
+        frm_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_f.worksheets}
+        if not val_grids:
             return ""
-        # 单表且无意义表名（Sheet1 等）：不加分节标题
-        multi = len(sheets) > 1
+        resolver = _XlsxResolver(val_grids, frm_grids)
+
+        converted: list[tuple[str, str]] = []  # (表名, markdown)
+        for title, vals in val_grids.items():
+            frm = frm_grids.get(title) or []
+            resolved = []
+            for r, row in enumerate(vals):
+                frow = frm[r] if r < len(frm) else ()
+                new_row = []
+                for c, v in enumerate(row):
+                    if v is None and c < len(frow) and isinstance(frow[c], str) and frow[c].startswith("="):
+                        new_row.append(resolver.resolve_formula(frow[c], title, cur_row=r + 1))
+                    else:
+                        new_row.append(v)
+                resolved.append(new_row)
+            md = _sheet_to_markdown(resolved)
+            if md:
+                converted.append((title, md))
+
+        # 单表不加分节标题，多表用 `## 表名` 分节
+        multi = len(converted) > 1
         out: list[str] = []
-        for ws in sheets:
-            md = _sheet_to_markdown(list(ws.iter_rows(values_only=True)))
-            if not md:
-                continue
+        for title, md in converted:
             if multi:
                 if out:
                     out.append("")
-                out.append(f"## {ws.title}")
+                out.append(f"## {title}")
             out.append(md)
         return "\n".join(out).strip()
     finally:
-        wb.close()
+        wb_v.close()
+        wb_f.close()
 
 
 def derive_article_fields(title: str, content: str) -> tuple[str, str]:
