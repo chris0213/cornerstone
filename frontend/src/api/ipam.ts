@@ -114,3 +114,8 @@ export async function getNextAvailableIP(prefixId: number): Promise<NextAvailabl
   const response = await api.get(`/ipam/prefixes/${prefixId}/next-available`)
   return response.data
 }
+
+export async function scanPrefix(prefixId: number): Promise<{ task_id: string; message: string }> {
+  const response = await api.post(`/ipam/prefixes/${prefixId}/scan`)
+  return response.data
+}

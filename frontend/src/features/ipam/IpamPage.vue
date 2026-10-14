@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElEmpty } from 'element-plus'
-import { useAuthStore } from '../../store/auth'
 import { Search as SearchIcon, User, Edit, Plus, Delete, Connection, Download, Upload } from '@element-plus/icons-vue'
 import api from '../../api/axios'
 import { confirmAndRun } from '../../lib/confirm'
 import type { Prefix, IPAddress } from '../../types/domain'
 import IpMatrix from './components/IpMatrix.vue'
 import ScanProgress from './components/ScanProgress.vue'
-import { getPrefixes, createPrefix, updatePrefix, deletePrefix, getIPAddresses, createIPAddress, updateIPAddress, deleteIPAddress, getNextAvailableIP } from '../../api/ipam'
+import { getPrefixes, createPrefix, updatePrefix, deletePrefix, getIPAddresses, createIPAddress, updateIPAddress, deleteIPAddress, scanPrefix, getNextAvailableIP } from '@/api/ipam'
 import { getSites } from '../../api/sites'
 import { getDevices } from '../../api/devices'
 import { getVlans } from '../../api/vlans'
@@ -133,41 +132,23 @@ const selectedPrefix = computed(() => {
   return prefixes.value.find(p => String(p.id) === String(selectedPrefixId.value))
 })
 
-// 触发{{ t('ipam.scan') }}
+// 触发扫描
 const handleScanPrefix = async (prefixId: string | number, network: string) => {
   try {
-    const authStore = useAuthStore()
-    const token = authStore.token
-    
-    if (!token) {
-      ElMessage.error(t('ipam.pleaseLogin'))
-      return
-    }
-    
-    console.log('启动扫描:', { prefixId, network })
-    
-    const response = await fetch(`/api/v1/ipam/prefixes/${prefixId}/scan`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    })
-    
-    const data = await response.json()
-    console.log('扫描响应数据:', data)
-    
+    const data = await scanPrefix(Number(prefixId))
+
     if (data.task_id) {
       scanTaskId.value = data.task_id
       scanNetwork.value = network
       showScanDialog.value = true
       ElMessage.success(t('ipam.scanStarted'))
     } else {
-      ElMessage.error(t('ipam.scanStartFailed') + ': ' + (data.message || t('ipam.noTaskId')) )
+      ElMessage.error(t('ipam.scanStartFailed') + ': ' + (data.message || t('ipam.noTaskId')))
     }
-  } catch (error) {
-    console.error('扫描错误:', error)
-    ElMessage.error(t('ipam.scanStartError'))
+  } catch (err: any) {
+    console.error('启动扫描失败:', err)
+    const detail = err?.response?.data?.detail || err?.message || t('ipam.scanStartError')
+    ElMessage.error(t('ipam.scanStartFailed') + ': ' + detail)
   }
 }
 
