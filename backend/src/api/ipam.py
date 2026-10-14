@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update, delete, func
 from datetime import datetime, timedelta
@@ -404,6 +405,9 @@ async def websocket_scan(
         async for result in scan_manager.get_scan_results(task_id):
             await websocket.send_json(result)
     except WebSocketDisconnect:
+        pass
+    except ConnectionClosed:
+        # 前端主动关闭、正常扫描完成、超时关闭都可能触发，不是错误
         pass
 
 
