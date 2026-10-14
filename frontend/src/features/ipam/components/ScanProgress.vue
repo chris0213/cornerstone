@@ -33,18 +33,18 @@ interface ScanResult {
  method?: string;
 }
 const connectWebSocket = () => {
- if (!props.taskId)
- return;
- console.log('连接WebSocket:', props.taskId)
- console.log('Visible:', props.visible)
- try {
- // 直接连接到后端，绕过Vite代理
- const wsUrl = `ws://localhost:8000/api/v1/ipam/ws/scan/${props.taskId}`;
- console.log('WebSocket URL:', wsUrl)
- ws = new WebSocket(wsUrl);
- ws.onopen = () => {
- console.log('WebSocket connected');
- };
+  if (!props.taskId) return
+
+  try {
+    // 动态拼 WebSocket 地址：http→ws、https→wss，复用浏览器当前 host
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = window.location.host
+    const wsUrl = `${proto}//${host}/api/v1/ipam/ws/scan/${props.taskId}`
+    console.log('WebSocket URL:', wsUrl)
+    ws = new WebSocket(wsUrl)
+    ws.onopen = () => {
+      console.log('WebSocket connected')
+    }
  ws.onmessage = (event) => {
  try {
  const data: ScanResult = JSON.parse(event.data);
