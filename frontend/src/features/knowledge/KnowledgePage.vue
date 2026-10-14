@@ -125,8 +125,8 @@
     <el-dialog
       v-model="showEditor"
       :title="editingId ? t('knowledge.editArticle') : t('knowledge.newArticle')"
-      width="760px"
-      top="5vh"
+      width="min(1200px, 92vw)"
+      top="3vh"
       destroy-on-close
     >
       <el-form label-position="top">
@@ -773,6 +773,7 @@ onMounted(() => {
 /* 表格编辑器 */
 .table-editor {
   width: 100%;
+  overflow-x: auto;
 }
 
 .table-editor-toolbar {
@@ -784,12 +785,14 @@ onMounted(() => {
 
 .editor-table :deep(th),
 .editor-table :deep(td) {
-  padding: 2px !important;
+  padding: 4px 6px !important;
 }
 
 .editor-table :deep(.el-input__wrapper) {
   box-shadow: none !important;
   background: transparent !important;
+  padding: 2px 6px !important;
+  min-height: 30px;
 }
 
 .editor-table :deep(.el-input__wrapper:hover),
