@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 import logging
 import uuid
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("cornerstone")
 
 from ..database import get_db
 from ..models import Aggregate, Prefix, IPAddress, Device
