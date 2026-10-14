@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import type { IPAddress } from '../../../types/domain'
 import { ElTooltip } from 'element-plus'
 
@@ -7,6 +7,8 @@ const props = defineProps<{
   prefixId: number
   network: string
   ipList: IPAddress[]
+  scanningCurrentIp?: string
+  scanResults?: Record<string, boolean>
 }>()
 
 const emit = defineEmits<{
@@ -86,12 +88,35 @@ const handleClick = (ip: { address: string; data?: IPAddress }) => {
     emit('assign', ip.address)
   }
 }
+
+// ==================== 扫描动画 ====================
+const isScanning = computed(() => !!props.scanningCurrentIp)
+
+const isCurrentScanning = (address: string) => props.scanningCurrentIp === address
+
+const getScanResultClass = (address: string) => {
+  const r = props.scanResults?.[address]
+  if (r === true) return 'scan-hit'
+  if (r === false) return 'scan-miss'
+  return ''
+}
+
+// 自动滚动到正在扫描的格子
+const gridRef = ref<HTMLElement | null>(null)
+watch(() => props.scanningCurrentIp, async (ip) => {
+  if (!ip || !gridRef.value) return
+  await nextTick()
+  gridRef.value.querySelector(`[data-ip="${ip}"]`)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'nearest',
+  })
+})
 </script>
 
 <template>
   <div class="ip-matrix-container">
     <!-- 矩阵网格 -->
-    <div class="matrix-grid">
+    <div class="matrix-grid" ref="gridRef" :class="{ 'matrix-scanning': isScanning }">
       <div v-for="(row, rowIndex) in rows" :key="rowIndex" class="matrix-row">
         <ElTooltip
           v-for="ip in row"
@@ -104,8 +129,12 @@ const handleClick = (ip: { address: string; data?: IPAddress }) => {
           :hide-after="0"
         >
           <div 
+            :data-ip="ip.address"
             class="ip-block" 
-            :class="{ 'ip-block-assigned': !!ip.data }"
+            :class="[
+              { 'ip-block-assigned': !!ip.data, 'ip-block-scanning': isCurrentScanning(ip.address) },
+              getScanResultClass(ip.address),
+            ]"
             :style="{ backgroundColor: getStatusColor(ip) }"
             @click="handleClick(ip)"
           >
@@ -185,6 +214,42 @@ const handleClick = (ip: { address: string; data?: IPAddress }) => {
 
 .ip-block-assigned .ip-last-octet {
   color: #fff;
+}
+
+/* ==================== 扫描动画 ==================== */
+
+/* 正在探测的格子：蓝色脉冲 */
+.ip-block-scanning {
+  animation: scan-pulse 0.9s ease-in-out infinite;
+  z-index: 5;
+}
+
+@keyframes scan-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.6);
+    transform: scale(1.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(24, 144, 255, 0);
+    transform: scale(1.1);
+  }
+}
+
+/* 扫描命中的格子：绿色闪光后描边 */
+.scan-hit {
+  box-shadow: 0 0 0 2px #52c41a inset;
+  animation: hit-flash 0.5s ease-out;
+}
+
+@keyframes hit-flash {
+  0% { box-shadow: 0 0 0 8px rgba(82, 196, 26, 0.7) inset; }
+  100% { box-shadow: 0 0 0 2px #52c41a inset; }
+}
+
+/* 扫描未命中的格子：灰色描边 */
+.scan-miss {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12) inset;
+  opacity: 0.75;
 }
 
 .matrix-legend {

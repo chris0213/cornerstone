@@ -84,6 +84,9 @@ const selectedPrefixId = ref<string | null>(null)
 const showScanDialog = ref(false)
 const scanTaskId = ref('')
 const scanNetwork = ref('')
+// 实时扫描动画：当前探测 IP + 已出结果映射
+const scanningCurrentIp = ref('')
+const scanResultMap = ref<Record<string, boolean>>({})
 
 const prefixForm = ref<Partial<Prefix>>({
   aggregateId: null,
@@ -158,6 +161,9 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
       scanNetwork.value = network
       // 自动选中被扫描的 prefix，扫完后用户自然能在下方看到 IP 矩阵
       selectedPrefixId.value = String(prefixId)
+      // 重置实时扫描动画状态
+      scanningCurrentIp.value = ''
+      scanResultMap.value = {}
       showScanDialog.value = true
       ElMessage.success(t('ipam.scanStarted'))
     } else {
@@ -173,6 +179,7 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
 // 扫描完成回调
 const handleScanCompleted = async () => {
   showScanDialog.value = false
+  scanningCurrentIp.value = ''
   // 全量刷新 + 选中 prefix 单独刷新（确保扫到的新 IP 进列表）
   await loadData()
   if (selectedPrefixId.value) {
@@ -191,6 +198,15 @@ const handleScanCompleted = async () => {
 const closeScanDialog = () => {
   showScanDialog.value = false
   scanTaskId.value = ''
+  scanningCurrentIp.value = ''
+}
+
+// 扫描进度/结果 → 矩阵动画
+const handleScanProgress = (currentIp: string) => {
+  scanningCurrentIp.value = currentIp
+}
+const handleScanResult = (ip: string, isOnline: boolean) => {
+  scanResultMap.value = { ...scanResultMap.value, [ip]: isOnline }
 }
 
 // 处理IP分配
@@ -659,6 +675,8 @@ const handleDeleteIP = async (ip: IPAddress) => {
         :prefix-id="Number(selectedPrefixId)" 
         :network="selectedPrefix?.network || ''"
         :ip-list="selectedPrefixIPs"
+        :scanning-current-ip="scanningCurrentIp"
+        :scan-results="scanResultMap"
         @assign="handleQuickAssign"
         @view="handleViewIP"
       />
@@ -1054,6 +1072,8 @@ const handleDeleteIP = async (ip: IPAddress) => {
       :task-id="scanTaskId"
       @close="closeScanDialog"
       @completed="handleScanCompleted"
+      @progress="handleScanProgress"
+      @result="handleScanResult"
     />
 
     <!-- 导入子网对话框 -->
