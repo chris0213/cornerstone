@@ -128,7 +128,18 @@ class ScanManager:
         logger.info(f"[scan] task start streaming task_id={task_id} network={network}")
 
         try:
-            async for result in scanner:
+            # 手动驱动 async generator — async for 无法 catch 到 generator
+            # 体里的异常（被惰性执行机制吞成 StopAsyncIteration），
+            # 手动 __anext__() 才能真正把异常抛到外层 try/except
+            it = scanner.__aiter__()
+            logger.info(f"[scan] calling scanner first __anext__() network={network}")
+            while True:
+                try:
+                    result = await it.__anext__()
+                except StopAsyncIteration:
+                    logger.info(f"[scan] task done task_id={task_id} network={network}")
+                    break
+
                 # 如果是扫描结果，保存到数据库
                 if result.get("type") == "result":
                     try:
@@ -144,10 +155,9 @@ class ScanManager:
                         logger.warning(f"[scan] save result failed ip={result.get('ip')}: {e}")
                 yield result
 
-            logger.info(f"[scan] task done task_id={task_id} network={network}")
         except Exception as e:
             logger.exception(f"[scan] task error task_id={task_id} network={network}: {e}")
-            yield {"type": "error", "message": str(e)}
+            yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
         finally:
             # 扫描完成（或中途报错）都清理任务
             self.active_tasks.pop(task_id, None)
