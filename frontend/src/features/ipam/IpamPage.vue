@@ -123,7 +123,8 @@ const currentPrefixInfo = ref<{
 // 选中子网的IP列表
 const selectedPrefixIPs = computed(() => {
   if (!selectedPrefixId.value) return []
-  return ipAddresses.value.filter(ip => ip.prefixId === selectedPrefixId.value)
+  const pid = Number(selectedPrefixId.value)
+  return ipAddresses.value.filter(ip => Number(ip.prefixId) === pid)
 })
 
 // 选中的子网信息
