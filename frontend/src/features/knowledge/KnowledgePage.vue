@@ -152,15 +152,63 @@
         </el-form-item>
         <el-form-item :label="t('knowledge.content')">
           <div class="editor-split">
+            <!-- 左侧：根据内容类型自动切换 -->
             <div class="editor-pane">
-              <div class="pane-label">{{ t('knowledge.modeEdit') }}</div>
+              <div class="pane-label">{{ tableEditMode ? t('knowledge.modeTable') : t('knowledge.modeEdit') }}</div>
+              <!-- 表格编辑模式：正文仅含单个表格 -->
+              <div v-if="tableEditMode" class="table-editor">
+                <div class="table-editor-toolbar">
+                  <el-button size="small" @click="addTableRow">{{ t('knowledge.tableAddRow') }}</el-button>
+                  <el-button size="small" @click="addTableCol">{{ t('knowledge.tableAddCol') }}</el-button>
+                  <el-button size="small" :disabled="tableSelectedRow === null" @click="delTableRow">{{ t('knowledge.tableDelRow') }}</el-button>
+                  <el-button size="small" :disabled="tableSelectedCol === null" @click="delTableCol">{{ t('knowledge.tableDelCol') }}</el-button>
+                  <el-button size="small" @click="toggleTableSource">{{ t('knowledge.tableSwitchSource') }}</el-button>
+                </div>
+                <el-table
+                  :data="tableBody"
+                  :row-key="(_row: string[], i: number) => i"
+                  @row-click="(_row: string[], col: any) => (tableSelectedRow = col?.rowIndex ?? null)"
+                  highlight-current-row
+                  border
+                  size="small"
+                  class="editor-table"
+                >
+                  <el-table-column
+                    v-for="(h, ci) in tableHeader"
+                    :key="ci"
+                    :label="h"
+                    :min-width="120"
+                    align="center"
+                  >
+                    <template #header>
+                      <el-input
+                        size="small"
+                        :model-value="tableHeader[ci]"
+                        @update:model-value="(v: string) => setTableHeader(ci, v)"
+                        placeholder="表头"
+                      />
+                    </template>
+                    <template #default="{ row }">
+                      <el-input
+                        size="small"
+                        :model-value="row[ci]"
+                        @update:model-value="(v: string) => setTableCell(tableBody.indexOf(row), ci, v)"
+                        @focus="() => { tableSelectedCol = ci; tableSelectedRow = tableBody.indexOf(row) }"
+                      />
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+              <!-- 源码模式 -->
               <el-input
+                v-else
                 v-model="form.content"
                 type="textarea"
                 class="editor-textarea"
                 :placeholder="t('knowledge.contentPlaceholder')"
               />
             </div>
+            <!-- 右侧：渲染预览 -->
             <div class="editor-pane">
               <div class="pane-label">{{ t('knowledge.modePreview') }}</div>
               <div class="reader-body editor-preview" v-html="editorPreview"></div>
@@ -192,6 +240,7 @@ import {
 } from '@/api/knowledge'
 import { formatDateTime } from '@/lib/utils'
 import { confirmAndRun } from '@/lib/confirm'
+import { parseAllMdTables, parseFirstMdTable, replaceMdTable } from '@/lib/md-table'
 
 const { t } = useI18n()
 
@@ -208,6 +257,85 @@ const reading = ref<KnowledgeArticle | null>(null)
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const editorPreview = computed(() => renderMarkdown(form.value.content))
+
+// 表格编辑模式状态
+const tableForceSource = ref(false)  // 用户手动切到源码
+const tableSelectedRow = ref<number | null>(null)
+const tableSelectedCol = ref<number | null>(null)
+
+/** 正文是否可切换到表格编辑：仅含一个 Markdown 表格块（前后允许空行） */
+const tableEditMode = computed(() => {
+  if (tableForceSource.value) return false
+  const content = form.value.content
+  const stripped = content.replace(/^\s*\n|\n\s*$/g, '')
+  const tables = parseAllMdTables(stripped)
+  if (tables.length !== 1) return false
+  const t = tables[0]
+  // 表格块占据正文绝大部分（允许前后少量空行/单行说明）
+  const lines = stripped.split('\n')
+  if (t.startLine > 2 || lines.length - t.endLine - 1 > 2) return false
+  return true
+})
+
+const tableHeader = computed<string[]>(() => {
+  const parsed = parseFirstMdTable(form.value.content)
+  return parsed?.header ?? []
+})
+
+const tableBody = computed<string[][]>(() => {
+  const parsed = parseFirstMdTable(form.value.content)
+  return parsed?.body ?? []
+})
+
+/** 把当前 header/body 同步写回 form.content（替换第一个表格块） */
+function commitTableToContent(header: string[], body: string[][]) {
+  form.value.content = replaceMdTable(form.value.content, 0, header, body)
+}
+
+function setTableHeader(col: number, val: string) {
+  const h = [...tableHeader.value]
+  h[col] = val
+  commitTableToContent(h, tableBody.value)
+}
+
+function setTableCell(row: number, col: number, val: string) {
+  const body = tableBody.value.map(r => [...r])
+  body[row][col] = val
+  commitTableToContent(tableHeader.value, body)
+}
+
+function addTableRow() {
+  const body = tableBody.value
+  const cols = tableHeader.value.length
+  body.push(new Array(cols).fill(''))
+  commitTableToContent(tableHeader.value, body)
+}
+
+function addTableCol() {
+  const header = [...tableHeader.value, `列${tableHeader.value.length + 1}`]
+  const body = tableBody.value.map(r => [...r, ''])
+  commitTableToContent(header, body)
+}
+
+function delTableRow() {
+  if (tableSelectedRow.value === null) return
+  const body = tableBody.value.filter((_, i) => i !== tableSelectedRow.value)
+  commitTableToContent(tableHeader.value, body)
+  tableSelectedRow.value = null
+}
+
+function delTableCol() {
+  if (tableSelectedCol.value === null) return
+  const colIdx = tableSelectedCol.value
+  const header = tableHeader.value.filter((_, i) => i !== colIdx)
+  const body = tableBody.value.map(r => r.filter((_, i) => i !== colIdx))
+  commitTableToContent(header, body)
+  tableSelectedCol.value = null
+}
+
+function toggleTableSource() {
+  tableForceSource.value = !tableForceSource.value
+}
 const form = ref({
   title: '',
   category: '其他',
@@ -640,6 +768,34 @@ onMounted(() => {
   font-size: 13px;
   line-height: 1.6;
   tab-size: 2;
+}
+
+/* 表格编辑器 */
+.table-editor {
+  width: 100%;
+}
+
+.table-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.editor-table :deep(th),
+.editor-table :deep(td) {
+  padding: 2px !important;
+}
+
+.editor-table :deep(.el-input__wrapper) {
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.editor-table :deep(.el-input__wrapper:hover),
+.editor-table :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset !important;
+  background: var(--el-fill-color-blank) !important;
 }
 
 .editor-preview {
