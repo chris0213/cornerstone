@@ -75,6 +75,11 @@ class ScanManager:
     async def _save_scan_result(self, prefix_id: int, ip: str, is_online: bool, mac_address: str = None, open_ports: List[int] = None):
         """保存扫描结果到数据库（自己开 session，不依赖 HTTP 请求注入的 session）"""
         from ..database import async_session
+        import json
+
+        # open_ports 是 List[int]，DB 里 open_ports 是 String 列 → 序列化成 JSON 字符串存
+        ports_str = json.dumps(open_ports) if open_ports else None
+
         async with async_session() as db:
             result = await db.execute(select(IPAddress).where(
                 IPAddress.prefix_id == prefix_id,
@@ -86,7 +91,7 @@ class ScanManager:
                 update_data = {
                     "is_online": is_online,
                     "mac_address": mac_address,
-                    "open_ports": open_ports,
+                    "open_ports": ports_str,
                     "updated_at": func.now()
                 }
                 # 如果状态是英文的，转换为中文
@@ -108,7 +113,7 @@ class ScanManager:
                         status="已分配",
                         is_online=is_online,
                         mac_address=mac_address,
-                        open_ports=open_ports,
+                        open_ports=ports_str,
                         created_at=func.now(),
                         updated_at=func.now()
                     )
