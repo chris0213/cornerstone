@@ -129,7 +129,8 @@ onUnmounted(() => {
   <el-dialog
     :visible="visible"
     title="IP扫描进度"
-    width="560px"
+    width="480px"
+    :modal="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
     @close="handleClose"

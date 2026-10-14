@@ -218,38 +218,57 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 
 /* ==================== 扫描动画 ==================== */
 
-/* 正在探测的格子：蓝色脉冲 */
+/* 正在探测的格子：实心蓝色 + 大脉冲光环 */
 .ip-block-scanning {
-  animation: scan-pulse 0.9s ease-in-out infinite;
+  background-color: #1890ff !important;
+  animation: scan-pulse 0.8s ease-out infinite;
   z-index: 5;
 }
 
+.ip-block-scanning .ip-last-octet {
+  color: #fff !important;
+}
+
 @keyframes scan-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.6);
-    transform: scale(1.1);
+  0% {
+    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.9);
   }
-  50% {
-    box-shadow: 0 0 0 6px rgba(24, 144, 255, 0);
-    transform: scale(1.1);
+  70% {
+    box-shadow: 0 0 0 12px rgba(24, 144, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0);
   }
 }
 
-/* 扫描命中的格子：绿色闪光后描边 */
+/* 扫描命中（在线）：亮绿实心闪烁 */
 .scan-hit {
-  box-shadow: 0 0 0 2px #52c41a inset;
-  animation: hit-flash 0.5s ease-out;
+  background-color: #52c41a !important;
+  animation: hit-flash 0.6s ease-out;
+}
+
+.scan-hit .ip-last-octet {
+  color: #fff !important;
 }
 
 @keyframes hit-flash {
-  0% { box-shadow: 0 0 0 8px rgba(82, 196, 26, 0.7) inset; }
-  100% { box-shadow: 0 0 0 2px #52c41a inset; }
+  0% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.9);
+    transform: scale(1.4);
+  }
+  60% {
+    box-shadow: 0 0 0 10px rgba(82, 196, 26, 0);
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
-/* 扫描未命中的格子：灰色描边 */
+/* 扫描未命中（离线/无响应）：明显变暗 */
 .scan-miss {
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12) inset;
-  opacity: 0.75;
+  filter: grayscale(1);
+  opacity: 0.45;
 }
 
 .matrix-legend {
