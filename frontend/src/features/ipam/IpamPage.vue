@@ -141,6 +141,8 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
     if (data.task_id) {
       scanTaskId.value = data.task_id
       scanNetwork.value = network
+      // 自动选中被扫描的 prefix，扫完后用户自然能在下方看到 IP 矩阵
+      selectedPrefixId.value = String(prefixId)
       showScanDialog.value = true
       ElMessage.success(t('ipam.scanStarted'))
     } else {
