@@ -63,8 +63,10 @@ export async function deletePrefix(id: string | number): Promise<void> {
 }
 
 // IP Address API
-export async function getIPAddresses(): Promise<IPAddress[]> {
-  const response = await api.get('/ipam/addresses/')
+export async function getIPAddresses(prefixId?: number): Promise<IPAddress[]> {
+  const params: any = {}
+  if (prefixId !== undefined) params.prefix_id = prefixId
+  const response = await api.get('/ipam/addresses/', { params })
   return snakeToCamel(response.data)
 }
 

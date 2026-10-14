@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElEmpty } from 'element-plus'
 import { Search as SearchIcon, User, Edit, Plus, Delete, Connection, Download, Upload } from '@element-plus/icons-vue'
 import api from '../../api/axios'
@@ -127,6 +127,21 @@ const selectedPrefixIPs = computed(() => {
   return ipAddresses.value.filter(ip => Number(ip.prefixId) === pid)
 })
 
+// 选中 prefix 后懒加载该子网的 IP 列表（过滤全表 100 条限制）
+watch(selectedPrefixId, async (pid) => {
+  if (!pid) return
+  try {
+    const data = await getIPAddresses(Number(pid))
+    // 只替换该 prefix 的 IP，保留其他 prefix 的数据（页面其他 tab 可能要用）
+    ipAddresses.value = [
+      ...ipAddresses.value.filter(ip => Number(ip.prefixId) !== Number(pid)),
+      ...data,
+    ]
+  } catch (e) {
+    console.error('刷新选中子网 IP 列表失败:', e)
+  }
+})
+
 // 选中的子网信息
 const selectedPrefix = computed(() => {
   if (!selectedPrefixId.value) return null
@@ -156,10 +171,19 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
 }
 
 // 扫描完成回调
-const handleScanCompleted = () => {
+const handleScanCompleted = async () => {
   showScanDialog.value = false
-  // 刷新IP数据
-  loadData()
+  // 全量刷新 + 选中 prefix 单独刷新（确保扫到的新 IP 进列表）
+  await loadData()
+  if (selectedPrefixId.value) {
+    try {
+      const data = await getIPAddresses(Number(selectedPrefixId.value))
+      ipAddresses.value = [
+        ...ipAddresses.value.filter(ip => Number(ip.prefixId) !== Number(selectedPrefixId.value)),
+        ...data,
+      ]
+    } catch (e) { /* ignore */ }
+  }
   ElMessage.success(t('ipam.scanCompleted'))
 }
 
