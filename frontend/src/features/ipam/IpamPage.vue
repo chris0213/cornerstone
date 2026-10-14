@@ -198,7 +198,7 @@ const handleQuickAssign = (ipAddress: string) => {
   if (!selectedPrefixId.value) return
   ipForm.value = {
     address: ipAddress,
-    prefixId: selectedPrefixId.value,
+    prefixId: String(selectedPrefixId.value),
     deviceId: '',
     usage: '',
     owner: '',
