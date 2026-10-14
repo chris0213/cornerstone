@@ -9,7 +9,7 @@ const props = defineProps<{
 const emit = defineEmits<{
  (e: 'close'): void;
  (e: 'completed'): void;
- (e: 'progress', currentIp: string): void;
+ (e: 'progress', currentIp: string, percent: number): void;
  (e: 'result', ip: string, isOnline: boolean): void;
 }>();
 const progress = ref(0);
@@ -58,7 +58,7 @@ const connectWebSocket = () => {
  scanned.value = data.scanned || 0;
  onlineCount.value = data.online || 0;
  currentIp.value = data.current_ip || '';
- if (currentIp.value) emit('progress', currentIp.value);
+ if (currentIp.value) emit('progress', currentIp.value, progress.value);
  }
  else if (data.type === 'result') {
  if (data.ip !== undefined) {

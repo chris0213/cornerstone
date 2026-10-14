@@ -87,6 +87,7 @@ const scanNetwork = ref('')
 // 实时扫描动画：当前探测 IP + 已出结果映射
 const scanningCurrentIp = ref('')
 const scanResultMap = ref<Record<string, boolean>>({})
+const scanPercent = ref(0)
 
 const prefixForm = ref<Partial<Prefix>>({
   aggregateId: null,
@@ -164,6 +165,7 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
       // 重置实时扫描动画状态
       scanningCurrentIp.value = ''
       scanResultMap.value = {}
+      scanPercent.value = 0
       showScanDialog.value = true
       ElMessage.success(t('ipam.scanStarted'))
     } else {
@@ -180,6 +182,7 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
 const handleScanCompleted = async () => {
   showScanDialog.value = false
   scanningCurrentIp.value = ''
+  scanPercent.value = 0
   // 全量刷新 + 选中 prefix 单独刷新（确保扫到的新 IP 进列表）
   await loadData()
   if (selectedPrefixId.value) {
@@ -202,8 +205,9 @@ const closeScanDialog = () => {
 }
 
 // 扫描进度/结果 → 矩阵动画
-const handleScanProgress = (currentIp: string) => {
+const handleScanProgress = (currentIp: string, percent: number) => {
   scanningCurrentIp.value = currentIp
+  scanPercent.value = percent
 }
 const handleScanResult = (ip: string, isOnline: boolean) => {
   scanResultMap.value = { ...scanResultMap.value, [ip]: isOnline }
@@ -677,6 +681,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
         :ip-list="selectedPrefixIPs"
         :scanning-current-ip="scanningCurrentIp"
         :scan-results="scanResultMap"
+        :scan-percent="scanPercent"
         @assign="handleQuickAssign"
         @view="handleViewIP"
       />

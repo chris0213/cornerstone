@@ -9,6 +9,7 @@ const props = defineProps<{
   ipList: IPAddress[]
   scanningCurrentIp?: string
   scanResults?: Record<string, boolean>
+  scanPercent?: number
 }>()
 
 const emit = defineEmits<{
@@ -115,6 +116,14 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 
 <template>
   <div class="ip-matrix-container">
+    <!-- 扫描中：顶部进度条 -->
+    <div v-if="isScanning" class="scan-progress-bar">
+      <div class="scan-progress-track">
+        <div class="scan-progress-fill" :style="{ width: `${scanPercent || 0}%` }"></div>
+      </div>
+      <span class="scan-progress-text">扫描中 {{ Math.round(scanPercent || 0) }}%</span>
+    </div>
+
     <!-- 矩阵网格 -->
     <div class="matrix-grid" ref="gridRef" :class="{ 'matrix-scanning': isScanning }">
       <div v-for="(row, rowIndex) in rows" :key="rowIndex" class="matrix-row">
@@ -217,6 +226,36 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 }
 
 /* ==================== 扫描动画 ==================== */
+
+/* 顶部进度条 */
+.scan-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.scan-progress-track {
+  flex: 1;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.scan-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #69c0ff, #1890ff);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.scan-progress-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1890ff;
+  white-space: nowrap;
+}
 
 /* 正在探测的格子：实心蓝色 + 大脉冲光环 */
 .ip-block-scanning {
