@@ -242,10 +242,16 @@ async def scan_prefix(
     start_time = datetime.now()
     
     # 创建扫描任务
+    # started: 已开始探测的任务数（信号量 FIFO，按 IP 顺序递增）
+    # 用它做"游标"，让 current_ip 单调顺序前进，避免前端矩阵高亮乱串
+    started = 0
+
     async def scan_ip(ip: str):
-            nonlocal scanned, online_count
+            nonlocal scanned, online_count, started
 
             async with semaphore:
+                started += 1
+                cursor_ip = all_ips[min(started - 1, total - 1)]
                 result = await probe_single_ip(ip, tcp_ports=ports)
                 scanned += 1
             
@@ -260,14 +266,14 @@ async def scan_prefix(
             # 计算进度
             percent = (scanned / total) * 100
             
-            # 返回进度信息
+            # 返回进度信息（current_ip 用顺序游标，而非完成顺序的 ip）
             progress_info = {
                 "type": "progress",
                 "total": total,
                 "scanned": scanned,
                 "online": online_count,
                 "percent": round(percent, 1),
-                "current_ip": ip
+                "current_ip": cursor_ip
             }
             
             # 返回单IP结果
