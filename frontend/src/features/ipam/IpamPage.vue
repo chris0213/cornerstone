@@ -968,7 +968,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
                 placeholder="请选择子网"
                 @change="(val: number | string) => val && loadPrefixInfo(Number(val))"
               >
-                <el-option v-for="prefix in prefixes" :key="prefix.id" :label="prefix.network" :value="prefix.id" />
+                <el-option v-for="prefix in prefixes" :key="prefix.id" :label="prefix.network" :value="String(prefix.id)" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -1006,7 +1006,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
           <el-col :span="12">
             <el-form-item label="绑定设备">
               <el-select v-model="ipForm.deviceId" style="width: 100%" placeholder="无">
-                <el-option v-for="device in devices" :key="device.id" :label="device.name" :value="device.id" />
+                <el-option v-for="device in devices" :key="device.id" :label="device.name" :value="String(device.id)" />
               </el-select>
             </el-form-item>
           </el-col>
