@@ -151,19 +151,20 @@
           <el-input v-model="form.summary" type="textarea" :rows="2" :placeholder="t('knowledge.summaryPlaceholder')" maxlength="500" show-word-limit />
         </el-form-item>
         <el-form-item :label="t('knowledge.content')">
-          <div class="editor-content">
-            <el-radio-group v-model="editorMode" size="small" class="editor-mode">
-              <el-radio-button value="edit">{{ t('knowledge.modeEdit') }}</el-radio-button>
-              <el-radio-button value="preview">{{ t('knowledge.modePreview') }}</el-radio-button>
-            </el-radio-group>
-            <el-input
-              v-if="editorMode === 'edit'"
-              v-model="form.content"
-              type="textarea"
-              :rows="14"
-              :placeholder="t('knowledge.contentPlaceholder')"
-            />
-            <div v-else class="reader-body editor-preview" v-html="editorPreview"></div>
+          <div class="editor-split">
+            <div class="editor-pane">
+              <div class="pane-label">{{ t('knowledge.modeEdit') }}</div>
+              <el-input
+                v-model="form.content"
+                type="textarea"
+                class="editor-textarea"
+                :placeholder="t('knowledge.contentPlaceholder')"
+              />
+            </div>
+            <div class="editor-pane">
+              <div class="pane-label">{{ t('knowledge.modePreview') }}</div>
+              <div class="reader-body editor-preview" v-html="editorPreview"></div>
+            </div>
           </div>
         </el-form-item>
         <el-form-item>
@@ -206,7 +207,6 @@ const reading = ref<KnowledgeArticle | null>(null)
 
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
-const editorMode = ref<'edit' | 'preview'>('preview')  // 默认预览（与阅读排版一致），改内容再切「编辑」
 const editorPreview = computed(() => renderMarkdown(form.value.content))
 const form = ref({
   title: '',
@@ -360,7 +360,6 @@ const renderedContent = computed(() => renderMarkdown(reading.value?.content || 
 // ===== 编辑 =====
 function openCreate() {
   editingId.value = null
-  editorMode.value = 'preview'
   form.value = { title: '', category: '其他', tags: '', summary: '', content: '', is_published: true }
   showEditor.value = true
 }
@@ -370,7 +369,6 @@ async function openEdit(article: KnowledgeArticle) {
     // 列表接口不含正文，必须拉详情，否则保存会清空 content
     const detail = await getArticle(article.id)
     editingId.value = detail.id
-    editorMode.value = 'preview'  // 默认预览渲染，改源码再切「编辑」
     form.value = {
       title: detail.title,
       category: detail.category,
@@ -616,21 +614,42 @@ onMounted(() => {
   margin-left: auto;
 }
 
-.editor-content {
+.editor-split {
+  display: flex;
+  gap: 12px;
   width: 100%;
 }
 
-.editor-mode {
-  margin-bottom: 8px;
+.editor-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+  padding-left: 2px;
+}
+
+.editor-textarea :deep(.el-textarea__inner) {
+  min-height: 420px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
 }
 
 .editor-preview {
-  min-height: 340px;
-  max-height: 480px;
-  padding: 8px 12px;
+  min-height: 420px;
+  max-height: 560px;
+  padding: 10px 14px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   background: var(--el-fill-color-blank);
+  overflow-y: auto;
 }
 
 .reader-body {
