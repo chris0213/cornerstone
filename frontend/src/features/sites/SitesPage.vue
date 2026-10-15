@@ -19,7 +19,7 @@ const authStore = useAuthStore()
 const { circuits } = storeToRefs(store)
 const sites = ref<Site[]>([])
 const searchQuery = ref('')
-const statusFilter = ref<'all' | 'alert' | 'offline'>('all')
+const statusFilter = ref<'all' | 'online' | 'alert' | 'offline'>('all')
 const loading = ref(false)
 
 const isViewer = computed(() => authStore.isReadOnly())
@@ -50,7 +50,9 @@ const filteredSites = computed(() => {
   let items = [...sites.value]
 
   // 状态过滤
-  if (statusFilter.value === 'alert') {
+  if (statusFilter.value === 'online') {
+    items = items.filter(site => site.status === 'online')
+  } else if (statusFilter.value === 'alert') {
     items = items.filter(site => site.status === 'alert')
   } else if (statusFilter.value === 'offline') {
     items = items.filter(site => site.status === 'offline')
@@ -68,7 +70,7 @@ const statusCounts = computed(() => ({
   offline: sites.value.filter(s => s.status === 'offline').length,
 }))
 
-const clickCard = (type: 'alert' | 'offline') => {
+const clickCard = (type: 'online' | 'alert' | 'offline') => {
   if (statusCounts.value[type] === 0) return
   statusFilter.value = statusFilter.value === type ? 'all' : type
 }
@@ -292,10 +294,16 @@ onMounted(() => {
         <div class="overview-card-value">{{ statusCounts.total }}</div>
         <div class="overview-card-trend">{{ t('sites.allSites') }}</div>
       </div>
-      <div class="overview-card overview-card-success">
+      <div
+        class="overview-card overview-card-success"
+        :class="{ clickable: statusCounts.online > 0, disabled: statusCounts.online === 0 }"
+        @click="clickCard('online')"
+      >
         <div class="overview-card-label">{{ t('sites.runningNormal') }}</div>
         <div class="overview-card-value">{{ statusCounts.online }}</div>
-        <div class="overview-card-trend">{{ t('sites.statusOnline') }}</div>
+        <div class="overview-card-trend">
+          {{ statusCounts.online > 0 ? t('sites.clickToView') : t('sites.allNormal') }}
+        </div>
       </div>
       <div
         class="overview-card overview-card-warning"
@@ -339,11 +347,15 @@ onMounted(() => {
             />
             <el-tag
               v-if="statusFilter !== 'all'"
-              :type="statusFilter === 'alert' ? 'warning' : 'danger'"
+              :type="statusFilter === 'alert' ? 'warning' : statusFilter === 'offline' ? 'danger' : 'success'"
               closable
               @close="clearStatusFilter"
             >
-              {{ t('sites.filteredLabel') }}：{{ statusFilter === 'alert' ? t('sites.alertSites') : t('sites.offline') }} ✕
+              {{ t('sites.filteredLabel') }}：{{
+                statusFilter === 'alert' ? t('sites.alertSites')
+                : statusFilter === 'offline' ? t('sites.offline')
+                : t('sites.runningNormal')
+              }} ✕
             </el-tag>
           </div>
           <div class="table-actions">
