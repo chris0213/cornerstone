@@ -315,6 +315,7 @@ onMounted(() => {
         border
         height="calc(100vh - 380px)"
         :row-class-name="getRowClass"
+        header-cell-style="font-weight: 700; color: rgba(0, 0, 0, 0.88);"
       >
         <el-table-column prop="name" :label="t('sites.siteName')" min-width="240">
           <template #default="{ row }">
