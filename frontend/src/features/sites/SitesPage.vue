@@ -9,6 +9,7 @@ import { useCrudForm } from '@/lib/useCrudForm'
 import type { Site } from '../../types/domain'
 import { getSites, createSite, updateSite, deleteSite, type SiteResponse } from '../../api/sites'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { Location, Plus, Edit, Delete, Check, Warning, HelpFilled, DocumentCopy, ArrowDown } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
@@ -227,6 +228,19 @@ const openZabbixLink = (siteId: string) => {
   window.open(`#zabbix/site/${siteId}`, '_blank')
 }
 
+// 状态排序权重：告警 > 离线 > 正常（异常优先）
+const statusOrder = (site: Site) => {
+  if (site.status === 'alert') return 0
+  if (site.status === 'offline') return 1
+  return 2
+}
+
+// 跳转专线页并按站点过滤
+const router = useRouter()
+const goToCircuits = (siteId: string | number) => {
+  router.push({ path: '/circuits', query: { siteId: String(siteId) } })
+}
+
 // 复制电话号码到剪贴板
 const copyPhone = async (phone: string) => {
   try {
@@ -357,12 +371,12 @@ onMounted(() => {
         class="sites-table"
         :data="filteredSites"
         style="width: 100%"
-        stripe
         border
         height="calc(100vh - 380px)"
         :row-class-name="getRowClass"
+        :default-sort="{ prop: 'name', order: null }"
       >
-        <el-table-column prop="name" :label="t('sites.siteName')" min-width="240">
+        <el-table-column prop="name" :label="t('sites.siteName')" min-width="240" sortable>
           <template #default="{ row }">
             <div class="site-name-cell">
               <div class="site-name-main">
@@ -372,40 +386,64 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('sites.location')" min-width="200">
+        <el-table-column :label="t('sites.cityRoom')" min-width="200">
           <template #default="{ row }">
             <div class="location-cell">
-              <div class="location-city">{{ row.city }}</div>
-              <div class="location-room">{{ row.room }}</div>
+              <div class="location-city">{{ row.city || '—' }}</div>
+              <div class="location-room">{{ row.room || '—' }}</div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('sites.contact')" min-width="150">
+        <el-table-column :label="t('sites.contact')" min-width="130">
           <template #default="{ row }">
-            {{ row.contact }}
+            <span v-if="row.contact">{{ row.contact }}</span>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('sites.contactPhone')" min-width="150">
           <template #default="{ row }">
-            <div class="phone-cell">
+            <div v-if="row.contactPhone" class="phone-cell">
               <span class="phone-text">{{ row.contactPhone }}</span>
-              <el-icon 
-                class="copy-icon" 
-                @click.stop="copyPhone(row.contactPhone)"
-              >
-                <DocumentCopy />
-              </el-icon>
+              <el-tooltip :content="t('sites.copyAction')" placement="top">
+                <el-icon
+                  class="copy-icon"
+                  @click.stop="copyPhone(row.contactPhone)"
+                >
+                  <DocumentCopy />
+                </el-icon>
+              </el-tooltip>
             </div>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isViewer" :label="t('sites.circuitCount')" min-width="120" align="center">
+        <el-table-column
+          v-if="!isViewer"
+          prop="circuitCountSort"
+          :label="t('sites.circuitCount')"
+          min-width="120"
+          align="center"
+          :sort-method="(a: Site, b: Site) => getCircuitCount(a.id) - getCircuitCount(b.id)"
+        >
           <template #default="{ row }">
-            <el-tag type="info" effect="light">
+            <a
+              v-if="getCircuitCount(row.id) > 0"
+              class="circuit-count-link"
+              :title="t('sites.viewCircuits')"
+              @click.stop="goToCircuits(row.id)"
+            >
               {{ getCircuitCount(row.id) }}
-            </el-tag>
+            </a>
+            <span v-else class="empty-placeholder">{{ t('sites.notConnected') }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('sites.status')" min-width="180" align="center">
+        <el-table-column
+          prop="status"
+          :label="t('sites.status')"
+          min-width="180"
+          align="center"
+          sortable
+          :sort-method="(a: Site, b: Site) => statusOrder(a) - statusOrder(b)"
+        >
           <template #default="{ row }">
             <a
               href="#"
@@ -511,7 +549,7 @@ onMounted(() => {
   background: #fff;
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--el-border-color);
   transition: all 0.2s ease;
 }
 
@@ -556,21 +594,23 @@ onMounted(() => {
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  /* WCAG AA：--el-text-color-regular (#606266) 对白底约 5.9:1 */
+  color: var(--el-text-color-regular);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  /* AA(大文字外)：--el-text-color-secondary (#909399) 对白底约 3.4:1，正文尺寸下加深到 regular */
+  color: var(--el-text-color-secondary);
 }
 
 .table-card {
@@ -641,7 +681,7 @@ onMounted(() => {
 
 .location-room {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
 .contact-cell {
@@ -658,13 +698,36 @@ onMounted(() => {
   gap: 8px;
 }
 
+/* 空值占位：灰色居中破折号，保持行高一致 */
+.empty-placeholder {
+  color: var(--el-text-color-placeholder);
+  font-weight: 400;
+}
+
+/* 电话号码等宽字体，数字对齐 */
 .phone-text {
-  color: #262626;
+  font-family: var(--el-font-family-mono, 'SF Mono', Menlo, Consolas, monospace);
+  color: var(--el-text-color-primary);
   font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+/* 专线数量可点击链接 */
+.circuit-count-link {
+  color: var(--el-color-primary);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  min-width: 24px;
+  display: inline-block;
+}
+
+.circuit-count-link:hover {
+  text-decoration: underline;
 }
 
 .copy-icon {
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   cursor: pointer;
   transition: color 0.2s;
   font-size: 14px;

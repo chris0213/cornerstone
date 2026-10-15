@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
@@ -335,6 +335,9 @@ const loadCircuits = async () => {
 onMounted(async () => {
   await loadSites()
   loadCircuits()
+  // 支持 ?siteId= 查询参数：从站点管理页跳转过来时自动过滤
+  const q = useRoute().query.siteId
+  if (q) filterSiteId.value = String(q)
 })
 </script>
 
