@@ -270,7 +270,12 @@
     "successCount": "Success Count",
     "failedCount": "Failed Count",
     "errorDetails": "Error Details",
-    "startImport": "Start Import"
+    "startImport": "Start Import",
+    "siteName": "Associated Site",
+    "contractTerm": "Contract Term",
+    "notApplicable": "N/A",
+    "columnSettings": "Columns",
+    "selectAll": "Select All"
   },
   "backups": {
     "title": "Backups",

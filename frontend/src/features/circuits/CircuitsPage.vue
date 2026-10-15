@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
@@ -7,7 +7,7 @@ import { applyKeywordFilter } from '@/lib/filters'
 import { useCrudForm } from '@/lib/useCrudForm'
 import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { Plus, Download, Upload, Clock, Warning, WarningFilled, ArrowDown, View, Edit, Document, Delete } from '@element-plus/icons-vue'
+import { Plus, Download, Upload, Clock, Warning, WarningFilled, ArrowDown, View, Edit, Document, Delete, Setting } from '@element-plus/icons-vue'
 import { daysUntil, money, formatDate } from '../../lib/utils'
 import api from '../../api/axios'
 import type { Circuit, Site } from '../../types/domain'
@@ -135,6 +135,44 @@ function getExpiryDisplay(date: string) {
   if (days <= 7) return { text: `${t('circuits.expireDays', { days })}`, type: 'warning', icon: Clock }
   return { text: `${t('circuits.expireRemaining', { days })}`, type: 'info', icon: Clock }
 }
+
+// 带宽显示：≥1000 Mbps 转换为 Gbps
+function formatBandwidth(bandwidth: number | null | undefined): string {
+  if (!bandwidth) return '—'
+  return bandwidth >= 1000 ? `${bandwidth / 1000} Gbps` : `${bandwidth} Mbps`
+}
+
+// 公网 IP：MPLS 专线无公网概念，显示「不适用」
+const isMpls = (type: string) => type === 'MPLS'
+
+// 列设置（localStorage 持久化）
+const COLUMN_STORAGE_KEY = 'circuits_column_settings'
+const columnDefs = [
+  { key: 'site', labelKey: 'circuits.siteName' },
+  { key: 'provider', labelKey: 'circuits.provider' },
+  { key: 'type', labelKey: 'circuits.type' },
+  { key: 'bandwidth', labelKey: 'circuits.bandwidth' },
+  { key: 'publicIp', labelKey: 'circuits.publicIp' },
+  { key: 'contract', labelKey: 'circuits.contractTerm' },
+  { key: 'status', labelKey: 'common.status' },
+  { key: 'monthlyCost', labelKey: 'circuits.monthlyCost' },
+] as const
+type ColumnKey = (typeof columnDefs)[number]['key']
+
+const loadColumnSettings = (): Record<ColumnKey, boolean> => {
+  const defaults = Object.fromEntries(columnDefs.map(c => [c.key, true])) as Record<ColumnKey, boolean>
+  try {
+    const saved = localStorage.getItem(COLUMN_STORAGE_KEY)
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults
+  } catch {
+    return defaults
+  }
+}
+const columnVisible = ref<Record<ColumnKey, boolean>>(loadColumnSettings())
+const showColumnSettings = ref(false)
+watch(columnVisible, (val) => {
+  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(val))
+}, { deep: true })
 
 async function handleSave() {
   if (!form.value.name.trim()) {
@@ -387,7 +425,7 @@ onMounted(async () => {
                 <el-option :label="t('circuits.statusFault')" :value="t('circuits.statusFault')" />
                 <el-option :label="t('circuits.statusDisabled')" :value="t('circuits.statusDisabled')" />
               </el-select>
-              <el-select v-model="filterSiteId" :placeholder="t('sites.title')" clearable style="width: 120px">
+              <el-select v-model="filterSiteId" :placeholder="t('circuits.siteName')" clearable style="width: 120px">
                 <el-option v-for="site in sites" :key="site.id" :label="site.name" :value="site.id" />
               </el-select>
               <el-select v-model="filterExpiry" :placeholder="t('circuits.expiryStatus')" clearable style="width: 120px">
@@ -404,6 +442,29 @@ onMounted(async () => {
             </div>
           </div>
           <div class="table-actions">
+            <el-popover v-model:visible="showColumnSettings" placement="bottom-end" :width="180" trigger="click">
+              <template #reference>
+                <el-button plain>
+                  <el-icon><Setting /></el-icon> {{ t('circuits.columnSettings') }}
+                </el-button>
+              </template>
+              <div class="column-settings">
+                <el-checkbox
+                  :model-value="columnDefs.every(c => columnVisible[c.key])"
+                  :indeterminate="columnDefs.some(c => columnVisible[c.key]) && !columnDefs.every(c => columnVisible[c.key])"
+                  @change="(val: boolean) => columnDefs.forEach(c => columnVisible[c.key] = val)"
+                >
+                  {{ t('circuits.selectAll') }}
+                </el-checkbox>
+                <el-checkbox
+                  v-for="col in columnDefs"
+                  :key="col.key"
+                  v-model="columnVisible[col.key]"
+                >
+                  {{ t(col.labelKey) }}
+                </el-checkbox>
+              </div>
+            </el-popover>
             <el-button v-if="selectedRows.length > 0" type="danger" size="small">{{ t('common.batch') }} ({{ selectedRows.length }})</el-button>
             <el-button type="success" plain @click="handleExport">
               <el-icon><Download /></el-icon> {{ t('common.export') }}
@@ -429,47 +490,84 @@ onMounted(async () => {
         class="circuits-table"
       >
         <el-table-column type="selection" width="50" fixed="left" />
-        <el-table-column prop="name" :label="t('circuits.name')" min-width="160" fixed="left">
+        <el-table-column prop="name" :label="t('circuits.name')" min-width="180" fixed="left" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="circuit-name-cell">
               <div class="circuit-name-main" @click="viewDetail(row)">{{ row.name }}</div>
-              <div class="circuit-name-sub">{{ row.circuitNo }}</div>
+              <div class="circuit-name-sub">{{ row.circuitNo || '—' }}</div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="siteId" :label="t('sites.title')" min-width="100">
-          <template #default="{ row }">{{ siteName(row.siteId) }}</template>
-        </el-table-column>
-        <el-table-column prop="provider" :label="t('circuits.provider')" min-width="100" />
-        <el-table-column prop="type" :label="t('circuits.type')" min-width="110" />
-        <el-table-column prop="bandwidth" :label="t('circuits.bandwidth')" min-width="90">
-          <template #default="{ row }">{{ row.bandwidth }} Mbps</template>
-        </el-table-column>
-        <el-table-column prop="publicIp" :label="t('circuits.publicIp')" min-width="130" show-overflow-tooltip />
-        <el-table-column prop="contractStart" :label="t('circuits.contractStart')" min-width="110">
+        <el-table-column
+          v-if="columnVisible.site"
+          prop="siteId"
+          :label="t('circuits.siteName')"
+          min-width="130"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            <div class="expiry-date">{{ formatDate(row.contractStart) }}</div>
+            <span v-if="row.siteId">{{ siteName(row.siteId) }}</span>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="contractEnd" :label="t('circuits.contractEnd')" min-width="120">
+        <el-table-column v-if="columnVisible.provider" prop="provider" :label="t('circuits.provider')" width="110" show-overflow-tooltip>
           <template #default="{ row }">
-            <div class="expiry-cell">
-              <el-tag :type="getExpiryDisplay(row.contractEnd).type" size="small" effect="dark">
+            <span v-if="row.provider">{{ row.provider }}</span>
+            <span v-else class="empty-placeholder">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="columnVisible.type" prop="type" :label="t('circuits.type')" width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.type">{{ row.type }}</span>
+            <span v-else class="empty-placeholder">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="columnVisible.bandwidth" prop="bandwidth" :label="t('circuits.bandwidth')" width="100" align="right">
+          <template #default="{ row }">
+            <span class="nowrap">{{ formatBandwidth(row.bandwidth) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-if="columnVisible.publicIp"
+          prop="publicIp"
+          :label="t('circuits.publicIp')"
+          width="150"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            <span v-if="isMpls(row.type)" class="empty-placeholder">{{ t('circuits.notApplicable') }}</span>
+            <span v-else-if="row.publicIp" class="ip-text">{{ row.publicIp }}</span>
+            <span v-else class="empty-placeholder">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="columnVisible.contract" prop="contractEnd" :label="t('circuits.contractTerm')" width="210">
+          <template #default="{ row }">
+            <div v-if="row.contractStart || row.contractEnd" class="contract-cell">
+              <div class="contract-range nowrap">
+                {{ row.contractStart ? formatDate(row.contractStart) : '—' }} ~ {{ row.contractEnd ? formatDate(row.contractEnd) : '—' }}
+              </div>
+              <el-tag
+                v-if="row.contractEnd"
+                :type="getExpiryDisplay(row.contractEnd).type"
+                size="small"
+                effect="dark"
+              >
                 <el-icon><component :is="getExpiryDisplay(row.contractEnd).icon" /></el-icon>
                 {{ getExpiryDisplay(row.contractEnd).text }}
               </el-tag>
-              <div class="expiry-date">{{ formatDate(row.contractEnd) }}</div>
             </div>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" :label="t('common.status')" min-width="80">
+        <el-table-column v-if="columnVisible.status" prop="status" :label="t('common.status')" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" effect="dark">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="monthlyCost" :label="t('circuits.monthlyCost')" min-width="140" class-name="cost-column">
+        <el-table-column v-if="columnVisible.monthlyCost" prop="monthlyCost" :label="t('circuits.monthlyCost')" width="120" align="right" class-name="cost-column">
           <template #default="{ row }">
-            <span class="cost-value">¥{{ money(row.monthlyCost) }}</span>
+            <span v-if="row.monthlyCost != null" class="cost-value nowrap">¥{{ money(row.monthlyCost) }}</span>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('common.actions')" width="110" fixed="right">
@@ -806,7 +904,44 @@ onMounted(async () => {
 
 .circuit-name-sub {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
+}
+
+/* 合同期限列：日期区间 + 到期 tag */
+.contract-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.contract-range {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+/* 公网 IP 等宽，便于对齐阅读 */
+.ip-text {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+}
+
+/* 空值占位：灰色 em dash */
+.empty-placeholder {
+  color: var(--el-text-color-placeholder);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* 列设置面板 */
+.column-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .expiry-cell {
@@ -818,7 +953,7 @@ onMounted(async () => {
 
 .expiry-date {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
 .cost-value {

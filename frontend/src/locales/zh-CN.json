@@ -310,7 +310,12 @@
     "importFailedGeneral": "导入失败",
     "templateDownloadFailed": "模板下载失败",
     "circuitImportTemplate": "专线导入模板",
-    "circuitList": "专线列表"
+    "circuitList": "专线列表",
+    "siteName": "所属站点",
+    "contractTerm": "合同期限",
+    "notApplicable": "不适用",
+    "columnSettings": "列设置",
+    "selectAll": "全选"
   },
   "backups": {
     "title": "配置备份",
