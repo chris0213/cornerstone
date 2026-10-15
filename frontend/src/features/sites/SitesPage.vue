@@ -5,12 +5,11 @@ import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
-import { confirmAndRun } from '@/lib/confirm'
 import { useCrudForm } from '@/lib/useCrudForm'
 import type { Site } from '../../types/domain'
 import { getSites, createSite, updateSite, deleteSite, type SiteResponse } from '../../api/sites'
-import { ElMessage } from 'element-plus'
-import { Location, Plus, Edit, Delete, Check, Warning, HelpFilled, DocumentCopy } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Location, Plus, Edit, Delete, Check, Warning, HelpFilled, DocumentCopy, ArrowDown } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
 
@@ -149,36 +148,53 @@ const handleSave = async () => {
   }
 }
 
+// 操作列「更多」下拉命令分发
+const handleCommand = (cmd: string, site: Site) => {
+  if (cmd === 'delete') handleDelete(site)
+}
+
 const handleDelete = async (site: Site) => {
   const circuitCount = getCircuitCount(String(site.id))
   if (circuitCount > 0) {
-    ElMessage.warning(t('sites.deleteCircuitFirst'))
+    ElMessage.warning(t('sites.deleteBlockedTip', { count: circuitCount }))
     return
   }
 
-  await confirmAndRun({
-    message: t('sites.confirmDelete', { name: site.name }),
-    title: t('sites.deleteConfirmTitle'),
-    confirmText: t('sites.deleteButton'),
-    cancelText: t('sites.cancelButton'),
-    action: async () => {
-      await deleteSite(site.id as number)
-      sites.value = sites.value.filter(s => s.id !== site.id)
+  // 二次确认：明确要求点击「确认删除」
+  try {
+    await ElMessageBox.confirm(
+      t('sites.confirmDelete', { name: site.name }),
+      t('sites.deleteConfirmTitle'),
+      {
+        confirmButtonText: t('sites.confirmDeleteButton'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
 
-      // 添加操作日志
-      store.addAuditLog({
-        user: authStore.user?.username || 'system',
-        action: t('sites.deleteSite'),
-        resource: t('sites.siteManagement'),
-        detail: `${t('sites.deleteSite')}: ${site.name}`,
-        ipAddress: null,
-        createdAt: new Date().toISOString(),
-        success: 'true'
-      })
-    },
-    successMessage: t('sites.deleteSuccess'),
-    errorMessage: t('sites.deleteFailed'),
-  })
+  try {
+    await deleteSite(site.id as number)
+    sites.value = sites.value.filter(s => s.id !== site.id)
+    ElMessage.success(t('sites.deleteSuccess'))
+
+    // 添加操作日志
+    store.addAuditLog({
+      user: authStore.user?.username || 'system',
+      action: t('sites.deleteSite'),
+      resource: t('sites.siteManagement'),
+      detail: `${t('sites.deleteSite')}: ${site.name}`,
+      ipAddress: null,
+      createdAt: new Date().toISOString(),
+      success: 'true'
+    })
+  } catch (error) {
+    console.error('Failed to delete site:', error)
+    ElMessage.error(t('sites.deleteFailed'))
+  }
 }
 
 const getCircuitCount = (siteId: string | number) => {
@@ -403,22 +419,37 @@ onMounted(() => {
             </a>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isViewer" :label="t('common.actions')" width="180" fixed="right" align="center">
+        <el-table-column v-if="!isViewer" :label="t('common.actions')" width="200" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEditDialog(row)">
-              <el-icon><Edit /></el-icon>
-              {{ t('common.edit') }}
-            </el-button>
-            <el-button 
-              link 
-              type="danger" 
-              size="small" 
-              :disabled="getCircuitCount(row.id) > 0"
-              @click="handleDelete(row)"
-            >
-              <el-icon><Delete /></el-icon>
-              {{ t('common.delete') }}
-            </el-button>
+            <div class="actions-cell">
+              <el-button link type="primary" size="small" @click="openEditDialog(row)">
+                <el-icon><Edit /></el-icon>
+                {{ t('common.edit') }}
+              </el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleCommand(cmd, row)">
+                <el-button link type="primary" size="small">
+                  {{ t('common.more') }}
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-tooltip
+                      :content="t('sites.deleteBlockedTip', { count: getCircuitCount(row.id) })"
+                      :disabled="getCircuitCount(row.id) === 0"
+                      placement="left"
+                    >
+                      <el-dropdown-item
+                        command="delete"
+                        :disabled="getCircuitCount(row.id) > 0"
+                      >
+                        <el-icon><Delete /></el-icon>
+                        {{ t('common.delete') }}
+                      </el-dropdown-item>
+                    </el-tooltip>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -563,6 +594,12 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.actions-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .skeleton-item {

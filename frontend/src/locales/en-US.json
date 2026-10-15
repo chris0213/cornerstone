@@ -626,6 +626,8 @@
     "alertSites": "Alert Sites",
     "navigateToAlerts": "Go to Alert Center",
     "deleteButton": "Delete",
+    "confirmDeleteButton": "Confirm Delete",
+    "deleteBlockedTip": "This site has {count} circuit(s). Unlink them first.",
     "cancelButton": "Cancel",
     "deleteConfirmTitle": "Confirm Delete",
     "deleteCircuitFirst": "Unlink associated circuits first",
