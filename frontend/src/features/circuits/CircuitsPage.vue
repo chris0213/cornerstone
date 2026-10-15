@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
@@ -276,13 +276,18 @@ async function handleRenew() {
 }
 
 // 合计行：合同内月租 / 已到期未续约月租（口径 = 当前筛选结果）
+// 返回 VNode 实现两行显示；已到期行红色、金额为 0 不显示
 function summaryMethod({ columns, data }: { columns: any[]; data: Circuit[] }) {
   return columns.map((col, index) => {
     if (index === 1) return t('circuits.grandTotal')
     if (col.property === 'monthlyCost') {
       const inContract = data.filter(c => getContractState(c) !== 'expired').reduce((s, c) => s + (c.monthlyCost || 0), 0)
       const expiredPart = data.filter(c => getContractState(c) === 'expired').reduce((s, c) => s + (c.monthlyCost || 0), 0)
-      return `${t('circuits.contractInTotal')} ¥${money(inContract)}\n${t('circuits.expiredUnrenewed')} ¥${money(expiredPart)}`
+      const lines = [h('div', { class: 'summary-line' }, `${t('circuits.contractInTotal')} ¥${money(inContract)}`)]
+      if (expiredPart > 0) {
+        lines.push(h('div', { class: 'summary-line summary-line-expired' }, `${t('circuits.expiredUnrenewed')} ¥${money(expiredPart)}`))
+      }
+      return h('div', { class: 'summary-cost' }, lines)
     }
     return ''
   })
@@ -1246,6 +1251,12 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+/* 合计行月租列不吃上面的 nowrap，两行各自不折行 */
+.circuits-table :deep(.el-table__footer .cost-column .cell) {
+  white-space: normal;
+  overflow: visible;
+}
+
 .circuits-table :deep(.cost-column .cell .cost-value) {
   display: inline-block;
   white-space: nowrap;
@@ -1326,12 +1337,22 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-/* 合计行月租列：两行显示（合同内 / 已到期未续约），不截断 */
-.circuits-table :deep(.cost-column.el-table__footer .cell) {
-  white-space: pre-line;
-  overflow: visible;
-  text-overflow: clip;
-  line-height: 1.6;
+/* 合计行月租列：VNode 两行显示（合同内 / 已到期未续约），行高自适应，不截断 */
+.circuits-table :deep(.el-table__footer .summary-cost) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.circuits-table :deep(.el-table__footer .summary-line) {
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+/* 已到期未续约行：红色，与逾期标签一致 */
+.circuits-table :deep(.el-table__footer .summary-line-expired) {
+  color: var(--el-color-danger);
 }
 
 /* 续约按钮 */
