@@ -101,6 +101,13 @@ const expiryCount = computed(() => expiringCircuits.value.length)
 const expiredCost = computed(() => expiredCircuits.value.reduce((sum, c) => sum + (c.monthlyCost || 0), 0))
 const totalCost = computed(() => circuits.value.reduce((sum, c) => sum + (c.monthlyCost || 0), 0))
 const activeCost = computed(() => totalCost.value - expiredCost.value)
+// 即将到期（0~30 天，含今日到期）这批专线的月租合计
+const expiringCost = computed(() => expiringCircuits.value.reduce((sum, c) => sum + (c.monthlyCost || 0), 0))
+
+// 卡片金额用整数显示，避免小数换行
+function moneyInt(value: number): string {
+  return Math.round(value).toLocaleString()
+}
 
 // 卡片联动筛选：expired / fault / expiring
 const quickFilter = ref<'' | 'expired' | 'fault' | 'expiring'>('')
@@ -275,7 +282,7 @@ function summaryMethod({ columns, data }: { columns: any[]; data: Circuit[] }) {
     if (col.property === 'monthlyCost') {
       const inContract = data.filter(c => getContractState(c) !== 'expired').reduce((s, c) => s + (c.monthlyCost || 0), 0)
       const expiredPart = data.filter(c => getContractState(c) === 'expired').reduce((s, c) => s + (c.monthlyCost || 0), 0)
-      return `${t('circuits.contractInTotal')} ¥${money(inContract)} / ${t('circuits.expiredUnrenewed')} ¥${money(expiredPart)}`
+      return `${t('circuits.contractInTotal')} ¥${money(inContract)}\n${t('circuits.expiredUnrenewed')} ¥${money(expiredPart)}`
     }
     return ''
   })
@@ -290,8 +297,8 @@ function formatBandwidth(bandwidth: number | null | undefined): string {
 // 公网 IP：MPLS 专线无公网概念，显示「不适用」
 const isMpls = (type: string) => type === 'MPLS'
 
-// 列设置（localStorage 持久化）
-const COLUMN_STORAGE_KEY = 'circuits_column_settings'
+// 列设置（localStorage 持久化）；v2：旧 key 残留过 site:false 导致「所属站点」列被隐藏，升级 key 重置
+const COLUMN_STORAGE_KEY = 'circuits_column_settings_v2'
 const columnDefs = [
   { key: 'site', labelKey: 'circuits.siteName' },
   { key: 'provider', labelKey: 'circuits.provider' },
@@ -553,7 +560,7 @@ onMounted(async () => {
       >
         <div class="overview-card-label">{{ t('circuits.expiredUnrenewed') }}</div>
         <div class="overview-card-value">{{ expiredCount }}</div>
-        <div class="overview-card-trend">{{ expiredCount > 0 ? `¥${money(expiredCost)}/月` : t('circuits.none') }}</div>
+        <div class="overview-card-trend">{{ expiredCount > 0 ? `¥${moneyInt(expiredCost)}/月` : t('circuits.none') }}</div>
       </div>
       <div
         class="overview-card overview-card-warning"
@@ -562,12 +569,12 @@ onMounted(async () => {
       >
         <div class="overview-card-label">{{ t('circuits.expiring') }}</div>
         <div class="overview-card-value">{{ expiryCount }}</div>
-        <div class="overview-card-trend">{{ expiryCount > 0 ? t('circuits.days30') : t('circuits.none') }}</div>
+        <div class="overview-card-trend">{{ expiryCount > 0 ? `${t('circuits.contractInTotal')} ¥${moneyInt(expiringCost)}` : t('circuits.none') }}</div>
       </div>
       <div class="overview-card overview-card-blue">
-        <div class="overview-card-label">{{ t('circuits.monthlyCost') }}</div>
-        <div class="overview-card-value">¥{{ money(activeCost) }}</div>
-        <div class="overview-card-trend">{{ expiredCount > 0 ? t('circuits.expiredCostNote', { cost: money(expiredCost) }) : t('circuits.monthlyFee') }}</div>
+        <div class="overview-card-label">{{ t('circuits.activeMonthlyCost') }}</div>
+        <div class="overview-card-value">¥{{ moneyInt(activeCost) }}</div>
+        <div class="overview-card-trend">{{ expiredCount > 0 ? t('circuits.expiredCostNote', { cost: moneyInt(expiredCost) }) : t('circuits.monthlyFee') }}</div>
       </div>
     </div>
 
@@ -703,21 +710,23 @@ onMounted(async () => {
             <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="columnVisible.bandwidth" prop="bandwidth" :label="t('circuits.bandwidth')" width="110" align="right" sortable :sort-method="(a: Circuit, b: Circuit) => (a.bandwidth || 0) - (b.bandwidth || 0)">
+        <el-table-column v-if="columnVisible.bandwidth" prop="bandwidth" :label="t('circuits.bandwidth')" width="130" align="right" sortable :sort-method="(a: Circuit, b: Circuit) => (a.bandwidth || 0) - (b.bandwidth || 0)">
           <template #default="{ row }">
-            <span class="nowrap">{{ formatBandwidth(row.bandwidth) }}</span>
+            <el-tooltip :content="formatBandwidth(row.bandwidth)" :disabled="formatBandwidth(row.bandwidth) === '—'" placement="top">
+              <span class="nowrap">{{ formatBandwidth(row.bandwidth) }}</span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column
           v-if="columnVisible.publicIp"
           prop="publicIp"
           :label="t('circuits.publicIp')"
-          width="150"
+          width="180"
           show-overflow-tooltip
         >
           <template #default="{ row }">
             <span v-if="isMpls(row.type)" class="empty-placeholder">{{ t('circuits.notApplicable') }}</span>
-            <span v-else-if="row.publicIp" class="ip-text">{{ row.publicIp }}</span>
+            <span v-else-if="row.publicIp" class="ip-text nowrap">{{ row.publicIp }}</span>
             <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
@@ -754,7 +763,7 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="columnVisible.monthlyCost" prop="monthlyCost" :label="t('circuits.monthlyCost')" width="130" align="right" class-name="cost-column" sortable :sort-method="(a: Circuit, b: Circuit) => (a.monthlyCost || 0) - (b.monthlyCost || 0)">
+        <el-table-column v-if="columnVisible.monthlyCost" prop="monthlyCost" :label="t('circuits.monthlyCost')" width="170" align="right" class-name="cost-column" sortable :sort-method="(a: Circuit, b: Circuit) => (a.monthlyCost || 0) - (b.monthlyCost || 0)">
           <template #default="{ row }">
             <span v-if="row.monthlyCost != null" class="cost-value nowrap">¥{{ money(row.monthlyCost) }}</span>
             <span v-else class="empty-placeholder">—</span>
@@ -762,37 +771,39 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column :label="t('common.actions')" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button
-              v-if="getContractState(row) === 'expired'"
-              type="danger"
-              size="small"
-              class="renew-button"
-              @click="openRenewDialog(row)"
-            >
-              {{ t('circuits.renew') }}
-            </el-button>
-            <el-dropdown trigger="click">
-              <el-button link type="primary" size="small">
-                {{ t('common.more') }}
-                <el-icon><ArrowDown /></el-icon>
+            <div class="actions-cell">
+              <el-button
+                v-if="getContractState(row) === 'expired'"
+                type="danger"
+                size="small"
+                class="renew-button"
+                @click="openRenewDialog(row)"
+              >
+                {{ t('circuits.renew') }}
               </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="viewDetail(row)">
-                    <el-icon><View /></el-icon> {{ t('common.view') }}
-                  </el-dropdown-item>
-                  <el-dropdown-item @click="openEditDialog(row)">
-                    <el-icon><Edit /></el-icon> {{ t('common.edit') }}
-                  </el-dropdown-item>
-                  <el-dropdown-item @click="viewChangeRecords(row)">
-                    <el-icon><Document /></el-icon> {{ t('circuits.changeRecords') }}
-                  </el-dropdown-item>
-                  <el-dropdown-item divided @click="handleDelete(row)">
-                    <el-icon><Delete /></el-icon> {{ t('common.delete') }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+              <el-dropdown trigger="click">
+                <el-button link type="primary" size="small">
+                  {{ t('common.more') }}
+                  <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item @click="viewDetail(row)">
+                      <el-icon><View /></el-icon> {{ t('common.view') }}
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="openEditDialog(row)">
+                      <el-icon><Edit /></el-icon> {{ t('common.edit') }}
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="viewChangeRecords(row)">
+                      <el-icon><Document /></el-icon> {{ t('circuits.changeRecords') }}
+                    </el-dropdown-item>
+                    <el-dropdown-item divided @click="handleDelete(row)">
+                      <el-icon><Delete /></el-icon> {{ t('common.delete') }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -1146,6 +1157,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding-right: 8px;
 }
 
 .circuit-name-main {
@@ -1314,9 +1326,25 @@ onMounted(async () => {
   font-size: 13px;
 }
 
+/* 合计行月租列：两行显示（合同内 / 已到期未续约），不截断 */
+.circuits-table :deep(.cost-column.el-table__footer .cell) {
+  white-space: pre-line;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.6;
+}
+
 /* 续约按钮 */
 .renew-button {
   margin-right: 8px;
+}
+
+/* 操作列：续约靠左、「更多」靠右固定，保证「更多」位置一致 */
+.actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  white-space: nowrap;
 }
 
 @media (max-width: 1024px) {

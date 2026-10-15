@@ -288,7 +288,8 @@
     "expiredUnrenewed": "Expired / Unrenewed",
     "contractValid": "Valid",
     "none": "None",
-    "expiredCostNote": "Plus ¥{cost} expired / unrenewed"
+    "expiredCostNote": "Plus ¥{cost} expired / unrenewed",
+    "activeMonthlyCost": "Active Monthly Cost"
   },
   "backups": {
     "title": "Backups",

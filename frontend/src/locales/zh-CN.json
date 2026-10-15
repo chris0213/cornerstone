@@ -328,7 +328,8 @@
     "expiredUnrenewed": "已到期未续约",
     "contractValid": "有效",
     "none": "无",
-    "expiredCostNote": "另有 ¥{cost} 已到期未续约"
+    "expiredCostNote": "另有 ¥{cost} 已到期未续约",
+    "activeMonthlyCost": "合同内月租"
   },
   "backups": {
     "title": "配置备份",
