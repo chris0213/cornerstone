@@ -275,7 +275,20 @@
     "contractTerm": "Contract Term",
     "notApplicable": "N/A",
     "columnSettings": "Columns",
-    "selectAll": "Select All"
+    "selectAll": "Select All",
+    "overdueDays": "Overdue {days} days",
+    "expiredStillNormal": "Contract expired {days} days ago, circuit still in use. Please renew or disable it",
+    "renew": "Renew",
+    "renewDateInvalid": "New end date must be later than the contract start date",
+    "renewStillExpired": "Note: new end date is earlier than today. The circuit will remain in \"Expired\" state after saving",
+    "renewSuccess": "Renewed successfully",
+    "renewFailed": "Renewal failed",
+    "grandTotal": "Total",
+    "contractInTotal": "In contract",
+    "expiredUnrenewed": "Expired / Unrenewed",
+    "contractValid": "Valid",
+    "none": "None",
+    "expiredCostNote": "Plus ¥{cost} expired / unrenewed"
   },
   "backups": {
     "title": "Backups",

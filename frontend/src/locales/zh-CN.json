@@ -315,7 +315,20 @@
     "contractTerm": "合同期限",
     "notApplicable": "不适用",
     "columnSettings": "列设置",
-    "selectAll": "全选"
+    "selectAll": "全选",
+    "overdueDays": "已逾期 {days} 天",
+    "expiredStillNormal": "合同已到期 {days} 天，专线仍在使用，请尽快续约或停用",
+    "renew": "续约",
+    "renewDateInvalid": "新到期日必须晚于合同开始日期",
+    "renewStillExpired": "注意：新到期日早于今天，保存后该专线仍为「已到期未续约」状态",
+    "renewSuccess": "续约成功",
+    "renewFailed": "续约失败",
+    "grandTotal": "合计",
+    "contractInTotal": "合同内",
+    "expiredUnrenewed": "已到期未续约",
+    "contractValid": "有效",
+    "none": "无",
+    "expiredCostNote": "另有 ¥{cost} 已到期未续约"
   },
   "backups": {
     "title": "配置备份",
