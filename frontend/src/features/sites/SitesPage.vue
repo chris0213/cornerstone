@@ -19,7 +19,7 @@ const authStore = useAuthStore()
 const { circuits } = storeToRefs(store)
 const sites = ref<Site[]>([])
 const searchQuery = ref('')
-const statusFilter = ref<'all' | 'alert'>('all')
+const statusFilter = ref<'all' | 'alert' | 'offline'>('all')
 const loading = ref(false)
 
 const isViewer = computed(() => authStore.isReadOnly())
@@ -52,15 +52,30 @@ const filteredSites = computed(() => {
   // 状态过滤
   if (statusFilter.value === 'alert') {
     items = items.filter(site => site.status === 'alert')
+  } else if (statusFilter.value === 'offline') {
+    items = items.filter(site => site.status === 'offline')
   }
 
   // 搜索过滤
   return applyKeywordFilter(items, searchQuery.value, ['name', 'location', 'contact'])
 })
 
-const alertSiteCount = computed(() => {
-  return sites.value.filter(s => s.status === 'alert').length
-})
+// 顶部统计卡片：基于表格数据计算
+const statusCounts = computed(() => ({
+  total: sites.value.length,
+  online: sites.value.filter(s => s.status === 'online').length,
+  alert: sites.value.filter(s => s.status === 'alert').length,
+  offline: sites.value.filter(s => s.status === 'offline').length,
+}))
+
+const clickCard = (type: 'alert' | 'offline') => {
+  if (statusCounts.value[type] === 0) return
+  statusFilter.value = statusFilter.value === type ? 'all' : type
+}
+
+const clearStatusFilter = () => {
+  statusFilter.value = 'all'
+}
 
 const handleSave = async () => {
   if (!form.value.name?.trim()) {
@@ -178,26 +193,22 @@ const getStatusInfo = (status: string, alertCount: number) => {
     case 'online':
       return { text: t('sites.runningNormal'), type: 'success', icon: Check }
     case 'alert':
-      return { text: t('sites.hasAlert', { count: alertCount }), type: 'danger', icon: Warning }
+      return { text: t('sites.hasAlert', { count: alertCount }), type: 'warning', icon: Warning }
     case 'offline':
-      return { text: t('sites.offline'), type: 'info', icon: HelpFilled }
+      return { text: t('sites.offline'), type: 'danger', icon: HelpFilled }
     default:
       return { text: t('sites.unknown'), type: 'info', icon: HelpFilled }
   }
 }
 
 const getRowClass = ({ row }: { row: Site }) => {
-  return row.status === 'alert' ? 'alert-row' : ''
+  if (row.status === 'alert') return 'row-status-alert'
+  if (row.status === 'offline') return 'row-status-offline'
+  return ''
 }
 
 const openZabbixLink = (siteId: string) => {
   window.open(`#zabbix/site/${siteId}`, '_blank')
-}
-
-// 点击告警卡片，跳转到告警中心并过滤告警站点
-const handleAlertCardClick = () => {
-  console.log(t('sites.navigateToAlerts'))
-  statusFilter.value = 'alert'
 }
 
 // 复制电话号码到剪贴板
@@ -246,23 +257,42 @@ onMounted(() => {
 <template>
   <div class="sites-page">
     <div class="overview-cards">
-      <div class="overview-card">
+      <div class="overview-card overview-card-total">
         <div class="overview-card-label">{{ t('sites.totalSites') }}</div>
-        <div class="overview-card-value">{{ sites.length }}</div>
+        <div class="overview-card-value">{{ statusCounts.total }}</div>
         <div class="overview-card-trend">{{ t('sites.allSites') }}</div>
+      </div>
+      <div class="overview-card overview-card-success">
+        <div class="overview-card-label">{{ t('sites.runningNormal') }}</div>
+        <div class="overview-card-value">{{ statusCounts.online }}</div>
+        <div class="overview-card-trend">{{ t('sites.statusOnline') }}</div>
+      </div>
+      <div
+        class="overview-card overview-card-warning"
+        :class="{ clickable: statusCounts.alert > 0, disabled: statusCounts.alert === 0 }"
+        @click="clickCard('alert')"
+      >
+        <div class="overview-card-label">{{ t('sites.alertSites') }}</div>
+        <div class="overview-card-value">{{ statusCounts.alert }}</div>
+        <div class="overview-card-trend">
+          {{ statusCounts.alert > 0 ? t('sites.clickToView') : t('sites.allNormal') }}
+        </div>
+      </div>
+      <div
+        class="overview-card overview-card-danger"
+        :class="{ clickable: statusCounts.offline > 0, disabled: statusCounts.offline === 0 }"
+        @click="clickCard('offline')"
+      >
+        <div class="overview-card-label">{{ t('sites.offline') }}</div>
+        <div class="overview-card-value">{{ statusCounts.offline }}</div>
+        <div class="overview-card-trend">
+          {{ statusCounts.offline > 0 ? t('sites.clickToView') : t('sites.allNormal') }}
+        </div>
       </div>
       <div class="overview-card overview-card-blue">
         <div class="overview-card-label">{{ t('sites.assignedCircuits') }}</div>
         <div class="overview-card-value">{{ circuits.length }}</div>
         <div class="overview-card-trend">{{ t('sites.totalCircuits') }}</div>
-      </div>
-      <div 
-        class="overview-card overview-card-warning clickable"
-        @click="handleAlertCardClick"
-      >
-        <div class="overview-card-label">{{ t('sites.alertSites') }}</div>
-        <div class="overview-card-value">{{ alertSiteCount }}</div>
-        <div class="overview-card-trend">{{ t('sites.clickToView') }}</div>
       </div>
     </div>
 
@@ -277,13 +307,13 @@ onMounted(() => {
               clearable
               style="width: 320px"
             />
-            <el-tag 
-              v-if="statusFilter === 'alert'" 
-              type="danger" 
-              closable 
-              @close="statusFilter = 'all'"
+            <el-tag
+              v-if="statusFilter !== 'all'"
+              :type="statusFilter === 'alert' ? 'warning' : 'danger'"
+              closable
+              @close="clearStatusFilter"
             >
-              {{ t('sites.showAlertOnly') }}
+              {{ t('sites.filteredLabel') }}：{{ statusFilter === 'alert' ? t('sites.alertSites') : t('sites.offline') }} ✕
             </el-tag>
           </div>
           <div class="table-actions">
@@ -361,14 +391,12 @@ onMounted(() => {
         </el-table-column>
         <el-table-column :label="t('sites.status')" min-width="180" align="center">
           <template #default="{ row }">
-            <a 
-              href="#" 
+            <a
+              href="#"
               class="status-link"
               @click.prevent="openZabbixLink(row.id)"
             >
-              <el-icon :class="`status-icon status-${getStatusInfo(row.status, row.alertCount).type}`">
-                <component :is="getStatusInfo(row.status, row.alertCount).icon" />
-              </el-icon>
+              <span :class="`status-dot status-${getStatusInfo(row.status, row.alertCount).type}`" />
               <span :class="`status-text status-${getStatusInfo(row.status, row.alertCount).type}`">
                 {{ getStatusInfo(row.status, row.alertCount).text }}
               </span>
@@ -444,7 +472,7 @@ onMounted(() => {
 
 .overview-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 16px;
 }
 
@@ -469,13 +497,30 @@ onMounted(() => {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
 
-.overview-card-blue { border-left-color: #1890ff; }
-.overview-card-warning { 
-  border-left-color: #faad14; 
-  background: linear-gradient(135deg, #fff7ed 0%, #fff 100%);
+.overview-card.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.overview-card-total { border-left-color: var(--el-color-info-light-5); }
+.overview-card-success {
+  border-left-color: var(--el-color-success);
+}
+.overview-card-success .overview-card-value { color: var(--el-color-success); }
+.overview-card-blue { border-left-color: var(--el-color-primary); }
+.overview-card-warning {
+  border-left-color: var(--el-color-warning);
+  background: linear-gradient(135deg, var(--el-color-warning-light-9) 0%, #fff 100%);
 }
 .overview-card-warning .overview-card-value {
-  color: #d46b08;
+  color: var(--el-color-warning-dark-2);
+}
+.overview-card-danger {
+  border-left-color: var(--el-color-danger);
+  background: linear-gradient(135deg, var(--el-color-danger-light-9) 0%, #fff 100%);
+}
+.overview-card-danger .overview-card-value {
+  color: var(--el-color-danger);
 }
 
 .overview-card-label {
@@ -595,11 +640,24 @@ onMounted(() => {
 .status-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   cursor: pointer;
   color: inherit;
   text-decoration: none;
 }
+
+/* 状态圆点 */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.status-success { background: var(--el-color-success); }
+.status-dot.status-warning { background: var(--el-color-warning); }
+.status-dot.status-danger { background: var(--el-color-danger); }
+.status-dot.status-info { background: var(--el-color-info-light-3); }
 
 .status-link:hover .status-text {
   text-decoration: underline;
@@ -610,15 +668,19 @@ onMounted(() => {
 }
 
 .status-icon.status-success {
-  color: #52c41a;
+  color: var(--el-color-success);
 }
 
 .status-icon.status-danger {
-  color: #ff4d4f;
+  color: var(--el-color-danger);
+}
+
+.status-icon.status-warning {
+  color: var(--el-color-warning);
 }
 
 .status-icon.status-info {
-  color: #bfbfbf;
+  color: var(--el-color-info-light-3);
 }
 
 .status-text {
@@ -626,23 +688,28 @@ onMounted(() => {
 }
 
 .status-text.status-success {
-  color: #52c41a;
+  color: var(--el-color-success);
 }
 
 .status-text.status-danger {
-  color: #ff4d4f;
+  color: var(--el-color-danger);
+}
+
+.status-text.status-warning {
+  color: var(--el-color-warning-dark-2);
 }
 
 .status-text.status-info {
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
-.el-table .alert-row {
-  background-color: #fff5f5 !important;
+/* 告警/离线行左侧 3px 色条 */
+.sites-table :deep(.row-status-alert td.el-table__cell:first-child) {
+  border-left: 3px solid var(--el-color-warning);
 }
 
-.el-table .alert-row:hover {
-  background-color: #fff1f0 !important;
+.sites-table :deep(.row-status-offline td.el-table__cell:first-child) {
+  border-left: 3px solid var(--el-color-danger);
 }
 
 .sites-table :deep(.cell) {
