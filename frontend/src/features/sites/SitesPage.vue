@@ -649,6 +649,12 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+/* 表头加粗，与数据行区分 */
+.sites-table :deep(.el-table__header .cell) {
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.88);
+}
+
 .sites-table :deep(.el-table__cell) {
   padding: 8px 12px;
 }
