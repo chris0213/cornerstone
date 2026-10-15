@@ -355,7 +355,7 @@ onMounted(() => {
                 statusFilter === 'alert' ? t('sites.alertSites')
                 : statusFilter === 'offline' ? t('sites.offline')
                 : t('sites.runningNormal')
-              }} ✕
+              }}
             </el-tag>
           </div>
           <div class="table-actions">
