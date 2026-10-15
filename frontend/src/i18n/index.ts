@@ -14,6 +14,14 @@ export const i18n = createI18n({
   legacy: false, // 使用 Composition API 模式
   locale: 'zh-CN', // 始终默认中文
   fallbackLocale: 'zh-CN',
+  // 缺失 key：开发环境 console.warn 提醒，避免把 key 裸露给用户
+  missing(locale, key) {
+    if (import.meta.env.DEV) {
+      console.warn(`[i18n] missing key "${key}" in locale "${locale}"`)
+    }
+    // 返回 key 的最后一段（如 sites.hasAlert → hasAlert），比整条 key 路径更可读
+    return key.split('.').pop() || key
+  },
   messages: {
     'zh-CN': zhCN,
     'en-US': enUS

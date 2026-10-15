@@ -831,6 +831,7 @@
     "offline": "离线",
     "unknown": "未知",
     "runningNormal": "运行正常",
+    "hasAlert": "存在告警 ({count})",
     "nameRequired": "请输入站点名称",
     "cityRequired": "请输入城市",
     "enterName": "请输入站点名称",
