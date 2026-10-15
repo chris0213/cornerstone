@@ -226,8 +226,9 @@ const getRowClass = ({ row }: { row: Site }) => {
   return ''
 }
 
-const openZabbixLink = (siteId: string) => {
-  window.open(`#zabbix/site/${siteId}`, '_blank')
+// 状态列点击：跳转告警中心查看相关告警
+const openZabbixLink = () => {
+  router.push('/alerts')
 }
 
 // 状态排序权重：告警 > 离线 > 正常（异常优先）
@@ -460,7 +461,7 @@ onMounted(() => {
             <a
               href="#"
               class="status-link"
-              @click.prevent="openZabbixLink(row.id)"
+              @click.prevent="openZabbixLink()"
             >
               <span :class="`status-dot status-${getStatusInfo(row.status, row.alertCount).type}`" />
               <span :class="`status-text status-${getStatusInfo(row.status, row.alertCount).type}`">
