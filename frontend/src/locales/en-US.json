@@ -509,7 +509,19 @@
     "broadcastAddress": "Broadcast Address",
     "firstUsable": "First Usable",
     "lastUsable": "Last Usable",
-    "vlans": "VLAN Management"
+    "vlans": "VLAN Management",
+    "filterBySite": "Filter by site",
+    "onlyUnassigned": "Unassigned only",
+    "assignedOfCapacity": "Assigned / Total capacity: {used} / {total}",
+    "highUsageSubnets": "High-Usage Subnets",
+    "highUsageThreshold": "Usage ≥70%",
+    "noSiteSubnets": "Subnets Without Site",
+    "noSiteHint": "Click to filter",
+    "noSiteNone": "None",
+    "noSiteTag": "No Site",
+    "idle": "Idle",
+    "vlanDisplay": "VLAN {vid}",
+    "usageLabel": "Usage"
   },
   "topology": {
     "title": "Network Topology",

@@ -67,7 +67,10 @@ onMounted(() => {
 const activeTab = ref('prefixes')
 const searchPrefixQuery = ref('')
 const searchIPQuery = ref('')
-const selectedSiteFilter = ref<number | null>(null)
+// 站点下拉「仅看未归属」的哨兵值（下拉 value 只能是 number | string）
+const NO_SITE_FILTER = '__nosite__'
+const selectedSiteFilter = ref<number | typeof NO_SITE_FILTER | null>(null)
+
 const showPrefixDialog = ref(false)
 const showIPDialog = ref(false)
 const showImportDialog = ref(false)
@@ -235,19 +238,91 @@ const handleViewIP = (ip: IPAddress) => {
 
 const filteredPrefixes = computed(() => {
   let result = prefixes.value
-  
+
   if (selectedSiteFilter.value !== null) {
-    result = result.filter(p => p.siteId === selectedSiteFilter.value)
+    if (selectedSiteFilter.value === NO_SITE_FILTER) {
+      // 「仅看未归属」：站点为空（含站点已被删除导致 id 找不到的情况按 siteId 空判断）
+      result = result.filter(p => !p.siteId)
+    } else {
+      result = result.filter(p => p.siteId === selectedSiteFilter.value)
+    }
   }
-  
+
+  if (quickFilter.value === 'highUsage') {
+    result = result.filter(p => getUsagePercentRaw(p) >= 70)
+  } else if (quickFilter.value === 'noSite') {
+    result = result.filter(p => !p.siteId)
+  }
+
   if (!searchPrefixQuery.value) return result
-  return result.filter(p => 
-    p.network.toLowerCase().includes(searchPrefixQuery.value.toLowerCase()) ||
-    p.usage.toLowerCase().includes(searchPrefixQuery.value.toLowerCase()) ||
-    siteName(p.siteId).toLowerCase().includes(searchPrefixQuery.value.toLowerCase()) ||
-    (p.vlan && p.vlan.toLowerCase().includes(searchPrefixQuery.value.toLowerCase()))
+  const q = searchPrefixQuery.value.toLowerCase()
+  return result.filter(p =>
+    p.network.toLowerCase().includes(q) ||
+    p.usage.toLowerCase().includes(q) ||
+    siteName(p.siteId).toLowerCase().includes(q) ||
+    (p.vlan && p.vlan.toLowerCase().includes(q)) ||
+    // 支持按「VLAN 10」或纯数字「10」搜索 VLAN
+    (p.vlan && `vlan ${p.vlan}`.toLowerCase().includes(q))
   )
 })
+
+// 排序：默认无；用户点列头后按列排序（数据层），清除恢复原始顺序
+type PrefixSortKey = 'network' | 'vlan' | 'usage'
+const prefixSort = ref<{ key: PrefixSortKey; order: 'ascending' | 'descending' } | null>(null)
+
+function ipToNumber(network: string): number {
+  const ip = network.split('/')[0]
+  const o = ip.split('.').map(Number)
+  if (o.length !== 4 || o.some(n => isNaN(n))) return -1
+  return ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0
+}
+
+// 子网列排序 = 按 IP 数值；VLAN = 数字；使用率 = 百分比
+function prefixCompare(a: Prefix, b: Prefix): number {
+  const key = prefixSort.value!.key
+  const dir = prefixSort.value!.order === 'ascending' ? 1 : -1
+  if (key === 'network') return (ipToNumber(a.network) - ipToNumber(b.network)) * dir
+  if (key === 'vlan') {
+    const va = Number(a.vlan) || 0
+    const vb = Number(b.vlan) || 0
+    return (va - vb) * dir
+  }
+  return (getUsagePercentRaw(a) - getUsagePercentRaw(b)) * dir
+}
+
+function handlePrefixSortChange({ prop, order }: { prop: string; order: string | null }) {
+  if ((order === 'ascending' || order === 'descending') && (prop === 'network' || prop === 'vlan' || prop === 'usage')) {
+    prefixSort.value = { key: prop as PrefixSortKey, order }
+  } else {
+    prefixSort.value = null
+  }
+}
+
+// 前端分页（后端一次性返回全部子网，无分页参数依赖）
+const prefixPage = ref(1)
+const prefixPageSize = ref(20)
+const sortedPrefixes = computed(() => {
+  const list = [...filteredPrefixes.value]
+  if (prefixSort.value) list.sort(prefixCompare)
+  return list
+})
+const pagedPrefixes = computed(() => {
+  const start = (prefixPage.value - 1) * prefixPageSize.value
+  return sortedPrefixes.value.slice(start, start + prefixPageSize.value)
+})
+
+// 筛选条件变化时回到第一页
+watch([filteredPrefixes, prefixSort], () => {
+  if (prefixPage.value > 1 && prefixPage.value > Math.ceil(sortedPrefixes.value.length / prefixPageSize.value)) {
+    prefixPage.value = 1
+  }
+})
+
+// 卡片联动筛选：'' | 高使用率 | 未归属站点（与站点下拉互不影响，可叠加）
+const quickFilter = ref<'' | 'highUsage' | 'noSite'>('')
+function toggleQuickFilter(key: 'highUsage' | 'noSite') {
+  quickFilter.value = quickFilter.value === key ? '' : key
+}
 
 // IP 列表筛选：子网 + 在线状态
 const filterPrefixId = ref<string>('')
@@ -295,23 +370,54 @@ watch(filterPrefixId, async (pid) => {
   }
 })
 
-// CIDR → 可用主机容量（/24 → 254，/22 → 1022；无效时退回 254）
+// CIDR → 可用主机容量：/31 按 2、/32 按 1、其余 2^(32-mask)-2；无效输入退回 254
+// 保证容量恒为正数，避免使用率除零或为负
 function getPrefixCapacity(network: string): number {
   const [ipStr, maskStr] = network.split('/')
   const mask = Number(maskStr)
   if (!ipStr || !Number.isInteger(mask) || mask < 8 || mask > 32) return 254
   const o = ipStr.split('.').map(Number)
   if (o.length !== 4 || o.some(n => isNaN(n) || n < 0 || n > 255)) return 254
+  if (mask === 32) return 1
+  if (mask === 31) return 2
   return Math.max(2 ** (32 - mask) - 2, 1)
 }
 
-// 概览统计：用后端聚合的 ipCount 求和（ipAddresses 是懒加载碎片，直接 length 会不准）
-const totalIPCount = computed(() =>
-  prefixes.value.reduce((sum, p) => sum + (p.ipCount ?? 0), 0)
-)
+// ==================== 概览统计 ====================
+// 注意：以下所有卡片统计（已分配 IP、高使用率、未归属站点）一律基于
+// 全量 prefixes 数据，不受表格分页和当前筛选影响；筛选只作用于表格。
+
+// 总容量（加权使用率分母）
 const totalCapacity = computed(() =>
   prefixes.value.reduce((sum, p) => sum + getPrefixCapacity(p.network), 0)
 )
+
+// 总已分配：优先用后端聚合的 ipCount（懒加载的 ipAddresses 是碎片，不能直接 length）
+const totalIPCount = computed(() =>
+  prefixes.value.reduce((sum, p) => sum + (p.ipCount ?? 0), 0)
+)
+
+// 单子网使用率（0~100，保留原始精度；显示时再决定小数位）
+function getUsagePercentRaw(p: Prefix): number {
+  const capacity = getPrefixCapacity(p.network)
+  return capacity > 0 ? ((p.ipCount ?? 0) / capacity) * 100 : 0
+}
+
+// 高使用率子网：使用率 ≥70%（与进度条橙色及以上阈值一致）
+const highUsagePrefixes = computed(() =>
+  prefixes.value.filter(p => getUsagePercentRaw(p) >= 70)
+)
+
+// 未归属站点子网：siteId 为空
+const noSitePrefixes = computed(() =>
+  prefixes.value.filter(p => !p.siteId)
+)
+
+// 使用率显示：<1% 保留一位小数（如 0.4%），≥1% 取整
+function formatUsagePercent(percent: number): string {
+  if (percent > 0 && percent < 1) return percent.toFixed(1)
+  return String(Math.round(percent))
+}
 
 function getIPCount(prefixId: string | number) {
   // 优先用后端聚合的 ipCount（不依赖前端懒加载的 ipAddresses 数组）
@@ -320,10 +426,13 @@ function getIPCount(prefixId: string | number) {
   return ipAddresses.value.filter((ip) => String(ip.prefixId) === String(prefixId)).length
 }
 
-function getUsagePercent(prefixId: string) {
-  const prefix = prefixes.value.find(p => String(p.id) === String(prefixId))
-  const capacity = prefix ? getPrefixCapacity(prefix.network) : 254
-  return Math.round((getIPCount(prefixId) / capacity) * 100)
+// 使用率进度条颜色等级：<70 蓝、70~90 橙、>90 红、0 空闲灰
+function getUsageLevel(p: Prefix): 'idle' | 'low' | 'mid' | 'high' {
+  const percent = getUsagePercentRaw(p)
+  if ((p.ipCount ?? 0) === 0) return 'idle'
+  if (percent > 90) return 'high'
+  if (percent >= 70) return 'mid'
+  return 'low'
 }
 
 function getStatusText(status: string): string {
@@ -688,6 +797,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
 <template>
   <div class="ipam-page">
     <div class="overview-cards">
+      <!-- 卡片统计均基于全量数据，不受分页/筛选影响 -->
       <div class="overview-card">
         <div class="overview-card-label">{{ t('ipam.prefixCountLabel') }}</div>
         <div class="overview-card-value">{{ prefixes.length }}</div>
@@ -696,14 +806,31 @@ const handleDeleteIP = async (ip: IPAddress) => {
       <div class="overview-card overview-card-blue">
         <div class="overview-card-label">{{ t('ipam.assignedIPsLabel') }}</div>
         <div class="overview-card-value">{{ totalIPCount }}</div>
-        <div class="overview-card-trend">{{ t('ipam.ipTotal') }}</div>
-      </div>
-      <div class="overview-card overview-card-warning">
-        <div class="overview-card-label">{{ t('ipam.avgUsageLabel') }}</div>
-        <div class="overview-card-value">
-          {{ totalCapacity > 0 ? Math.round((totalIPCount / totalCapacity) * 100) : 0 }}%
+        <div class="overview-card-trend">
+          {{ t('ipam.assignedOfCapacity', { used: totalIPCount, total: totalCapacity }) }}
         </div>
-        <div class="overview-card-trend">{{ t('ipam.usageTrend') }}</div>
+      </div>
+      <div
+        class="overview-card overview-card-warning"
+        :class="{ 'overview-card-clickable': highUsagePrefixes.length > 0, 'is-active': quickFilter === 'highUsage' }"
+        @click="highUsagePrefixes.length > 0 && toggleQuickFilter('highUsage')"
+      >
+        <div class="overview-card-label">{{ t('ipam.highUsageSubnets') }}</div>
+        <div class="overview-card-value">{{ highUsagePrefixes.length }}</div>
+        <div class="overview-card-trend">
+          {{ highUsagePrefixes.length > 0 ? t('ipam.highUsageThreshold') : t('sites.allNormal') }}
+        </div>
+      </div>
+      <div
+        class="overview-card overview-card-purple"
+        :class="{ 'overview-card-clickable': noSitePrefixes.length > 0, 'is-active': quickFilter === 'noSite' }"
+        @click="noSitePrefixes.length > 0 && toggleQuickFilter('noSite')"
+      >
+        <div class="overview-card-label">{{ t('ipam.noSiteSubnets') }}</div>
+        <div class="overview-card-value">{{ noSitePrefixes.length }}</div>
+        <div class="overview-card-trend">
+          {{ noSitePrefixes.length > 0 ? t('ipam.noSiteHint') : t('ipam.noSiteNone') }}
+        </div>
       </div>
     </div>
 
@@ -814,11 +941,12 @@ const handleDeleteIP = async (ip: IPAddress) => {
         <div class="table-filters">
           <el-select
             v-model="selectedSiteFilter"
-            placeholder="按站点筛选"
+            :placeholder="t('ipam.filterBySite')"
             clearable
-            style="width: 200px; margin-right: 15px"
+            style="width: 200px"
           >
             <el-option v-for="site in sites" :key="site.id" :label="site.name" :value="site.id" />
+            <el-option :label="t('ipam.onlyUnassigned')" :value="NO_SITE_FILTER" />
           </el-select>
           <el-input
             v-model="searchPrefixQuery"
@@ -828,41 +956,66 @@ const handleDeleteIP = async (ip: IPAddress) => {
             style="width: 360px"
           />
         </div>
+        <div v-if="quickFilter" class="quick-filter-bar">
+          <el-tag closable @close="quickFilter = ''">
+            {{ t('sites.filteredLabel') }}：
+            {{ quickFilter === 'highUsage' ? t('ipam.highUsageSubnets') : t('ipam.noSiteSubnets') }}
+          </el-tag>
+        </div>
         <el-table
           class="ipam-prefix-table"
-          :data="filteredPrefixes"
+          :data="pagedPrefixes"
           style="width: 100%"
-          stripe
           border
-          height="calc(100vh - 420px)"
+          height="calc(100vh - 460px)"
+          @sort-change="handlePrefixSortChange"
         >
-          <el-table-column prop="siteId" :label="t('ipam.site')" min-width="140">
-            <template #default="{ row }">{{ siteName(row.siteId) }}</template>
+          <el-table-column prop="siteId" :label="t('ipam.site')" min-width="150">
+            <template #default="{ row }">
+              <el-tag v-if="!row.siteId" type="warning" effect="light" size="small">
+                {{ t('ipam.noSiteTag') }}
+              </el-tag>
+              <span v-else>{{ siteName(row.siteId) }}</span>
+            </template>
           </el-table-column>
-          <el-table-column prop="network" :label="t('ipam.subnet')" min-width="200">
+          <el-table-column
+            prop="network"
+            :label="t('ipam.subnet')"
+            min-width="220"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <div class="network-cell">
-                <div class="network-name">
-                  <el-icon><Connection /></el-icon>
-                  {{ row.network }}
-                </div>
+                <div class="network-name">{{ row.network }}</div>
                 <div class="usage-bar-wrapper">
-                  <div class="usage-bar">
-                    <div 
-                      class="usage-fill" 
-                      :class="{ 'danger': getUsagePercent(row.id) > 80 }"
-                      :style="{ width: getUsagePercent(row.id) + '%' }"
+                  <div class="usage-bar" :class="`usage-bar-${getUsageLevel(row)}`">
+                    <div
+                      class="usage-fill"
+                      :class="`usage-fill-${getUsageLevel(row)}`"
+                      :style="{ width: getUsageLevel(row) === 'idle' ? '100%' : `${Math.max(getUsagePercentRaw(row), 1)}%`, minWidth: (row.ipCount ?? 0) > 0 ? '4px' : undefined }"
                     ></div>
                   </div>
-                  <span class="usage-text">{{ getIPCount(row.id) }}/{{ getPrefixCapacity(row.network) }}</span>
+                  <span class="usage-text" :class="{ 'usage-text-idle': getUsageLevel(row) === 'idle' }">
+                    <template v-if="getUsageLevel(row) === 'idle'">{{ t('ipam.idle') }}</template>
+                    <template v-else>{{ getIPCount(row.id) }}/{{ getPrefixCapacity(row.network) }} · {{ formatUsagePercent(getUsagePercentRaw(row)) }}%</template>
+                  </span>
                 </div>
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="vlan" :label="t('ipam.vlan')" min-width="100">
-            <template #default="{ row }">{{ row.vlan || '-' }}</template>
+          <el-table-column prop="vlan" :label="t('ipam.vlan')" min-width="110" sortable="custom">
+            <template #default="{ row }">
+              <span v-if="row.vlan">{{ t('ipam.vlanDisplay', { vid: row.vlan }) }}</span>
+              <span v-else>-</span>
+            </template>
           </el-table-column>
-          <el-table-column prop="usage" :label="t('ipam.usage')" min-width="180">
+          <el-table-column
+            prop="usage"
+            :label="t('ipam.usageLabel')"
+            min-width="160"
+            sortable="custom"
+            show-overflow-tooltip
+          >
             <template #default="{ row }">{{ row.usage || '-' }}</template>
           </el-table-column>
           <el-table-column :label="t('common.actions')" width="280" fixed="right" align="center">
@@ -903,6 +1056,16 @@ const handleDeleteIP = async (ip: IPAddress) => {
             </template>
           </el-table-column>
         </el-table>
+        <div class="table-pagination">
+          <el-pagination
+            v-model:current-page="prefixPage"
+            v-model:page-size="prefixPageSize"
+            :total="sortedPrefixes.length"
+            :page-sizes="[20, 50, 100]"
+            layout="total, sizes, prev, pager, next"
+            background
+          />
+        </div>
       </template>
 
       <template v-else>
@@ -1361,38 +1524,54 @@ const handleDeleteIP = async (ip: IPAddress) => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--el-color-info-light-5);
   transition: all 0.2s ease;
 }
 
 .overview-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--el-box-shadow-light);
 }
 
-.overview-card-blue { border-left-color: #1890ff; }
-.overview-card-warning { border-left-color: #faad14; }
+.overview-card-blue { border-left-color: var(--el-color-primary); }
+.overview-card-warning { border-left-color: var(--el-color-warning); }
+.overview-card-purple { border-left-color: var(--el-color-danger); }
+
+/* 可点击卡片（与专线页联动卡片一致） */
+.overview-card-clickable {
+  cursor: pointer;
+}
+
+.overview-card-clickable:hover {
+  border-left-width: 3px;
+  outline: 1px solid var(--el-color-primary-light-5);
+}
+
+.overview-card.is-active {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--el-text-color-placeholder);
 }
 
 .table-card {
@@ -1424,13 +1603,10 @@ const handleDeleteIP = async (ip: IPAddress) => {
   align-items: center;
   gap: 8px;
   font-weight: 500;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
-.network-name .el-icon {
-  color: #1890ff;
-}
-
+/* 使用率进度条：数字区固定宽度保证所有行进度条等长 */
 .usage-bar-wrapper {
   display: flex;
   align-items: center;
@@ -1440,26 +1616,46 @@ const handleDeleteIP = async (ip: IPAddress) => {
 .usage-bar {
   flex: 1;
   height: 8px;
-  background: #f0f0f0;
+  background: var(--el-fill-color);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .usage-fill {
   height: 100%;
-  background: linear-gradient(90deg, #1890ff, #36cfc9);
   border-radius: inherit;
   transition: width 0.3s ease;
 }
 
-.usage-fill.danger {
-  background: linear-gradient(90deg, #ff4d4f, #faad14);
-}
+/* 阈值着色：<70 蓝、70~90 橙、>90 红、0 空闲灰 */
+.usage-fill-low { background: var(--el-color-primary); }
+.usage-fill-mid { background: var(--el-color-warning); }
+.usage-fill-high { background: var(--el-color-danger); }
+.usage-fill-idle { background: var(--el-fill-color-darker); }
 
 .usage-text {
+  /* 固定宽度，保证所有子网的进度条起点一致 */
+  width: 108px;
+  flex: none;
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+}
+
+.usage-text-idle {
+  color: var(--el-text-color-placeholder);
+}
+
+/* 卡片联动筛选标签栏（与专线页一致） */
+.quick-filter-bar {
+  margin-bottom: 12px;
+}
+
+/* 分页栏 */
+.table-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .ip-address {
