@@ -401,9 +401,10 @@ function toggleQuickFilter(key: 'highUsage' | 'noSite') {
   quickFilter.value = quickFilter.value === key ? '' : key
 }
 
-// IP 列表筛选：子网 + 在线状态
+// IP 列表筛选：子网 + 在线状态 + 业务状态
 const filterPrefixId = ref<string>('')
 const filterOnline = ref<string>('')
+const filterStatus = ref<string>('')
 
 // IP 地址转数值用于排序（按扫描完成顺序入库会乱，显示时按 IP 大小排）
 const ipSortKey = (address: string): number => {
@@ -420,6 +421,11 @@ const filteredIPs = computed(() => {
   if (filterOnline.value === 'online') list = list.filter(ip => ip.isOnline === true)
   else if (filterOnline.value === 'offline') list = list.filter(ip => ip.isOnline === false)
   else if (filterOnline.value === 'unscanned') list = list.filter(ip => ip.isOnline === undefined)
+
+  if (filterStatus.value === 'occupied') list = list.filter(ip => isOccupiedStatus(ip.status))
+  else if (filterStatus.value === 'assigned') list = list.filter(ip => isOccupiedStatus(ip.status) && !isReservedStatus(ip.status))
+  else if (filterStatus.value === 'reserved') list = list.filter(ip => isReservedStatus(ip.status))
+  else if (filterStatus.value === 'available') list = list.filter(ip => !isOccupiedStatus(ip.status))
   
   if (searchIPQuery.value) {
     const q = searchIPQuery.value.toLowerCase()
@@ -496,10 +502,16 @@ function formatUsagePercent(percent: number): string {
 }
 
 function getIPCount(prefixId: string | number) {
-  // 优先用后端聚合的 ipCount（不依赖前端懒加载的 ipAddresses 数组）
+  // 优先用后端聚合的 ipCount（后端已按占用口径过滤：已分配+预留）
   const prefix = prefixes.value.find(p => String(p.id) === String(prefixId))
   if (prefix?.ipCount !== undefined) return prefix.ipCount
-  return ipAddresses.value.filter((ip) => String(ip.prefixId) === String(prefixId)).length
+  // 回退：懒加载的碎片数据，手动按占用口径过滤
+  return ipAddresses.value.filter((ip) => String(ip.prefixId) === String(prefixId) && isOccupiedStatus(ip.status)).length
+}
+
+// 业务占用口径：已分配 + 预留（不含未分配）；同时兼容英文枚举与 DB 存量中文值
+function isOccupiedStatus(status: string): boolean {
+  return ['assigned', 'active', '已分配', 'reserved', '预留'].includes(status)
 }
 
 // 使用率进度条颜色等级：<70 蓝、70~90 橙、>90 红、0 空闲灰
@@ -509,6 +521,15 @@ function getUsageLevel(p: Prefix): 'idle' | 'low' | 'mid' | 'high' {
   if (percent > 90) return 'high'
   if (percent >= 70) return 'mid'
   return 'low'
+}
+
+// 进度条 tooltip：已分配 N · 预留 N · 空闲 N（基于该子网已懒加载的 IP 记录）
+function getStatusBreakdown(prefixId: string | number): string {
+  const list = ipAddresses.value.filter(ip => String(ip.prefixId) === String(prefixId))
+  const assigned = list.filter(ip => isOccupiedStatus(ip.status) && !isReservedStatus(ip.status)).length
+  const reserved = list.filter(ip => isReservedStatus(ip.status)).length
+  const free = list.filter(ip => !isOccupiedStatus(ip.status)).length
+  return t('ipam.statusBreakdown', { assigned, reserved, free })
 }
 
 // 状态显示文案：键同时兼容后端枚举与 DB 存量中文值，值指向 i18n key
@@ -944,7 +965,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
         <div class="overview-card-trend">{{ t('ipam.allPrefixes') }}</div>
       </div>
       <div class="overview-card overview-card-blue">
-        <div class="overview-card-label">{{ t('ipam.assignedIPsLabel') }}</div>
+        <div class="overview-card-label">{{ t('ipam.occupiedIPsLabel') }}</div>
         <div class="overview-card-value">{{ totalIPCount }}</div>
         <div class="overview-card-trend">
           {{ t('ipam.assignedOfCapacity', { used: totalIPCount, total: totalCapacity }) }}
@@ -1146,20 +1167,22 @@ const handleDeleteIP = async (ip: IPAddress) => {
             <template #default="{ row }">
               <div class="network-cell">
                 <div class="network-name">{{ row.network }}</div>
-                <div class="usage-bar-wrapper">
-                  <div class="usage-bar">
-                    <div
-                      v-if="getUsageLevel(row) !== 'idle'"
-                      class="usage-fill"
-                      :class="`usage-fill-${getUsageLevel(row)}`"
-                      :style="{ width: `${Math.max(getUsagePercentRaw(row), 1)}%`, minWidth: (row.ipCount ?? 0) > 0 ? '4px' : undefined }"
-                    ></div>
+                <el-tooltip :content="getStatusBreakdown(row.id)" placement="top">
+                  <div class="usage-bar-wrapper">
+                    <div class="usage-bar">
+                      <div
+                        v-if="getUsageLevel(row) !== 'idle'"
+                        class="usage-fill"
+                        :class="`usage-fill-${getUsageLevel(row)}`"
+                        :style="{ width: `${Math.max(getUsagePercentRaw(row), 1)}%`, minWidth: (row.ipCount ?? 0) > 0 ? '4px' : undefined }"
+                      ></div>
+                    </div>
+                    <span class="usage-text" :class="{ 'usage-text-idle': getUsageLevel(row) === 'idle' }">
+                      <template v-if="getUsageLevel(row) === 'idle'">{{ t('ipam.idle') }}</template>
+                      <template v-else>{{ getIPCount(row.id) }}/{{ getPrefixCapacity(row.network) }} · {{ formatUsagePercent(getUsagePercentRaw(row)) }}%</template>
+                    </span>
                   </div>
-                  <span class="usage-text" :class="{ 'usage-text-idle': getUsageLevel(row) === 'idle' }">
-                    <template v-if="getUsageLevel(row) === 'idle'">{{ t('ipam.idle') }}</template>
-                    <template v-else>{{ getIPCount(row.id) }}/{{ getPrefixCapacity(row.network) }} · {{ formatUsagePercent(getUsagePercentRaw(row)) }}%</template>
-                  </span>
-                </div>
+                </el-tooltip>
               </div>
             </template>
           </el-table-column>
@@ -1258,6 +1281,17 @@ const handleDeleteIP = async (ip: IPAddress) => {
             <el-option :label="t('ipam.onlineLabel')" value="online" />
             <el-option :label="t('ipam.offlineLabel')" value="offline" />
             <el-option :label="t('ipam.unscannedLabel')" value="unscanned" />
+          </el-select>
+          <el-select
+            v-model="filterStatus"
+            :placeholder="t('ipam.allIpStatus')"
+            clearable
+            style="width: 140px"
+          >
+            <el-option :label="t('ipam.occupiedLabel')" value="occupied" />
+            <el-option :label="t('ipam.statusAssigned')" value="assigned" />
+            <el-option :label="t('ipam.statusReserved')" value="reserved" />
+            <el-option :label="t('ipam.statusAvailable')" value="available" />
           </el-select>
           <el-input
             v-model="searchIPQuery"

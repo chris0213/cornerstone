@@ -251,9 +251,13 @@ async def read_prefixes(
     result = await db.execute(stmt)
     prefixes = result.scalars().all()
 
-    # 每个子网的 IP 记录数（一条 GROUP BY，避免前端懒加载导致计数为 0）
+    # 每个子网的占用 IP 数（业务口径：已分配 + 预留，不含未分配）。
+    # 一条 GROUP BY，避免前端懒加载导致计数为 0；
+    # 状态过滤同时兼容英文枚举与 DB 存量中文值（扫描器/表单历史上写入过两种）。
+    occupied_statuses = ("assigned", "active", "已分配", "reserved", "预留")
     count_result = await db.execute(
         select(IPAddress.prefix_id, func.count(IPAddress.id))
+        .where(IPAddress.status.in_(occupied_statuses))
         .group_by(IPAddress.prefix_id)
     )
     count_map = {pid: cnt for pid, cnt in count_result.all()}
