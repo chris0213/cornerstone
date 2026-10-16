@@ -1,10 +1,12 @@
 <script setup lang="ts">import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { testDeviceConnection, quickAddDevice, type TestConnectionRequest, type QuickAddDeviceRequest } from '@/api/quick_add';
 import { getSites } from '@/api/sites';
 import { getPrefixes } from '@/api/ipam';
 const router = useRouter();
+const { t } = useI18n();
 const visible = defineModel<boolean>('visible');
 const currentStep = ref(1);
 const loading = ref(false);
@@ -54,14 +56,14 @@ const vendorOptions = [
  { value: 'hillstone', label: '山石' },
  { value: 'aruba', label: 'Aruba' },
 ];
-const typeOptions = [
- { value: 'switch', label: '交换机' },
- { value: 'router', label: '路由器' },
- { value: 'firewall', label: '防火墙' },
- { value: 'server', label: '服务器' },
- { value: 'ap', label: '无线AP' },
- { value: 'other', label: '其他' },
-];
+const typeOptions = computed(() => [
+ { value: 'switch', label: t('devices.typeSwitch') },
+ { value: 'router', label: t('devices.typeRouter') },
+ { value: 'firewall', label: t('devices.typeFirewall') },
+ { value: 'server', label: t('devices.typeServer') },
+ { value: 'ap', label: t('devices.typeAP') },
+ { value: 'other', label: t('devices.typeOther') },
+]);
 const steps = [
  { title: '基本信息', step: 1 },
  { title: '连接信息', step: 2 },

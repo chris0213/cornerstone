@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..models import Device, IPAddress, Circuit, Site, Prefix
+from ..constants.device_type import normalize_device_type
 from ..utils.logger import audit_log
 
 
@@ -442,7 +443,7 @@ class DeviceImportExport(ImportExportService):
                 # 创建设备
                 device = Device(
                     name=row_data.get("name"),
-                    type=row_data.get("type", "unknown"),
+                    type=normalize_device_type(row_data.get("type")),
                     brand=row_data.get("brand"),
                     model=row_data.get("model"),
                     site_id=site_id,

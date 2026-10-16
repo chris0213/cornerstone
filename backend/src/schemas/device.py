@@ -1,5 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
+
+from ..constants.device_type import normalize_device_type
+
+
+def _validate_device_type(value: str | None) -> str | None:
+    """设备类型枚举校验：归一化历史中文别名，未知值拒绝。"""
+    return normalize_device_type(value)
 
 class DeviceCreate(BaseModel):
     name: str
@@ -17,6 +24,8 @@ class DeviceCreate(BaseModel):
     owner: str | None = None
     note: str | None = None
 
+    _validate_type = field_validator("type")(_validate_device_type)
+
 class DeviceUpdate(BaseModel):
     name: str | None = None
     type: str | None = None
@@ -32,6 +41,8 @@ class DeviceUpdate(BaseModel):
     purchase_amount: float | None = None
     owner: str | None = None
     note: str | None = None
+
+    _validate_type = field_validator("type")(_validate_device_type)
 
 class DeviceResponse(BaseModel):
     id: int

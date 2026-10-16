@@ -38,9 +38,9 @@ export const DEVICE_TYPE_CONFIG: Record<string, {
     iconClass: 'ti ti-switch-2',
   },
   'firewall': {
-    color: '#F56C6C',
-    bgColor: 'rgba(245,108,108,0.15)',
-    borderColor: 'rgba(245,108,108,0.4)',
+    color: '#64748B',
+    bgColor: 'rgba(100,116,139,0.12)',
+    borderColor: 'rgba(100,116,139,0.35)',
     label: '防火墙',
     group: '核心网络设备',
     iconClass: 'ti ti-shield',

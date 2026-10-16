@@ -89,7 +89,7 @@ export const seedState: AppState = {
     {
       id: 1,
       name: 'SW-DEMO-CORE-01',
-      type: '交换机',
+      type: 'switch',
       vendor: 'Cisco',
       model: 'Catalyst 9300',
       sn: 'DEMO-SW-0001',
@@ -109,7 +109,7 @@ export const seedState: AppState = {
     {
       id: 2,
       name: 'FW-DEMO-EDGE-01',
-      type: '防火墙',
+      type: 'firewall',
       vendor: 'Huawei',
       model: 'USG6655E',
       sn: 'DEMO-FW-0001',
@@ -129,7 +129,7 @@ export const seedState: AppState = {
     {
       id: 3,
       name: 'RT-DEMO-WAN-01',
-      type: '路由器',
+      type: 'router',
       vendor: 'H3C',
       model: 'MSR 5660',
       sn: 'DEMO-RT-0001',

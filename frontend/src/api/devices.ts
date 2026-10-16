@@ -40,9 +40,19 @@ export interface DeviceCreate {
   note: string | null
 }
 
+// 列表接口默认 limit=100，需要按 skip/limit 循环拉取全量（每页上限 1000）
 export async function getDevices(): Promise<DeviceResponse[]> {
-  const response = await api.get('/devices/')
-  return response.data
+  const pageSize = 1000
+  const all: DeviceResponse[] = []
+  let skip = 0
+  while (true) {
+    const response = await api.get('/devices/', { params: { skip, limit: pageSize } })
+    const batch: DeviceResponse[] = response.data
+    all.push(...batch)
+    if (batch.length < pageSize) break
+    skip += pageSize
+  }
+  return all
 }
 
 export async function getDevice(id: number): Promise<DeviceResponse> {

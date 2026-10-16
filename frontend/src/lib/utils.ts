@@ -41,7 +41,7 @@ export function money(value: number | string | undefined | null): string {
 }
 
 export function formatDate(dateText: string | null | undefined): string {
-  if (!dateText) return '-'
+  if (!dateText) return '—'
   const date = new Date(dateText)
   if (isNaN(date.getTime())) return dateText
   const year = date.getFullYear()
