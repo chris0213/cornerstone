@@ -162,9 +162,23 @@ const scanningPrefixId = ref<string | number | null>(null)
 // 触发扫描（先确认扫描范围与探测包提示）
 const handleScanPrefix = async (prefixId: string | number, network: string) => {
   if (scanningPrefixId.value !== null) return
+  // 确认文案：网段（可用地址数）；/16 及更短前缀额外提示大网段耗时
+  const capacity = getPrefixCapacity(network)
+  const confirmLines = [
+    t('ipam.scanConfirmText', { network, capacity }),
+    ...(network.includes('/') && network.split('/')[1] !== undefined
+      ? Number(network.split('/')[1]) <= 16
+        ? [t('ipam.scanLargeSubnetWarning')]
+        : []
+      : []),
+  ]
   try {
     await ElMessageBox.confirm(
-      t('ipam.scanConfirmText', { network }),
+      h('div', null, confirmLines.map((line, i) =>
+        h('p', {
+          style: i === 0 ? 'margin: 0' : 'margin: 8px 0 0; color: var(--el-color-warning); font-size: 13px',
+        }, line)
+      )),
       t('ipam.scanConfirmTitle'),
       {
         type: 'info',
@@ -586,15 +600,27 @@ const handleSavePrefix = async () => {
   }
 }
 
+// 删除子网时受影响设备数：管理 IP 指向该子网 IP 的设备数量
+// （devices/ipAddresses 已全量加载，无需后端额外字段）
+function getAffectedDeviceCount(prefix: Prefix): number {
+  const pid = String(prefix.id)
+  const ipIds = new Set(
+    ipAddresses.value.filter(ip => String(ip.prefixId) === pid).map(ip => String(ip.id))
+  )
+  return devices.value.filter(d => d.mgmt_ip_id != null && ipIds.has(String(d.mgmt_ip_id))).length
+}
+
 const handleDeletePrefix = async (prefix: Prefix) => {
   const ipCount = prefix.ipCount ?? 0
+  const deviceCount = getAffectedDeviceCount(prefix)
   // 有已分配 IP 时需额外勾选确认：后端删除子网会级联清除该子网全部 IP 记录
   let acknowledged = ipCount === 0
   try {
     await ElMessageBox({
       title: t('common.confirm'),
       type: 'warning',
-      confirmButtonText: t('common.delete'),
+      confirmButtonText: t('ipam.confirmDeleteBtn'),
+      confirmButtonClass: 'el-button--danger',
       cancelButtonText: t('common.cancel'),
       showCancelButton: true,
       message: h('div', null, [
@@ -604,9 +630,18 @@ const handleDeletePrefix = async (prefix: Prefix) => {
               h(
                 'p',
                 {
-                  style: 'margin: 0 0 8px; color: var(--el-color-danger); font-size: 13px',
+                  style: 'margin: 0 0 4px; color: var(--el-color-danger); font-size: 13px',
                 },
                 t('ipam.confirmDeleteWithIPs', { count: ipCount })
+              ),
+              h(
+                'p',
+                {
+                  style: 'margin: 0 0 8px; color: var(--el-color-danger); font-size: 13px',
+                },
+                deviceCount > 0
+                  ? t('ipam.deviceImpact', { count: deviceCount })
+                  : t('ipam.deviceImpactGeneric')
               ),
               h(ElCheckbox, {
                 modelValue: acknowledged,
@@ -620,21 +655,25 @@ const handleDeletePrefix = async (prefix: Prefix) => {
           : []),
       ]),
       beforeClose: (action: string, _ctx: unknown, done: () => void) => {
-        // 未勾选确认书时点击「删除」不关闭弹窗
+        // 未勾选确认书时点击「确认删除」不关闭弹窗
         if (action === 'confirm' && !acknowledged) return
         done()
       },
     })
     await deletePrefix(prefix.id)
+    // 本地同步：移除该子网及其 IP 记录，卡片统计/分页随之自动重算
     const index = prefixes.value.findIndex(p => p.id === prefix.id)
     if (index !== -1) {
       prefixes.value.splice(index, 1)
     }
+    ipAddresses.value = ipAddresses.value.filter(ip => String(ip.prefixId) !== String(prefix.id))
     ElMessage.success(t('ipam.deletePrefixSuccess'))
-  } catch (error) {
+  } catch (error: any) {
     if (error !== 'cancel') {
       console.error('Failed to delete prefix:', error)
-      ElMessage.error(t('ipam.deletePrefixFailed'))
+      // 带上后端返回的错误详情，避免只提示「删除失败」无法定位
+      const detail = error?.response?.data?.detail || error?.message || ''
+      ElMessage.error(detail ? `${t('ipam.deletePrefixFailed')}: ${detail}` : t('ipam.deletePrefixFailed'))
     }
   }
 }
