@@ -512,7 +512,7 @@
     "vlans": "VLAN Management",
     "filterBySite": "Filter by site",
     "onlyUnassigned": "Unassigned only",
-    "assignedOfCapacity": "Assigned / Total capacity: {used} / {total}",
+    "assignedOfCapacity": "IP records / Total capacity: {used} / {total} (assigned, reserved & available)",
     "highUsageSubnets": "High-Usage Subnets",
     "highUsageThreshold": "Usage ≥70%",
     "noSiteSubnets": "Subnets Without Site",
@@ -609,7 +609,10 @@
     "ipAssignSuccess": "IP assigned successfully",
     "saveIPFailed": "Failed to save IP",
     "ipDeleteSuccess": "IP deleted successfully",
-    "ipDeleteFailed": "Failed to delete IP"
+    "ipDeleteFailed": "Failed to delete IP",
+    "unboundLabel": "Unbound",
+    "neverScannedLabel": "Never scanned",
+    "lastScanTime": "Last scanned"
   },
   "topology": {
     "title": "Network Topology",

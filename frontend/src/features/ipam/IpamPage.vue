@@ -2,9 +2,10 @@
 import { computed, h, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ElCheckbox } from 'element-plus'
-import { Search as SearchIcon, Edit, Plus, Delete, Download, Upload, View, ArrowDown, Connection } from '@element-plus/icons-vue'
+import { Search as SearchIcon, Edit, Plus, Delete, Download, Upload, View, ArrowDown, Connection, Setting } from '@element-plus/icons-vue'
 import api from '../../api/axios'
 import { confirmAndRun } from '../../lib/confirm'
+import { formatDateTime } from '../../lib/utils'
 import type { Prefix, IPAddress } from '../../types/domain'
 import IpMatrix from './components/IpMatrix.vue'
 import ScanProgress from './components/ScanProgress.vue'
@@ -33,6 +34,43 @@ function deviceName(deviceId: number | null | undefined): string {
 
 function getPrefixNetwork(prefixId: string | number): string {
   return prefixes.value.find(p => String(p.id) === String(prefixId))?.network || '-'
+}
+
+// ==================== IP 表列设置（localStorage 持久化，开放端口默认隐藏） ====================
+const IP_COLUMN_STORAGE_KEY = 'ipam_ip_column_settings_v1'
+const ipColumnDefs = [
+  { key: 'openPorts', labelKey: 'ipam.openPortsCol' },
+] as const
+type IPColumnKey = (typeof ipColumnDefs)[number]['key']
+
+const loadIPColumnSettings = (): Record<IPColumnKey, boolean> => {
+  const defaults = Object.fromEntries(ipColumnDefs.map(c => [c.key, false])) as Record<IPColumnKey, boolean>
+  try {
+    const saved = localStorage.getItem(IP_COLUMN_STORAGE_KEY)
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults
+  } catch {
+    return defaults
+  }
+}
+const ipColumnVisible = ref<Record<IPColumnKey, boolean>>(loadIPColumnSettings())
+const showIPColumnSettings = ref(false)
+watch(ipColumnVisible, (val) => {
+  localStorage.setItem(IP_COLUMN_STORAGE_KEY, JSON.stringify(val))
+}, { deep: true })
+
+// 「在线」列显示相对扫描时间（如 3 天前），从未扫描显示灰色占位
+function getScanTimeText(ip: IPAddress): string {
+  if (!ip.lastScannedAt) return ''
+  const diffMinutes = Math.floor((Date.now() - new Date(ip.lastScannedAt).getTime()) / 60000)
+  if (diffMinutes < 1) return t('alerts.justNow')
+  if (diffMinutes < 60) return t('alerts.minutesAgo', { count: diffMinutes })
+  if (diffMinutes < 1440) return t('alerts.hoursAgo', { count: Math.floor(diffMinutes / 60) })
+  return t('alerts.daysAgo', { count: Math.floor(diffMinutes / 1440) })
+}
+
+// 设备为空时：预留 IP 显示「未绑定」，其他显示「—」
+function isReservedStatus(status: string): boolean {
+  return status === 'reserved' || status === '预留'
 }
 
 // 使用本地状态存储从后端获取的数据
@@ -880,8 +918,9 @@ const handleDeleteIP = async (ip: IPAddress) => {
   await confirmAndRun({
     message: t('ipam.confirmDeleteIP', { address: ip.address }),
     title: t('common.confirm'),
-    confirmText: t('common.delete'),
+    confirmText: t('common.confirmDelete'),
     cancelText: t('common.cancel'),
+    danger: true,
     action: async () => {
       await deleteIPAddress(ip.id)
       const index = ipAddresses.value.findIndex(ipItem => ipItem.id === ip.id)
@@ -982,6 +1021,28 @@ const handleDeleteIP = async (ip: IPAddress) => {
             <el-tab-pane :label="t('ipam.tabIPs')" name="ips" />
           </el-tabs>
           <div class="table-actions">
+            <el-popover
+              v-if="activeTab === 'ips'"
+              v-model:visible="showIPColumnSettings"
+              placement="bottom-end"
+              :width="180"
+              trigger="click"
+            >
+              <template #reference>
+                <el-button plain>
+                  <el-icon><Setting /></el-icon> {{ t('circuits.columnSettings') }}
+                </el-button>
+              </template>
+              <div class="column-settings">
+                <el-checkbox
+                  v-for="col in ipColumnDefs"
+                  :key="col.key"
+                  v-model="ipColumnVisible[col.key]"
+                >
+                  {{ t(col.labelKey) }}
+                </el-checkbox>
+              </div>
+            </el-popover>
             <!-- 按钮层级与顺序与专线页一致：导出、导入（次要）、新增（主色） -->
             <el-button
               v-if="activeTab === 'prefixes'"
@@ -1213,7 +1274,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
           border
           max-height="calc(100vh - 420px)"
         >
-          <el-table-column prop="address" :label="t('ipam.ipAddressCol')" min-width="160">
+          <el-table-column prop="address" :label="t('ipam.ipAddressCol')" width="150" class-name="ip-address-col">
             <template #default="{ row }">
               <code class="ip-address">{{ row.address }}</code>
             </template>
@@ -1221,58 +1282,78 @@ const handleDeleteIP = async (ip: IPAddress) => {
           <el-table-column prop="prefixId" :label="t('ipam.subnet')" min-width="160">
             <template #default="{ row }">{{ getPrefixNetwork(row.prefixId) }}</template>
           </el-table-column>
-          <el-table-column prop="deviceId" :label="t('ipam.deviceCol')" min-width="180">
+          <el-table-column prop="deviceId" :label="t('ipam.deviceCol')" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="deviceName(row.deviceId)">{{ deviceName(row.deviceId) }}</span>
+              <span v-else-if="isReservedStatus(row.status)" class="unbound-text">{{ t('ipam.unboundLabel') }}</span>
               <span v-else class="empty-placeholder">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="usage" :label="t('ipam.usage')" min-width="160">
+          <el-table-column prop="usage" :label="t('ipam.usage')" min-width="140" show-overflow-tooltip>
             <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.usage }">{{ row.usage || '—' }}</span></template>
           </el-table-column>
-          <el-table-column prop="owner" :label="t('ipam.owner')" min-width="140">
+          <el-table-column prop="owner" :label="t('ipam.owner')" min-width="120" show-overflow-tooltip>
             <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.owner }">{{ row.owner || '—' }}</span></template>
           </el-table-column>
-          <el-table-column prop="status" :label="t('common.status')" min-width="100">
+          <el-table-column prop="status" :label="t('common.status')" width="90" align="center" class-name="nowrap-col">
             <template #default="{ row }">
               <el-tag :type="getStatusType(row.status)" effect="light">
                 {{ getStatusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column :label="t('ipam.onlineLabel')" width="90" align="center">
+          <el-table-column :label="t('ipam.onlineLabel')" width="110" align="center" class-name="nowrap-col">
             <template #default="{ row }">
-              <el-tag
-                v-if="row.isOnline === true"
-                type="success"
-                effect="dark"
-                size="small"
-              >{{ t('ipam.onlineLabel') }}</el-tag>
-              <el-tag
-                v-else-if="row.isOnline === false"
-                type="danger"
-                effect="plain"
-                size="small"
-              >{{ t('ipam.offlineLabel') }}</el-tag>
-              <span v-else class="empty-placeholder">{{ t('ipam.unscannedLabel') }}</span>
+              <el-tooltip
+                v-if="row.isOnline !== undefined"
+                :content="getScanTimeText(row) ? `${t('ipam.lastScanTime')}: ${formatDateTime(row.lastScannedAt)}` : t('ipam.lastScanTime')"
+                placement="top"
+              >
+                <span class="online-cell">
+                  <el-tag v-if="row.isOnline === true" type="success" effect="dark" size="small">
+                    {{ t('ipam.onlineLabel') }}
+                  </el-tag>
+                  <el-tag v-else type="danger" effect="plain" size="small">
+                    {{ t('ipam.offlineLabel') }}
+                  </el-tag>
+                  <span v-if="getScanTimeText(row)" class="scan-time">{{ getScanTimeText(row) }}</span>
+                </span>
+              </el-tooltip>
+              <span v-else class="never-scanned">{{ t('ipam.neverScannedLabel') }}</span>
             </template>
           </el-table-column>
-          <el-table-column :label="t('ipam.openPortsCol')" min-width="110">
+          <el-table-column
+            v-if="ipColumnVisible.openPorts"
+            :label="t('ipam.openPortsCol')"
+            width="130"
+            class-name="nowrap-col"
+          >
             <template #default="{ row }">
               <span v-if="row.openPorts?.length">{{ row.openPorts.join(', ') }}</span>
               <span v-else class="empty-placeholder">—</span>
             </template>
           </el-table-column>
-          <el-table-column :label="t('common.actions')" width="140" fixed="right" align="center">
+          <el-table-column :label="t('common.actions')" width="150" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openEditIPDialog(row)">
-                <el-icon><Edit /></el-icon>
-                {{ t('common.edit') }}
-              </el-button>
-              <el-button link type="primary" size="small" @click="handleDeleteIP(row)">
-                <el-icon><Delete /></el-icon>
-                {{ t('common.delete') }}
-              </el-button>
+              <div class="action-buttons">
+                <el-button link type="primary" size="small" @click="openEditIPDialog(row)">
+                  <el-icon><Edit /></el-icon>
+                  {{ t('common.edit') }}
+                </el-button>
+                <el-dropdown trigger="click">
+                  <el-button link type="primary" size="small">
+                    {{ t('common.more') }}
+                    <el-icon><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item divided class="danger-item" @click="handleDeleteIP(row)">
+                        <el-icon><Delete /></el-icon> {{ t('common.delete') }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -1770,13 +1851,53 @@ const handleDeleteIP = async (ip: IPAddress) => {
   margin-top: 12px;
 }
 
+/* IP 地址：不可点击，无底色等宽字体，避免被误认为链接 */
 .ip-address {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 14px;
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  padding: 4px 8px;
-  border-radius: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+}
+
+/* 列宽/换行控制：IP 地址列按 15 字符等宽字体计算，固定宽不换行 */
+.ipam-ip-table :deep(.ip-address-col .cell) {
+  white-space: nowrap;
+}
+
+/* 状态/在线/开放端口列固定宽不换行，禁止「未扫/描」这类折行 */
+.ipam-ip-table :deep(.nowrap-col .cell) {
+  white-space: nowrap;
+}
+
+/* 在线列：状态标签 + 相对扫描时间 */
+.online-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scan-time {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+/* 从未扫描：灰色弱化 */
+.never-scanned {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* 预留但未绑定设备 */
+.unbound-text {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* 列设置面板 */
+.column-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .matrix-card {

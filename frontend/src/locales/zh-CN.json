@@ -728,7 +728,7 @@
     "usageTrend": "使用趋势",
     "filterBySite": "按站点筛选",
     "onlyUnassigned": "仅看未归属",
-    "assignedOfCapacity": "已分配 / 总容量：{used} / {total}",
+    "assignedOfCapacity": "IP 记录总数 / 总容量：{used} / {total}（含已分配、预留、未分配）",
     "highUsageSubnets": "高使用率子网",
     "highUsageThreshold": "使用率 ≥70%",
     "noSiteSubnets": "未归属站点子网",
@@ -825,7 +825,10 @@
     "ipAssignSuccess": "IP 分配成功",
     "saveIPFailed": "保存IP失败",
     "ipDeleteSuccess": "IP 删除成功",
-    "ipDeleteFailed": "删除IP失败"
+    "ipDeleteFailed": "删除IP失败",
+    "unboundLabel": "未绑定",
+    "neverScannedLabel": "从未扫描",
+    "lastScanTime": "最后扫描时间"
   },
   "topology": {
     "title": "网络拓扑",

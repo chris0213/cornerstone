@@ -93,6 +93,7 @@ class ScanManager:
                     "is_online": is_online,
                     "mac_address": mac_address,
                     "open_ports": ports_str,
+                    "last_scanned_at": func.now(),
                     "updated_at": func.now()
                 }
                 # 如果状态是英文的，转换为中文
@@ -115,6 +116,7 @@ class ScanManager:
                         is_online=is_online,
                         mac_address=mac_address,
                         open_ports=ports_str,
+                        last_scanned_at=func.now(),
                         created_at=func.now(),
                         updated_at=func.now()
                     )

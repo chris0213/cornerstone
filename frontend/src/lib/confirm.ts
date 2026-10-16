@@ -22,6 +22,8 @@ export interface ConfirmRunOptions {
   confirmText?: string
   /** 取消按钮文案 */
   cancelText?: string
+  /** 确认按钮标红（删除等危险操作） */
+  danger?: boolean
   /** 用户确认后执行的动作，可含列表更新等副作用 */
   action: () => Promise<unknown> | unknown
   /** 成功提示（缺省不提示） */
@@ -36,6 +38,7 @@ export async function confirmAndRun({
   title,
   confirmText,
   cancelText,
+  danger,
   action,
   successMessage,
   errorMessage,
@@ -44,6 +47,7 @@ export async function confirmAndRun({
     await ElMessageBox.confirm(message, title, {
       confirmButtonText: confirmText,
       cancelButtonText: cancelText,
+      confirmButtonClass: danger ? 'el-button--danger' : undefined,
       type: 'warning',
     })
     await action()
