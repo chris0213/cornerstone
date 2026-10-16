@@ -1101,7 +1101,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
           <el-table-column prop="vlan" :label="t('ipam.vlan')" min-width="110" sortable="custom">
             <template #default="{ row }">
               <span v-if="row.vlan">{{ t('ipam.vlanDisplay', { vid: row.vlan }) }}</span>
-              <span v-else>-</span>
+              <span v-else class="empty-placeholder">—</span>
             </template>
           </el-table-column>
           <el-table-column
@@ -1111,7 +1111,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
             sortable="custom"
             show-overflow-tooltip
           >
-            <template #default="{ row }">{{ row.usage || '-' }}</template>
+            <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.usage }">{{ row.usage || '—' }}</span></template>
           </el-table-column>
           <el-table-column :label="t('common.actions')" width="220" fixed="right" align="center">
             <template #default="{ row }">
@@ -1207,7 +1207,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
           :data="filteredIPs"
           style="width: 100%"
           border
-          height="calc(100vh - 420px)"
+          max-height="calc(100vh - 420px)"
         >
           <el-table-column prop="address" label="IP 地址" min-width="160">
             <template #default="{ row }">
@@ -1218,13 +1218,16 @@ const handleDeleteIP = async (ip: IPAddress) => {
             <template #default="{ row }">{{ getPrefixNetwork(row.prefixId) }}</template>
           </el-table-column>
           <el-table-column prop="deviceId" label="设备" min-width="180">
-            <template #default="{ row }">{{ deviceName(row.deviceId) || '-' }}</template>
+            <template #default="{ row }">
+              <span v-if="deviceName(row.deviceId)">{{ deviceName(row.deviceId) }}</span>
+              <span v-else class="empty-placeholder">—</span>
+            </template>
           </el-table-column>
           <el-table-column prop="usage" label="用途" min-width="160">
-            <template #default="{ row }">{{ row.usage || '-' }}</template>
+            <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.usage }">{{ row.usage || '—' }}</span></template>
           </el-table-column>
           <el-table-column prop="owner" label="负责人" min-width="140">
-            <template #default="{ row }">{{ row.owner || '-' }}</template>
+            <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.owner }">{{ row.owner || '—' }}</span></template>
           </el-table-column>
           <el-table-column prop="status" label="状态" min-width="100">
             <template #default="{ row }">
@@ -1247,13 +1250,13 @@ const handleDeleteIP = async (ip: IPAddress) => {
                 effect="plain"
                 size="small"
               >离线</el-tag>
-              <span v-else style="color: rgba(0,0,0,0.35)">未扫描</span>
+              <span v-else class="empty-placeholder">未扫描</span>
             </template>
           </el-table-column>
           <el-table-column label="开放端口" min-width="110">
             <template #default="{ row }">
               <span v-if="row.openPorts?.length">{{ row.openPorts.join(', ') }}</span>
-              <span v-else>-</span>
+              <span v-else class="empty-placeholder">—</span>
             </template>
           </el-table-column>
           <el-table-column :label="t('common.actions')" width="140" fixed="right" align="center">
@@ -1749,6 +1752,11 @@ const handleDeleteIP = async (ip: IPAddress) => {
 /* 卡片联动筛选标签栏（与专线页一致） */
 .quick-filter-bar {
   margin-bottom: 12px;
+}
+
+/* 空值占位（与专线页一致：灰色 em-dash） */
+.empty-placeholder {
+  color: var(--el-text-color-placeholder);
 }
 
 /* 分页栏 */
