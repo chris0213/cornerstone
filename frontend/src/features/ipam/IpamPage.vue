@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
-import { ElMessage, ElEmpty } from 'element-plus'
-import { Search as SearchIcon, User, Edit, Plus, Delete, Connection, Download, Upload } from '@element-plus/icons-vue'
+import { computed, h, ref, watch, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElCheckbox } from 'element-plus'
+import { Search as SearchIcon, Edit, Plus, Delete, Download, Upload, View, ArrowDown, Connection } from '@element-plus/icons-vue'
 import api from '../../api/axios'
 import { confirmAndRun } from '../../lib/confirm'
 import type { Prefix, IPAddress } from '../../types/domain'
@@ -155,8 +156,26 @@ const selectedPrefix = computed(() => {
   return prefixes.value.find(p => String(p.id) === String(selectedPrefixId.value))
 })
 
-// 触发扫描
+// 行级扫描 loading：防止同一子网重复触发
+const scanningPrefixId = ref<string | number | null>(null)
+
+// 触发扫描（先确认扫描范围与探测包提示）
 const handleScanPrefix = async (prefixId: string | number, network: string) => {
+  if (scanningPrefixId.value !== null) return
+  try {
+    await ElMessageBox.confirm(
+      t('ipam.scanConfirmText', { network }),
+      t('ipam.scanConfirmTitle'),
+      {
+        type: 'info',
+        confirmButtonText: t('ipam.scan'),
+        cancelButtonText: t('common.cancel'),
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
+  scanningPrefixId.value = prefixId
   try {
     const data = await scanPrefix(Number(prefixId))
 
@@ -178,6 +197,8 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
     console.error('启动扫描失败:', err)
     const detail = err?.response?.data?.detail || err?.message || t('ipam.scanStartError')
     ElMessage.error(t('ipam.scanStartFailed') + ': ' + detail)
+  } finally {
+    scanningPrefixId.value = null
   }
 }
 
@@ -566,21 +587,56 @@ const handleSavePrefix = async () => {
 }
 
 const handleDeletePrefix = async (prefix: Prefix) => {
-  await confirmAndRun({
-    message: `确定要删除子网「${prefix.network}」吗？此操作不可撤销。`,
-    title: t('common.confirm'),
-    confirmText: t('common.delete'),
-    cancelText: t('common.cancel'),
-    action: async () => {
-      await deletePrefix(prefix.id)
-      const index = prefixes.value.findIndex(p => p.id === prefix.id)
-      if (index !== -1) {
-        prefixes.value.splice(index, 1)
-      }
-    },
-    successMessage: t('ipam.deletePrefixSuccess'),
-    errorMessage: t('ipam.deletePrefixFailed'),
-  })
+  const ipCount = prefix.ipCount ?? 0
+  // 有已分配 IP 时需额外勾选确认：后端删除子网会级联清除该子网全部 IP 记录
+  let acknowledged = ipCount === 0
+  try {
+    await ElMessageBox({
+      title: t('common.confirm'),
+      type: 'warning',
+      confirmButtonText: t('common.delete'),
+      cancelButtonText: t('common.cancel'),
+      showCancelButton: true,
+      message: h('div', null, [
+        h('p', { style: 'margin: 0 0 4px' }, t('ipam.confirmDeletePrefix', { network: prefix.network })),
+        ...(ipCount > 0
+          ? [
+              h(
+                'p',
+                {
+                  style: 'margin: 0 0 8px; color: var(--el-color-danger); font-size: 13px',
+                },
+                t('ipam.confirmDeleteWithIPs', { count: ipCount })
+              ),
+              h(ElCheckbox, {
+                modelValue: acknowledged,
+                'onUpdate:modelValue': (val: any) => {
+                  acknowledged = Boolean(val)
+                },
+                label: t('ipam.acknowledgeIPClear'),
+                size: 'small',
+              }),
+            ]
+          : []),
+      ]),
+      beforeClose: (action: string, _ctx: unknown, done: () => void) => {
+        // 未勾选确认书时点击「删除」不关闭弹窗
+        if (action === 'confirm' && !acknowledged) return
+        done()
+      },
+    })
+    await deletePrefix(prefix.id)
+    const index = prefixes.value.findIndex(p => p.id === prefix.id)
+    if (index !== -1) {
+      prefixes.value.splice(index, 1)
+    }
+    ElMessage.success(t('ipam.deletePrefixSuccess'))
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to delete prefix:', error)
+      ElMessage.error(t('ipam.deletePrefixFailed'))
+    }
+  }
 }
 
 function openCreateIPDialog() {
@@ -779,10 +835,10 @@ const handleSaveIP = async () => {
 
 const handleDeleteIP = async (ip: IPAddress) => {
   await confirmAndRun({
-    message: `确定要删除 IP 地址「${ip.address}」吗？此操作不可撤销。`,
-    title: '确认删除',
-    confirmText: '删除',
-    cancelText: '取消',
+    message: t('ipam.confirmDeleteIP', { address: ip.address }),
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
     action: async () => {
       await deleteIPAddress(ip.id)
       const index = ipAddresses.value.findIndex(ipItem => ipItem.id === ip.id)
@@ -883,41 +939,38 @@ const handleDeleteIP = async (ip: IPAddress) => {
             <el-tab-pane :label="t('ipam.tabIPs')" name="ips" />
           </el-tabs>
           <div class="table-actions">
+            <!-- 按钮层级与顺序与专线页一致：导出、导入（次要）、新增（主色） -->
             <el-button
               v-if="activeTab === 'prefixes'"
-              type="warning"
-              plain
-              @click="showPrefixImportDialog = true"
-            >
-              <el-icon><Upload /></el-icon>
-              导入
-            </el-button>
-            <el-button
-              v-if="activeTab === 'prefixes'"
-              type="success"
               plain
               @click="handleExportPrefixes"
             >
               <el-icon><Download /></el-icon>
-              导出
+              {{ t('common.export') }}
             </el-button>
             <el-button
               v-if="activeTab === 'ips'"
-              type="success"
               plain
               @click="handleExportIPs"
             >
               <el-icon><Download /></el-icon>
-              导出
+              {{ t('common.export') }}
+            </el-button>
+            <el-button
+              v-if="activeTab === 'prefixes'"
+              plain
+              @click="showPrefixImportDialog = true"
+            >
+              <el-icon><Upload /></el-icon>
+              {{ t('common.import') }}
             </el-button>
             <el-button
               v-if="activeTab === 'ips'"
-              type="warning"
               plain
               @click="showImportDialog = true"
             >
               <el-icon><Upload /></el-icon>
-              导入
+              {{ t('common.import') }}
             </el-button>
             <el-button
               v-if="activeTab === 'prefixes'"
@@ -925,7 +978,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
               @click="openCreatePrefixDialog"
             >
               <el-icon><Plus /></el-icon>
-              新增子网
+              {{ t('ipam.createPrefix') }}
             </el-button>
             <el-button
               v-if="activeTab === 'ips'"
@@ -933,7 +986,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
               @click="openCreateIPDialog"
             >
               <el-icon><Plus /></el-icon>
-              分配 IP
+              {{ t('ipam.assignIP') }}
             </el-button>
           </div>
         </div>
@@ -1021,40 +1074,45 @@ const handleDeleteIP = async (ip: IPAddress) => {
           >
             <template #default="{ row }">{{ row.usage || '-' }}</template>
           </el-table-column>
-          <el-table-column :label="t('common.actions')" width="280" fixed="right" align="center">
+          <el-table-column :label="t('common.actions')" width="220" fixed="right" align="center">
             <template #default="{ row }">
               <div class="action-buttons">
-                <el-button 
-                  link 
-                  type="primary" 
-                  size="small" 
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
                   @click="selectedPrefixId = row.id"
                 >
-                  <el-icon><User /></el-icon>
+                  <el-icon><View /></el-icon>
                   {{ t('common.view') }}
                 </el-button>
-                <el-button 
-                  link 
-                  type="warning" 
-                  size="small" 
-                  @click="handleEditPrefix(row)"
-                >
-                  <el-icon><Edit /></el-icon>
-                  {{ t('common.edit') }}
-                </el-button>
-                <el-button 
-                  link 
-                  type="success" 
-                  size="small" 
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="scanningPrefixId === row.id"
+                  :disabled="scanningPrefixId !== null"
                   @click="handleScanPrefix(row.id, row.network)"
                 >
-                  <el-icon><SearchIcon /></el-icon>
-                  扫描
+                  <el-icon v-if="scanningPrefixId !== row.id"><SearchIcon /></el-icon>
+                  {{ t('ipam.scan') }}
                 </el-button>
-                <el-button link type="danger" size="small" @click="handleDeletePrefix(row)">
-                  <el-icon><Delete /></el-icon>
-                  删除
-                </el-button>
+                <el-dropdown trigger="click">
+                  <el-button link type="primary" size="small">
+                    {{ t('common.more') }}
+                    <el-icon><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="handleEditPrefix(row)">
+                        <el-icon><Edit /></el-icon> {{ t('common.edit') }}
+                      </el-dropdown-item>
+                      <el-dropdown-item divided class="danger-item" @click="handleDeletePrefix(row)">
+                        <el-icon><Delete /></el-icon> {{ t('common.delete') }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -1109,7 +1167,6 @@ const handleDeleteIP = async (ip: IPAddress) => {
           class="ipam-ip-table"
           :data="filteredIPs"
           style="width: 100%"
-          stripe
           border
           height="calc(100vh - 420px)"
         >
@@ -1160,15 +1217,15 @@ const handleDeleteIP = async (ip: IPAddress) => {
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="140" fixed="right" align="center">
+          <el-table-column :label="t('common.actions')" width="140" fixed="right" align="center">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="openEditIPDialog(row)">
                 <el-icon><Edit /></el-icon>
-                编辑
+                {{ t('common.edit') }}
               </el-button>
-              <el-button link type="danger" size="small" @click="handleDeleteIP(row)">
+              <el-button link type="primary" size="small" @click="handleDeleteIP(row)">
                 <el-icon><Delete /></el-icon>
-                删除
+                {{ t('common.delete') }}
               </el-button>
             </template>
           </el-table-column>
@@ -1701,6 +1758,23 @@ const handleDeleteIP = async (ip: IPAddress) => {
 .action-buttons .el-button {
   padding: 0 8px;
   margin: 0;
+}
+
+/* 「更多」下拉里删除项红色（el-dropdown-menu 渲染在 body，需 popper class） */
+.action-buttons .el-dropdown {
+  margin-left: 4px;
+}
+
+/* el-dropdown 挂在 body 下，样式走全局选择器（非 scoped 可达） */
+:global(.el-dropdown-menu__item.danger-item) {
+  color: var(--el-color-danger);
+}
+:global(.el-dropdown-menu__item.danger-item .el-icon) {
+  color: var(--el-color-danger);
+}
+:global(.el-dropdown-menu__item.danger-item:hover) {
+  color: var(--el-color-danger);
+  background-color: var(--el-color-danger-light-9);
 }
 
 @media (max-width: 1200px) {

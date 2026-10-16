@@ -521,7 +521,16 @@
     "noSiteTag": "No Site",
     "idle": "Idle",
     "vlanDisplay": "VLAN {vid}",
-    "usageLabel": "Usage"
+    "usageLabel": "Usage",
+    "createPrefix": "New Subnet",
+    "assignIP": "Assign IP",
+    "scan": "Scan",
+    "scanConfirmTitle": "Confirm Scan",
+    "scanConfirmText": "Scan subnet {network}? Probe packets will be sent to this subnet.",
+    "confirmDeletePrefix": "Delete subnet \"{network}\"? This action cannot be undone.",
+    "confirmDeleteWithIPs": "This subnet has {count} assigned IP(s); deleting it will also remove these IP records.",
+    "acknowledgeIPClear": "I understand these IP records will also be removed",
+    "confirmDeleteIP": "Delete IP address \"{address}\"? This action cannot be undone."
   },
   "topology": {
     "title": "Network Topology",
