@@ -236,6 +236,11 @@ const handleViewIP = (ip: IPAddress) => {
   openEditIPDialog(ip)
 }
 
+// 卡片联动筛选：'' | 高使用率 | 未归属站点（与站点下拉互不影响，可叠加）
+// 注意：必须声明在 filteredPrefixes 之前——watch 创建时会立即求值该 computed，
+// 若 quickFilter 尚未声明会触发 TDZ ReferenceError 导致整页白屏
+const quickFilter = ref<'' | 'highUsage' | 'noSite'>('')
+
 const filteredPrefixes = computed(() => {
   let result = prefixes.value
 
@@ -318,8 +323,6 @@ watch([filteredPrefixes, prefixSort], () => {
   }
 })
 
-// 卡片联动筛选：'' | 高使用率 | 未归属站点（与站点下拉互不影响，可叠加）
-const quickFilter = ref<'' | 'highUsage' | 'noSite'>('')
 function toggleQuickFilter(key: 'highUsage' | 'noSite') {
   quickFilter.value = quickFilter.value === key ? '' : key
 }
