@@ -5,7 +5,7 @@ import { useAppStore } from '../../store'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
 import { useCrudForm } from '@/lib/useCrudForm'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { Plus, Download, Upload, Clock, Warning, WarningFilled, ArrowDown, View, Edit, Document, Delete, Setting } from '@element-plus/icons-vue'
 import { daysUntil, money, formatDate } from '../../lib/utils'
@@ -376,16 +376,30 @@ async function handleSave() {
 }
 
 function handleDelete(row: Circuit) {
-  if (confirm(`${t('common.confirm')} ${t('common.delete')} ${t('circuits.title')} "${row.name}"?`)) {
-    deleteCircuit(Number(row.id)).then(() => {
-      circuits.value = circuits.value.filter(c => c.id !== row.id)
-      store.save()
-      ElMessage.success(t('common.success'))
-    }).catch(error => {
-      console.error('Failed to delete circuit:', error)
-      ElMessage.error(t('common.error'))
+  ElMessageBox.confirm(
+    `${t('circuits.confirmDelete')} "${row.name}"`,
+    t('common.confirm'),
+    {
+      confirmButtonText: t('common.confirmDelete'),
+      cancelButtonText: t('common.cancel'),
+      confirmButtonClass: 'el-button--danger',
+      type: 'warning',
+    }
+  )
+    .then(async () => {
+      try {
+        await deleteCircuit(Number(row.id))
+        circuits.value = circuits.value.filter(c => c.id !== row.id)
+        store.save()
+        ElMessage.success(t('circuits.deleteSuccess'))
+      } catch (error: any) {
+        console.error('Failed to delete circuit:', error)
+        ElMessage.error(error?.response?.data?.detail || t('circuits.deleteFailed'))
+      }
     })
-  }
+    .catch(() => {
+      // 用户取消，静默
+    })
 }
 
 function viewDetail(row: Circuit) {
@@ -656,10 +670,10 @@ onMounted(async () => {
               </div>
             </el-popover>
             <el-button v-if="selectedRows.length > 0" type="danger" size="small">{{ t('common.batch') }} ({{ selectedRows.length }})</el-button>
-            <el-button type="success" plain @click="handleExport">
+            <el-button plain @click="handleExport">
               <el-icon><Download /></el-icon> {{ t('common.export') }}
             </el-button>
-            <el-button type="warning" plain @click="showImportDialog = true">
+            <el-button plain @click="showImportDialog = true">
               <el-icon><Upload /></el-icon> {{ t('common.import') }}
             </el-button>
             <el-button type="primary" @click="openCreateDialog">
@@ -672,7 +686,6 @@ onMounted(async () => {
       <el-table
         :data="filteredCircuits"
         style="width: 100%"
-        stripe
         border
         height="calc(100vh - 400px)"
         show-summary
@@ -1071,40 +1084,40 @@ onMounted(async () => {
 }
 
 .overview-card {
-  background: white;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--el-text-color-secondary);
   transition: all 0.2s ease;
 }
 
 .overview-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--el-box-shadow-light);
 }
 
-.overview-card-success { border-left-color: #52c41a; }
-.overview-card-danger { border-left-color: #ff4d4f; }
-.overview-card-warning { border-left-color: #faad14; }
-.overview-card-blue { border-left-color: #1890ff; }
+.overview-card-success { border-left-color: var(--el-color-success); }
+.overview-card-danger { border-left-color: var(--el-color-danger); }
+.overview-card-warning { border-left-color: var(--el-color-warning); }
+.overview-card-blue { border-left-color: var(--el-color-primary); }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 26px;
   font-weight: 700;
-  color: #262626;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--el-text-color-placeholder);
 }
 
 .table-card {
@@ -1129,17 +1142,17 @@ onMounted(async () => {
 }
 
 .table-filters-wrapper::-webkit-scrollbar-track {
-  background: #f5f5f5;
+  background: var(--el-fill-color-light);
   border-radius: 3px;
 }
 
 .table-filters-wrapper::-webkit-scrollbar-thumb {
-  background: #d9d9d9;
+  background: var(--el-border-color);
   border-radius: 3px;
 }
 
 .table-filters-wrapper::-webkit-scrollbar-thumb:hover {
-  background: #bfbfbf;
+  background: var(--el-text-color-placeholder);
 }
 
 .table-filters {
@@ -1167,7 +1180,7 @@ onMounted(async () => {
 
 .circuit-name-main {
   font-weight: 500;
-  color: #1890ff;
+  color: var(--el-color-primary);
   cursor: pointer;
 }
 
@@ -1231,7 +1244,7 @@ onMounted(async () => {
 
 .cost-value {
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   white-space: nowrap;
 }
@@ -1275,19 +1288,19 @@ onMounted(async () => {
 }
 
 :deep(.fault-row) {
-  background-color: #fff1f0 !important;
+  background-color: var(--el-color-danger-light-9) !important;
 }
 
 :deep(.fault-row:hover) {
-  background-color: #fff2f0 !important;
+  background-color: var(--el-color-danger-light-9) !important;
 }
 
 :deep(.expiry-row) {
-  background-color: #fffbe6 !important;
+  background-color: var(--el-color-warning-light-9) !important;
 }
 
 :deep(.expiry-row:hover) {
-  background-color: #fffbe6 !important;
+  background-color: var(--el-color-warning-light-9) !important;
 }
 
 /* 已到期未续约行：左侧 3px 红色警示条 */

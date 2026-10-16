@@ -118,6 +118,7 @@ const ipForm = ref<{
   deviceId: '',
   usage: '',
   owner: '',
+  // status 是 DB 存储值（中文），不能 i18n 化；显示层经 getStatusText 映射为翻译文案
   status: '已分配',
 })
 
@@ -235,7 +236,7 @@ const handleScanCompleted = async () => {
   ElMessage.success(t('ipam.scanCompleted'))
 }
 
-// {{ t('common.close') }}扫描对话框
+// 关闭扫描对话框
 const closeScanDialog = () => {
   showScanDialog.value = false
   scanTaskId.value = ''
@@ -472,17 +473,20 @@ function getUsageLevel(p: Prefix): 'idle' | 'low' | 'mid' | 'high' {
   return 'low'
 }
 
+// 状态显示文案：键同时兼容后端枚举与 DB 存量中文值，值指向 i18n key
+const IP_STATUS_TEXT_KEYS: Record<string, string> = {
+  'assigned': 'ipam.statusAssigned',
+  'reserved': 'ipam.statusReserved',
+  'available': 'ipam.statusAvailable',
+  'active': 'ipam.statusAssigned',
+  '已分配': 'ipam.statusAssigned',
+  '预留': 'ipam.statusReserved',
+  '未分配': 'ipam.statusAvailable',
+}
+
 function getStatusText(status: string): string {
-  const statusMap: Record<string, string> = {
-    'assigned': '已分配',
-    'reserved': '预留',
-    'available': '未分配',
-    '已分配': '已分配',
-    '预留': '预留',
-    '未分配': '未分配',
-    'active': '已分配'
-  }
-  return statusMap[status] || status
+  const key = IP_STATUS_TEXT_KEYS[status]
+  return key ? t(key) : status
 }
 
 function getStatusType(status: string): string {
@@ -697,7 +701,7 @@ function openEditIPDialog(ip: IPAddress) {
   showIPDialog.value = true
 }
 
-// ==================== {{ t('common.import') }}导出 ====================
+// ==================== 导入导出 ====================
 
 async function handleExportPrefixes() {
   try {
@@ -711,9 +715,9 @@ async function handleExportPrefixes() {
     link.download = `${t('ipam.prefixExportFilePrefix')}_${new Date().toLocaleDateString(locale?.value || 'zh-CN').replace(/\//g, '-')}.xlsx`
     link.click()
     window.URL.revokeObjectURL(url)
-    ElMessage.success('子网导出成功')
+    ElMessage.success(t('ipam.prefixExportSuccess'))
   } catch (error) {
-    ElMessage.error('子网导出失败')
+    ElMessage.error(t('ipam.prefixExportFailed'))
   }
 }
 
@@ -729,7 +733,7 @@ async function handleDownloadPrefixTemplate() {
     link.click()
     window.URL.revokeObjectURL(url)
   } catch (error) {
-    ElMessage.error('模板下载失败')
+    ElMessage.error(t('ipam.templateDownloadFailed'))
   }
 }
 
@@ -740,7 +744,7 @@ function handlePrefixImportFileChange(file: any) {
 
 async function handleImportPrefixes() {
   if (!prefixImportFile.value) {
-    ElMessage.error('请先选择文件')
+    ElMessage.error(t('ipam.selectFileFirst'))
     return
   }
   prefixImportLoading.value = true
@@ -778,9 +782,9 @@ async function handleExportIPs() {
     link.download = `${t('ipam.ipExportFilePrefix')}_${new Date().toLocaleDateString(locale?.value || 'zh-CN').replace(/\//g, '-')}.xlsx`
     link.click()
     window.URL.revokeObjectURL(url)
-    ElMessage.success('IP导出成功')
+    ElMessage.success(t('ipam.ipExportSuccess'))
   } catch (error) {
-    ElMessage.error('IP导出失败')
+    ElMessage.error(t('ipam.ipExportFailed'))
   }
 }
 
@@ -796,7 +800,7 @@ async function handleDownloadIPTemplate() {
     link.click()
     window.URL.revokeObjectURL(url)
   } catch (error) {
-    ElMessage.error('模板下载失败')
+    ElMessage.error(t('ipam.templateDownloadFailed'))
   }
 }
 
@@ -807,7 +811,7 @@ function handleImportFileChange(file: any) {
 
 async function handleImportIPs() {
   if (!importFile.value) {
-    ElMessage.error('请先选择文件')
+    ElMessage.error(t('ipam.selectFileFirst'))
     return
   }
   importLoading.value = true
@@ -820,14 +824,14 @@ async function handleImportIPs() {
     })
     importResult.value = response.data
     if (response.data.success_count > 0) {
-      ElMessage.success(`成功导入 ${response.data.success_count} 条IP`)
+      ElMessage.success(t('ipam.ipImportSuccess', { count: response.data.success_count }))
       await loadData()
     }
     if (response.data.failed_count > 0) {
-      ElMessage.warning(`${response.data.failed_count} 条IP导入失败`)
+      ElMessage.warning(t('ipam.ipImportFailed', { count: response.data.failed_count }))
     }
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '导入失败')
+    ElMessage.error(error.response?.data?.detail || t('ipam.importFailed'))
   } finally {
     importLoading.value = false
   }
@@ -840,7 +844,7 @@ function closeIPDialog() {
 
 const handleSaveIP = async () => {
   if (!ipForm.value.address.trim()) {
-    ElMessage.error('请输入 IP 地址')
+    ElMessage.error(t('ipam.inputIPAddress'))
     return
   }
 
@@ -855,7 +859,7 @@ const handleSaveIP = async () => {
       if (index !== -1) {
         ipAddresses.value[index] = response
       }
-      ElMessage.success('IP 更新成功')
+      ElMessage.success(t('ipam.ipUpdateSuccess'))
     } else {
       const newIP = await createIPAddress({
         ...ipForm.value,
@@ -863,12 +867,12 @@ const handleSaveIP = async () => {
         deviceId: ipForm.value.deviceId ? Number(ipForm.value.deviceId) : null,
       })
       ipAddresses.value.push(newIP)
-      ElMessage.success('IP 分配成功')
+      ElMessage.success(t('ipam.ipAssignSuccess'))
     }
     closeIPDialog()
   } catch (error) {
     console.error('Failed to save IP:', error)
-    ElMessage.error('保存IP失败')
+    ElMessage.error(t('ipam.saveIPFailed'))
   }
 }
 
@@ -885,8 +889,8 @@ const handleDeleteIP = async (ip: IPAddress) => {
         ipAddresses.value.splice(index, 1)
       }
     },
-    successMessage: 'IP 删除成功',
-    errorMessage: '删除IP失败',
+    successMessage: t('ipam.ipDeleteSuccess'),
+    errorMessage: t('ipam.ipDeleteFailed'),
   })
 }
 </script>
@@ -953,7 +957,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
               size="small" 
               @click="selectedPrefixId = null"
             >
-              关闭
+              {{ t('common.close') }}
             </el-button>
           </div>
         </div>
@@ -1172,7 +1176,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
         <div class="table-filters">
           <el-select
             v-model="filterPrefixId"
-            placeholder="全部子网"
+            :placeholder="t('ipam.allPrefixes')"
             clearable
             filterable
             style="width: 220px"
@@ -1186,17 +1190,17 @@ const handleDeleteIP = async (ip: IPAddress) => {
           </el-select>
           <el-select
             v-model="filterOnline"
-            placeholder="全部状态"
+            :placeholder="t('ipam.allStatus')"
             clearable
             style="width: 160px"
           >
-            <el-option label="在线" value="online" />
-            <el-option label="离线" value="offline" />
-            <el-option label="未扫描" value="unscanned" />
+            <el-option :label="t('ipam.onlineLabel')" value="online" />
+            <el-option :label="t('ipam.offlineLabel')" value="offline" />
+            <el-option :label="t('ipam.unscannedLabel')" value="unscanned" />
           </el-select>
           <el-input
             v-model="searchIPQuery"
-            placeholder="搜索 IP 地址、用途、负责人..."
+            :placeholder="t('ipam.searchIPsPlaceholder')"
             prefix-icon="Search"
             clearable
             style="width: 360px"
@@ -1209,51 +1213,51 @@ const handleDeleteIP = async (ip: IPAddress) => {
           border
           max-height="calc(100vh - 420px)"
         >
-          <el-table-column prop="address" label="IP 地址" min-width="160">
+          <el-table-column prop="address" :label="t('ipam.ipAddressCol')" min-width="160">
             <template #default="{ row }">
               <code class="ip-address">{{ row.address }}</code>
             </template>
           </el-table-column>
-          <el-table-column prop="prefixId" label="子网" min-width="160">
+          <el-table-column prop="prefixId" :label="t('ipam.subnet')" min-width="160">
             <template #default="{ row }">{{ getPrefixNetwork(row.prefixId) }}</template>
           </el-table-column>
-          <el-table-column prop="deviceId" label="设备" min-width="180">
+          <el-table-column prop="deviceId" :label="t('ipam.deviceCol')" min-width="180">
             <template #default="{ row }">
               <span v-if="deviceName(row.deviceId)">{{ deviceName(row.deviceId) }}</span>
               <span v-else class="empty-placeholder">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="usage" label="用途" min-width="160">
+          <el-table-column prop="usage" :label="t('ipam.usage')" min-width="160">
             <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.usage }">{{ row.usage || '—' }}</span></template>
           </el-table-column>
-          <el-table-column prop="owner" label="负责人" min-width="140">
+          <el-table-column prop="owner" :label="t('ipam.owner')" min-width="140">
             <template #default="{ row }"><span :class="{ 'empty-placeholder': !row.owner }">{{ row.owner || '—' }}</span></template>
           </el-table-column>
-          <el-table-column prop="status" label="状态" min-width="100">
+          <el-table-column prop="status" :label="t('common.status')" min-width="100">
             <template #default="{ row }">
               <el-tag :type="getStatusType(row.status)" effect="light">
                 {{ getStatusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="在线" width="90" align="center">
+          <el-table-column :label="t('ipam.onlineLabel')" width="90" align="center">
             <template #default="{ row }">
               <el-tag
                 v-if="row.isOnline === true"
                 type="success"
                 effect="dark"
                 size="small"
-              >在线</el-tag>
+              >{{ t('ipam.onlineLabel') }}</el-tag>
               <el-tag
                 v-else-if="row.isOnline === false"
                 type="danger"
                 effect="plain"
                 size="small"
-              >离线</el-tag>
-              <span v-else class="empty-placeholder">未扫描</span>
+              >{{ t('ipam.offlineLabel') }}</el-tag>
+              <span v-else class="empty-placeholder">{{ t('ipam.unscannedLabel') }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="开放端口" min-width="110">
+          <el-table-column :label="t('ipam.openPortsCol')" min-width="110">
             <template #default="{ row }">
               <span v-if="row.openPorts?.length">{{ row.openPorts.join(', ') }}</span>
               <span v-else class="empty-placeholder">—</span>
@@ -1291,8 +1295,8 @@ const handleDeleteIP = async (ip: IPAddress) => {
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="所属站点">
-              <el-select v-model="prefixForm.siteId" style="width: 100%" placeholder="请选择站点">
+            <el-form-item :label="t('ipam.site')">
+              <el-select v-model="prefixForm.siteId" style="width: 100%" :placeholder="t('ipam.selectSite')">
                 <el-option v-for="site in sites" :key="site.id" :label="site.name" :value="site.id" />
               </el-select>
             </el-form-item>
@@ -1300,66 +1304,66 @@ const handleDeleteIP = async (ip: IPAddress) => {
         </el-row>
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="VLAN">
-              <el-select v-model="prefixForm.vlan" style="width: 100%" placeholder="请选择VLAN">
-                <el-option v-for="vlan in vlans" :key="vlan.vid" :label="`${vlan.vid} - ${vlan.name || '未命名'}`" :value="vlan.vid.toString()" />
+            <el-form-item :label="t('ipam.vlan')">
+              <el-select v-model="prefixForm.vlan" style="width: 100%" :placeholder="t('ipam.selectVlan')">
+                <el-option v-for="vlan in vlans" :key="vlan.vid" :label="`${vlan.vid} - ${vlan.name || t('ipam.unnamed')}`" :value="vlan.vid.toString()" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="用途">
-              <el-input v-model="prefixForm.usage" placeholder="如：办公网" />
+            <el-form-item :label="t('ipam.usage')">
+              <el-input v-model="prefixForm.usage" :placeholder="t('ipam.usageExample')" />
             </el-form-item>
           </el-col>
         </el-row>
-        <el-divider content-position="left">自动发现扫描</el-divider>
+        <el-divider content-position="left">{{ t('ipam.autoDiscoveryScan') }}</el-divider>
         <el-row :gutter="20">
           <el-col :span="24">
-            <el-form-item label="自定义 TCP 端口" label-width="130px">
-              <el-input v-model="prefixForm.customScanPorts" placeholder="留空用默认 [22,80,443,8080,445,139,161,3389,5060]；自定义如 22,443,161" />
-              <div class="form-tip">跨网段探测主要靠 TCP 端口，ARP 只在同二层有效。禁 ping 段也要能探测到。</div>
+            <el-form-item :label="t('ipam.customScanPorts')" label-width="130px">
+              <el-input v-model="prefixForm.customScanPorts" :placeholder="t('ipam.customScanPortsPlaceholder')" />
+              <div class="form-tip">{{ t('ipam.scanTip') }}</div>
             </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="启用自动扫描" label-width="130px">
+            <el-form-item :label="t('ipam.enableAutoScan')" label-width="130px">
               <el-switch v-model="prefixForm.autoScanEnabled" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="扫描 Cron" label-width="90px" :disabled="!prefixForm.autoScanEnabled">
-              <el-input v-model="prefixForm.scanCron" placeholder="如 0 */6 * * *（每6小时）" :disabled="!prefixForm.autoScanEnabled" />
+            <el-form-item :label="t('ipam.scanCron')" label-width="90px" :disabled="!prefixForm.autoScanEnabled">
+              <el-input v-model="prefixForm.scanCron" :placeholder="t('ipam.scanCronPlaceholder')" :disabled="!prefixForm.autoScanEnabled" />
             </el-form-item>
           </el-col>
         </el-row>
       </el-form>
 
       <template #footer>
-        <el-button @click="closePrefixDialog">取消</el-button>
-        <el-button type="primary" @click="handleSavePrefix">保存</el-button>
+        <el-button @click="closePrefixDialog">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="handleSavePrefix">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog
       v-model="showIPDialog"
-      :title="editingIP ? '编辑 IP 地址' : '分配 IP 地址'"
+      :title="editingIP ? t('ipam.editIPTitle') : t('ipam.assignIPDialogTitle')"
       width="640px"
       :close-on-click-modal="false"
     >
       <el-form label-position="top">
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="IP 地址">
-              <el-input v-model="ipForm.address" placeholder="如：192.0.2.10" />
+            <el-form-item :label="t('ipam.ipAddressCol')">
+              <el-input v-model="ipForm.address" :placeholder="t('ipam.ipAddressPlaceholder')" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="所属子网">
-              <el-select 
-                v-model="ipForm.prefixId" 
-                style="width: 100%" 
-                placeholder="请选择子网"
+            <el-form-item :label="t('ipam.parentSubnet')">
+              <el-select
+                v-model="ipForm.prefixId"
+                style="width: 100%"
+                :placeholder="t('ipam.selectSubnet')"
                 @change="(val: number | string) => val && loadPrefixInfo(Number(val))"
               >
                 <el-option v-for="prefix in prefixes" :key="prefix.id" :label="prefix.network" :value="String(prefix.id)" />
@@ -1367,7 +1371,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
             </el-form-item>
           </el-col>
         </el-row>
-        
+
         <div v-if="currentPrefixInfo && !editingIP" class="prefix-info-bar">
           <el-alert
             type="info"
@@ -1375,22 +1379,22 @@ const handleDeleteIP = async (ip: IPAddress) => {
             style="padding: 12px;"
           >
             <div class="prefix-info-row">
-              <span>子网使用情况:</span>
+              <span>{{ t('ipam.subnetUsage') }}</span>
               <span class="usage-text">{{ currentPrefixInfo.used_count }}/{{ currentPrefixInfo.total_ips }}</span>
               <span class="usage-percent">({{ currentPrefixInfo.usage_rate }}%)</span>
             </div>
             <div class="usage-progress">
-              <div 
-                class="usage-bar-fill" 
+              <div
+                class="usage-bar-fill"
                 :class="{ 'warning': currentPrefixInfo.usage_rate > 80 }"
                 :style="{ width: currentPrefixInfo.usage_rate + '%' }"
               ></div>
             </div>
             <div class="prefix-info-row" style="margin-top: 8px;">
-              <span>可用IP:</span>
-              <span class="available-count">{{ currentPrefixInfo.available_count }}个</span>
+              <span>{{ t('ipam.availableIPs') }}</span>
+              <span class="available-count">{{ currentPrefixInfo.available_count }}{{ t('ipam.countUnit') }}</span>
               <el-button size="small" type="primary" plain @click="loadPrefixInfo(Number(ipForm.prefixId))">
-                重新选择
+                {{ t('ipam.reselectSubnet') }}
               </el-button>
             </div>
           </el-alert>
@@ -1398,46 +1402,46 @@ const handleDeleteIP = async (ip: IPAddress) => {
 
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="绑定设备">
-              <el-select v-model="ipForm.deviceId" style="width: 100%" placeholder="无">
+            <el-form-item :label="t('ipam.bindDevice')">
+              <el-select v-model="ipForm.deviceId" style="width: 100%" :placeholder="t('ipam.none')">
                 <el-option v-for="device in devices" :key="device.id" :label="device.name" :value="String(device.id)" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="状态">
+            <el-form-item :label="t('common.status')">
               <el-select v-model="ipForm.status" style="width: 100%">
-                <el-option value="已分配">已分配</el-option>
-                <el-option value="预留">预留</el-option>
+                <el-option value="已分配">{{ t('ipam.statusAssigned') }}</el-option>
+                <el-option value="预留">{{ t('ipam.statusReserved') }}</el-option>
               </el-select>
             </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="20">
           <el-col :span="12">
-            <el-form-item label="用途">
-              <el-input v-model="ipForm.usage" placeholder="如：服务器" />
+            <el-form-item :label="t('ipam.usage')">
+              <el-input v-model="ipForm.usage" :placeholder="t('ipam.usageServerExample')" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="负责人">
-              <el-input v-model="ipForm.owner" placeholder="如：网络组" />
+            <el-form-item :label="t('ipam.owner')">
+              <el-input v-model="ipForm.owner" :placeholder="t('ipam.ownerExample')" />
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="到期时间（可选）">
+        <el-form-item :label="t('ipam.expireAtOptional')">
           <el-date-picker
             v-model="ipForm.expireAt"
             type="date"
-            placeholder="选择到期日期"
+            :placeholder="t('ipam.selectExpireDate')"
             style="width: 100%"
           />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="closeIPDialog">取消</el-button>
-        <el-button type="primary" @click="handleSaveIP">保存</el-button>
+        <el-button @click="closeIPDialog">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="handleSaveIP">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
@@ -1460,14 +1464,14 @@ const handleDeleteIP = async (ip: IPAddress) => {
       @close="prefixImportFile = null; prefixImportResult = null"
     >
       <el-alert
-        title="导入说明"
+        :title="t('ipam.importGuide')"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
       >
-        <p>1. 请先{{ t('ipam.downloadPrefixTemplate') }}，按照模板格式填写数据</p>
-        <p>2. 支持Excel (.xlsx, .xls) 和 CSV 格式</p>
-        <p>3. 必填字段不能为空，否则该行数据将导入失败</p>
+        <p>{{ t('ipam.importStep1', { action: t('ipam.downloadPrefixTemplate') }) }}</p>
+        <p>{{ t('ipam.importStep2') }}</p>
+        <p>{{ t('ipam.importStep3') }}</p>
       </el-alert>
 
       <el-button
@@ -1477,7 +1481,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
         style="margin-bottom: 16px;"
         @click="handleDownloadPrefixTemplate"
       >
-        下载导入模板
+        {{ t('ipam.downloadPrefixTemplate') }}
       </el-button>
 
       <el-upload
@@ -1489,24 +1493,24 @@ const handleDeleteIP = async (ip: IPAddress) => {
       >
         <el-icon class="el-icon--upload"><Upload /></el-icon>
         <div class="el-upload__text">
-          将文件拖到此处，或<em>点击上传</em>
+          {{ t('ipam.dropFile') }}
         </div>
       </el-upload>
 
       <div v-if="prefixImportResult" style="margin-top: 16px;">
         <el-divider />
-        <h4>导入结果</h4>
+        <h4>{{ t('ipam.importResult') }}</h4>
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="成功数量">
+          <el-descriptions-item :label="t('ipam.successCount')">
             <el-tag type="success">{{ prefixImportResult.success_count }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="失败数量">
+          <el-descriptions-item :label="t('ipam.failedCount')">
             <el-tag type="danger">{{ prefixImportResult.failed_count }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
 
         <div v-if="prefixImportResult.errors && prefixImportResult.errors.length > 0" style="margin-top: 16px;">
-          <h5>错误详情：</h5>
+          <h5>{{ t('ipam.errorDetails') }}</h5>
           <el-alert
             v-for="(error, index) in prefixImportResult.errors"
             :key="index"
@@ -1519,14 +1523,14 @@ const handleDeleteIP = async (ip: IPAddress) => {
       </div>
 
       <template #footer>
-        <el-button @click="showPrefixImportDialog = false">取消</el-button>
+        <el-button @click="showPrefixImportDialog = false">{{ t('common.cancel') }}</el-button>
         <el-button
           type="primary"
           :loading="prefixImportLoading"
           :disabled="!prefixImportFile"
           @click="handleImportPrefixes"
         >
-          开始导入
+          {{ t('ipam.startImport') }}
         </el-button>
       </template>
     </el-dialog>
@@ -1534,19 +1538,19 @@ const handleDeleteIP = async (ip: IPAddress) => {
     <!-- 导入IP对话框 -->
     <el-dialog
       v-model="showImportDialog"
-      title="导入IP地址"
+      :title="t('ipam.importIPsTitle')"
       width="600px"
       @close="importFile = null; importResult = null"
     >
       <el-alert
-        title="导入说明"
+        :title="t('ipam.importGuide')"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
       >
-        <p>1. 请先下载导入模板，按照模板格式填写数据</p>
-        <p>2. 支持Excel (.xlsx, .xls) 和 CSV 格式</p>
-        <p>3. 必填字段不能为空，否则该行数据将导入失败</p>
+        <p>{{ t('ipam.importStep1', { action: t('ipam.downloadTemplate') }) }}</p>
+        <p>{{ t('ipam.importStep2') }}</p>
+        <p>{{ t('ipam.importStep3') }}</p>
       </el-alert>
 
       <el-button
@@ -1556,7 +1560,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
         style="margin-bottom: 16px;"
         @click="handleDownloadIPTemplate"
       >
-        下载导入模板
+        {{ t('ipam.downloadTemplate') }}
       </el-button>
 
       <el-upload
@@ -1568,24 +1572,24 @@ const handleDeleteIP = async (ip: IPAddress) => {
       >
         <el-icon class="el-icon--upload"><Upload /></el-icon>
         <div class="el-upload__text">
-          将文件拖到此处，或<em>点击上传</em>
+          {{ t('ipam.dropFile') }}
         </div>
       </el-upload>
 
       <div v-if="importResult" style="margin-top: 16px;">
         <el-divider />
-        <h4>导入结果</h4>
+        <h4>{{ t('ipam.importResult') }}</h4>
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="成功数量">
+          <el-descriptions-item :label="t('ipam.successCount')">
             <el-tag type="success">{{ importResult.success_count }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="失败数量">
+          <el-descriptions-item :label="t('ipam.failedCount')">
             <el-tag type="danger">{{ importResult.failed_count }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
 
         <div v-if="importResult.errors && importResult.errors.length > 0" style="margin-top: 16px;">
-          <h5>错误详情：</h5>
+          <h5>{{ t('ipam.errorDetails') }}</h5>
           <el-alert
             v-for="(error, index) in importResult.errors"
             :key="index"
@@ -1598,14 +1602,14 @@ const handleDeleteIP = async (ip: IPAddress) => {
       </div>
 
       <template #footer>
-        <el-button @click="showImportDialog = false">取消</el-button>
+        <el-button @click="showImportDialog = false">{{ t('common.cancel') }}</el-button>
         <el-button
           type="primary"
           :loading="importLoading"
           :disabled="!importFile"
           @click="handleImportIPs"
         >
-          开始导入
+          {{ t('ipam.startImport') }}
         </el-button>
       </template>
     </el-dialog>
@@ -1769,8 +1773,8 @@ const handleDeleteIP = async (ip: IPAddress) => {
 .ip-address {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   font-size: 14px;
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
   padding: 4px 8px;
   border-radius: 4px;
 }
@@ -1788,7 +1792,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
 .matrix-title {
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .matrix-actions {
@@ -1843,16 +1847,16 @@ const handleDeleteIP = async (ip: IPAddress) => {
 
 .usage-text {
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .usage-percent {
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
 .usage-progress {
   height: 8px;
-  background: #f0f0f0;
+  background: var(--el-fill-color);
   border-radius: 4px;
   overflow: hidden;
   margin-top: 8px;
@@ -1860,17 +1864,17 @@ const handleDeleteIP = async (ip: IPAddress) => {
 
 .usage-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #1890ff, #36cfc9);
+  background: var(--el-color-primary);
   border-radius: 4px;
   transition: width 0.3s ease;
 }
 
 .usage-bar-fill.warning {
-  background: linear-gradient(90deg, #ff4d4f, #faad14);
+  background: linear-gradient(90deg, var(--el-color-danger), var(--el-color-warning));
 }
 
 .available-count {
-  color: #67c23a;
+  color: var(--el-color-success);
   font-weight: 600;
 }
 

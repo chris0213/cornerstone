@@ -194,9 +194,10 @@ const handleDelete = async (site: Site) => {
       createdAt: new Date().toISOString(),
       success: 'true'
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to delete site:', error)
-    ElMessage.error(t('sites.deleteFailed'))
+    // 带上后端返回的错误详情（如有），避免只提示「删除失败」无法定位
+    ElMessage.error(error?.response?.data?.detail || t('sites.deleteFailed'))
   }
 }
 
@@ -491,6 +492,7 @@ onMounted(() => {
                     >
                       <el-dropdown-item
                         command="delete"
+                        class="danger-item"
                         :disabled="getCircuitCount(row.id) > 0"
                       >
                         <el-icon><Delete /></el-icon>
@@ -559,7 +561,7 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 20px;
   border-left: 3px solid var(--el-border-color);
@@ -568,7 +570,7 @@ onMounted(() => {
 
 .overview-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--el-box-shadow-light);
 }
 
 .overview-card.clickable {
@@ -576,7 +578,7 @@ onMounted(() => {
 }
 
 .overview-card.clickable:hover {
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--el-box-shadow);
 }
 
 .overview-card.disabled {
@@ -592,14 +594,14 @@ onMounted(() => {
 .overview-card-blue { border-left-color: var(--el-color-primary); }
 .overview-card-warning {
   border-left-color: var(--el-color-warning);
-  background: linear-gradient(135deg, var(--el-color-warning-light-9) 0%, #fff 100%);
+  background: linear-gradient(135deg, var(--el-color-warning-light-9) 0%, var(--el-bg-color) 100%);
 }
 .overview-card-warning .overview-card-value {
   color: var(--el-color-warning-dark-2);
 }
 .overview-card-danger {
   border-left-color: var(--el-color-danger);
-  background: linear-gradient(135deg, var(--el-color-danger-light-9) 0%, #fff 100%);
+  background: linear-gradient(135deg, var(--el-color-danger-light-9) 0%, var(--el-bg-color) 100%);
 }
 .overview-card-danger .overview-card-value {
   color: var(--el-color-danger);
@@ -659,7 +661,7 @@ onMounted(() => {
   display: flex;
   gap: 20px;
   padding: 16px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--el-fill-color-light);
 }
 
 .site-name-cell {
@@ -673,11 +675,11 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-weight: 500;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .site-name-main .el-icon {
-  color: #1890ff;
+  color: var(--el-color-primary);
 }
 
 .location-cell {
@@ -688,7 +690,7 @@ onMounted(() => {
 
 .location-city {
   font-weight: 500;
-  color: #262626;
+  color: var(--el-text-color-primary);
   font-size: 14px;
 }
 
@@ -701,7 +703,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #262626;
+  color: var(--el-text-color-primary);
   cursor: default;
 }
 
@@ -747,7 +749,7 @@ onMounted(() => {
 }
 
 .copy-icon:hover {
-  color: #1890ff;
+  color: var(--el-color-primary);
 }
 
 .status-link {
@@ -832,7 +834,7 @@ onMounted(() => {
 /* 表头加粗，与数据行区分 */
 .sites-table :deep(.el-table__header .cell) {
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--el-text-color-primary);
 }
 
 .sites-table :deep(.el-table__cell) {
@@ -849,5 +851,17 @@ onMounted(() => {
   .overview-cards {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* el-dropdown 挂在 body 下，样式走全局选择器（非 scoped 可达） */
+:global(.el-dropdown-menu__item.danger-item) {
+  color: var(--el-color-danger);
+}
+:global(.el-dropdown-menu__item.danger-item .el-icon) {
+  color: var(--el-color-danger);
+}
+:global(.el-dropdown-menu__item.danger-item:hover) {
+  color: var(--el-color-danger);
+  background-color: var(--el-color-danger-light-9);
 }
 </style>
