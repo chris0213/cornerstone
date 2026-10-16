@@ -416,10 +416,9 @@ const noSitePrefixes = computed(() =>
   prefixes.value.filter(p => !p.siteId)
 )
 
-// 使用率显示：<1% 保留一位小数（如 0.4%），≥1% 取整
+// 使用率显示：统一保留一位小数（如 3.2%、0.4%），不取整
 function formatUsagePercent(percent: number): string {
-  if (percent > 0 && percent < 1) return percent.toFixed(1)
-  return String(Math.round(percent))
+  return percent.toFixed(1)
 }
 
 function getIPCount(prefixId: string | number) {
@@ -970,7 +969,7 @@ const handleDeleteIP = async (ip: IPAddress) => {
           :data="pagedPrefixes"
           style="width: 100%"
           border
-          height="calc(100vh - 460px)"
+          max-height="calc(100vh - 420px)"
           @sort-change="handlePrefixSortChange"
         >
           <el-table-column prop="siteId" :label="t('ipam.site')" min-width="150">
@@ -991,11 +990,12 @@ const handleDeleteIP = async (ip: IPAddress) => {
               <div class="network-cell">
                 <div class="network-name">{{ row.network }}</div>
                 <div class="usage-bar-wrapper">
-                  <div class="usage-bar" :class="`usage-bar-${getUsageLevel(row)}`">
+                  <div class="usage-bar">
                     <div
+                      v-if="getUsageLevel(row) !== 'idle'"
                       class="usage-fill"
                       :class="`usage-fill-${getUsageLevel(row)}`"
-                      :style="{ width: getUsageLevel(row) === 'idle' ? '100%' : `${Math.max(getUsagePercentRaw(row), 1)}%`, minWidth: (row.ipCount ?? 0) > 0 ? '4px' : undefined }"
+                      :style="{ width: `${Math.max(getUsagePercentRaw(row), 1)}%`, minWidth: (row.ipCount ?? 0) > 0 ? '4px' : undefined }"
                     ></div>
                   </div>
                   <span class="usage-text" :class="{ 'usage-text-idle': getUsageLevel(row) === 'idle' }">
@@ -1630,11 +1630,10 @@ const handleDeleteIP = async (ip: IPAddress) => {
   transition: width 0.3s ease;
 }
 
-/* 阈值着色：<70 蓝、70~90 橙、>90 红、0 空闲灰 */
+/* 阈值着色：<70 蓝、70~90 橙、>90 红；空闲行不渲染填充条 */
 .usage-fill-low { background: var(--el-color-primary); }
 .usage-fill-mid { background: var(--el-color-warning); }
 .usage-fill-high { background: var(--el-color-danger); }
-.usage-fill-idle { background: var(--el-fill-color-darker); }
 
 .usage-text {
   /* 固定宽度，保证所有子网的进度条起点一致 */
@@ -1646,7 +1645,9 @@ const handleDeleteIP = async (ip: IPAddress) => {
 }
 
 .usage-text-idle {
-  color: var(--el-text-color-placeholder);
+  /* 空闲：灰色常规字重，与有使用的行视觉一致，仅颜色弱化 */
+  color: var(--el-text-color-secondary);
+  font-weight: 400;
 }
 
 /* 卡片联动筛选标签栏（与专线页一致） */
