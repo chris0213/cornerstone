@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update, delete, func, and_
+from sqlalchemy import select, insert, update, delete, func, and_, case
 
 from ..database import get_db
-from ..models import Rack, Device, Site
+from ..models import Rack, Device, Site, IPAddress
 from ..schemas import (
     RackCreate, RackUpdate, RackResponse, RackDetailResponse,
     RackStats, RackDevice, DevicePositionUpdate
@@ -43,7 +43,40 @@ async def list_racks(
         stmt = stmt.where(Rack.site_id == site_id)
     stmt = stmt.order_by(Rack.site_id, Rack.room, Rack.row_position, Rack.name).offset(page.skip).limit(page.limit)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    racks = result.scalars().all()
+
+    # 聚合每台机柜的已用 U / 利用率 / 设备数（供列表侧利用率条）
+    ids = [r.id for r in racks]
+    usage_map: dict[int, dict] = {}
+    if ids:
+        agg = await db.execute(
+            select(
+                Device.rack_id,
+                func.coalesce(func.sum(case((Device.u_position.isnot(None), Device.u_size), else_=0)), 0),
+                func.count(Device.id),
+            )
+            .where(Device.rack_id.in_(ids))
+            .group_by(Device.rack_id)
+        )
+        for row in agg:
+            total = next((r.total_u or 42 for r in racks if r.id == row.rack_id), 42)
+            used = int(row[1] or 0)
+            usage_map[row.rack_id] = {
+                "used_u": used,
+                "utilization": round(used / total * 100, 2) if total > 0 else 0.0,
+                "device_count": row[2],
+            }
+
+    out: list[RackResponse] = []
+    for r in racks:
+        u = usage_map.get(r.id, {"used_u": 0, "utilization": 0.0, "device_count": 0})
+        out.append(RackResponse(
+            id=r.id, name=r.name, site_id=r.site_id, room=r.room,
+            row_position=r.row_position or 0, total_u=r.total_u or 42,
+            status=r.status or "active", description=r.description,
+            created_at=r.created_at, updated_at=r.updated_at, **u,
+        ))
+    return out
 
 
 @router.get("/{rack_id}", response_model=RackDetailResponse)
@@ -62,6 +95,29 @@ async def get_rack(
     )
     devices = devices_result.scalars().all()
 
+    # 管理 IP 映射（device.mgmt_ip_id → ip_addresses.address）
+    mgmt_ids = [d.mgmt_ip_id for d in devices if d.mgmt_ip_id]
+    ip_map: dict[int, str] = {}
+    if mgmt_ids:
+        ips_result = await db.execute(
+            select(IPAddress.id, IPAddress.address).where(IPAddress.id.in_(mgmt_ids))
+        )
+        ip_map = {row.id: row.address for row in ips_result}
+
+    def _rack_device(d: Device) -> RackDevice:
+        return RackDevice(
+            id=d.id,
+            name=d.name,
+            type=d.type,
+            vendor=d.vendor,
+            model=d.model,
+            sn=d.sn,
+            u_position=d.u_position,
+            u_size=d.u_size or 1,
+            status=d.status or "active",
+            mgmt_ip=ip_map.get(d.mgmt_ip_id) if d.mgmt_ip_id else None,
+        )
+
     return RackDetailResponse(
         id=rack.id,
         name=rack.name,
@@ -73,20 +129,7 @@ async def get_rack(
         description=rack.description,
         created_at=rack.created_at,
         updated_at=rack.updated_at,
-        devices=[
-            RackDevice(
-                id=d.id,
-                name=d.name,
-                type=d.type,
-                vendor=d.vendor,
-                model=d.model,
-                sn=d.sn,
-                u_position=d.u_position,
-                u_size=d.u_size or 1,
-                status=d.status or "active",
-            )
-            for d in devices
-        ],
+        devices=[_rack_device(d) for d in devices],
         stats=_compute_rack_stats(rack.total_u or 42, devices),
     )
 

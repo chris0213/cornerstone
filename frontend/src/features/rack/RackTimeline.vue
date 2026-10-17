@@ -48,10 +48,11 @@ watch(() => [props.rack?.id, props.devices.length], () => {
   loadAlerts()
 }, { immediate: true })
 
+// severity 用主题变量着色（与全局告警语义一致）
 const severityColor: Record<string, string> = {
-  critical: '#ef4444',
-  warning: '#f59e0b',
-  info: '#3b82f6',
+  critical: 'var(--el-color-danger, #f56c6c)',
+  warning: 'var(--el-color-warning, #e6a23c)',
+  info: 'var(--el-color-primary, #409eff)',
 }
 
 const realtimeEvents = computed<TimelineEvent[]>(() => {
@@ -104,8 +105,8 @@ const fmt = (iso: string) => {
   <div class="rack-timeline-panel">
     <h4 class="panel-title">{{ t('rack.eventsTimeline') }}</h4>
     <el-tabs v-model="tab" size="small" class="timeline-tabs">
-      <el-tab-pane :label="`📡 ${t('rack.realTimeEvents')}`" name="realtime" />
-      <el-tab-pane :label="`📚 ${t('rack.historyEvents')}`" name="history" />
+      <el-tab-pane :label="t('rack.realTimeEvents')" name="realtime" />
+      <el-tab-pane :label="t('rack.historyEvents')" name="history" />
     </el-tabs>
 
     <div v-if="!rack" class="timeline-empty">
@@ -164,7 +165,7 @@ const fmt = (iso: string) => {
 }
 
 .timeline-empty { padding: 16px 0 4px; text-align: center; }
-.rack-timeline { padding: 8px 0 4px; max-height: 340px; overflow-y: auto; }
+.rack-timeline { padding: 8px 0 4px; }
 :deep(.el-timeline-item__timestamp) {
   color: var(--text-secondary, #6b7280);
   font-size: 11px;

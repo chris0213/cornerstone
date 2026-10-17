@@ -961,7 +961,8 @@
     "exportPDF": "导出为PDF",
     "exporting": "正在导出...",
     "exportSuccess": "导出成功",
-    "exportError": "导出失败"
+    "exportError": "导出失败",
+    "searchMatchCount": "命中 {count} 台设备"
   },
   "sites": {
     "title": "站点管理",
@@ -2132,7 +2133,7 @@
     "example4": "最近有哪些配置备份发生了变更"
   },
   "rack": {
-    "title": "机柜可视化",
+    "title": "机柜视图",
     "subtitle": "机柜 U 位占用与资产分布视图",
     "navSearchPlaceholder": "搜索机柜名称 / 编码",
     "searchRackPlaceholder": "搜索设备或U位",
@@ -2140,11 +2141,9 @@
     "usedU": "在用U位",
     "freeU": "空闲U位",
     "utilization": "机柜利用率",
-    "deviceCount": "资产设备数",
-    "deviceType": "资产类型",
+    "deviceCount": "设备数",
+    "deviceType": "设备类型",
     "rackStatus": "机柜状态",
-    "asset": "资产",
-    "hardware": "硬件",
     "realTimeEvents": "实时事件",
     "historyEvents": "历史事件",
     "addRack": "新增机柜",
@@ -2167,6 +2166,15 @@
     "deleteFailed": "删除失败",
     "saveFailed": "保存失败",
     "confirmDeleteRack": "确认删除该机柜吗？机柜内设备将解除关联。",
+    "more": "更多",
+    "confirmDeleteTitle": "删除机柜",
+    "confirmDeleteText": "确定要删除机柜「{name}」吗？",
+    "confirmDeleteBtn": "确认删除",
+    "deleteUnassignNote": "该机柜内现有 {count} 台设备，删除后这些设备不会被删除，将自动解除与「{name}」的上架关联（变为未上架状态）。",
+    "sortDefault": "按机房",
+    "sortUtilization": "按利用率",
+    "viewDevice": "查看设备",
+    "devMgmtIp": "管理 IP",
     "loadFailed": "机柜数据加载失败",
     "noRackSelected": "请从左侧选择一个机柜",
     "noDevicesInRack": "机柜内暂无设备",

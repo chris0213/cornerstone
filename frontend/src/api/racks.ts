@@ -18,6 +18,7 @@ export interface RackDevice {
   u_position: number | null
   u_size: number
   status: string
+  mgmt_ip?: string | null
 }
 
 export interface RackResponse {
@@ -31,6 +32,9 @@ export interface RackResponse {
   description: string | null
   created_at: string
   updated_at: string | null
+  used_u?: number
+  utilization?: number
+  device_count?: number
 }
 
 export interface RackDetailResponse extends RackResponse {

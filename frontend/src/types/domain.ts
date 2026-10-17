@@ -95,6 +95,9 @@ export interface Rack {
   totalU: number
   status: string
   description: string | null
+  usedU?: number
+  utilization?: number
+  deviceCount?: number
 }
 
 export interface RackStats {
@@ -115,6 +118,7 @@ export interface RackDevice {
   uPosition: number | null
   uSize: number
   status: string
+  mgmtIp?: string | null
 }
 
 export interface Credential {

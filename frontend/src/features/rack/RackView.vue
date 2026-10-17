@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, onBeforeUnmount, h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { Plus, Edit, Delete, Aim } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElNotification } from 'element-plus'
+import { Plus, Edit, Delete, Aim, MoreFilled } from '@element-plus/icons-vue'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import RackSidebar from './RackSidebar.vue'
 import RackStatsPanel from './RackStats.vue'
 import RackTimeline from './RackTimeline.vue'
+import { deviceTypeText } from './deviceTypes'
 import type { Rack as RackType, RackDevice, RackStats as RackStatsType } from '../../types/domain'
 import { getRack, listRacks, createRack, updateRack, deleteRack, updateDevicePosition } from '../../api/racks'
 import { getSites } from '../../api/sites'
@@ -42,6 +44,7 @@ const rackLog = {
 }
 
 const { t } = useI18n()
+const router = useRouter()
 const store = useAppStore()
 const authStore = useAuthStore()
 
@@ -167,31 +170,42 @@ const submitForm = async () => {
   })
 }
 
-const handleDelete = async () => {
+// ---- 删除机柜（自定义确认弹窗：显示机柜名与设备数，说明设备解除上架） ----
+const deleteVisible = ref(false)
+const deleteLoading = ref(false)
+const deleteTarget = ref<RackType | null>(null)
+
+const openDelete = () => {
   if (!selectedRack.value) return
-  const rackId = selectedRack.value.id
-  const rackName = selectedRack.value.name
-  rackLog.info('handleDelete: 准备删除', { id: rackId, name: rackName })
+  deleteTarget.value = selectedRack.value
+  deleteVisible.value = true
+}
+
+const confirmDelete = async () => {
+  const target = deleteTarget.value
+  if (!target) return
+  const rackId = target.id
+  rackLog.info('confirmDelete: 用户确认删除机柜', { id: rackId, name: target.name })
+  deleteLoading.value = true
   try {
-    await ElMessageBox.confirm(t('rack.confirmDeleteRack'), t('common.confirm'), {
-      type: 'warning',
-      confirmButtonText: t('common.confirm'),
-      cancelButtonText: t('common.cancel'),
-    })
-    rackLog.info('handleDelete: 用户确认删除', { id: rackId })
     await deleteRack(rackId)
-    rackLog.info('handleDelete: 删除成功', { id: rackId })
+    rackLog.info('confirmDelete: 删除成功', { id: rackId })
     ElMessage.success(t('rack.deleteSuccess'))
+    deleteVisible.value = false
     selectedRackId.value = null
     selectedRackDetail.value = null
     await loadAllRacks()
   } catch (e) {
-    if (e === 'cancel' || (e as Error)?.message?.includes('cancel')) {
-      rackLog.debug('handleDelete: 用户取消删除')
-    } else {
-      rackLog.error('handleDelete: 删除失败', { id: rackId, error: e })
-    }
+    rackLog.error('confirmDelete: 删除失败', { id: rackId, error: e })
+    ElMessage.error(t('rack.deleteFailed'))
+  } finally {
+    deleteLoading.value = false
   }
+}
+
+const goDevicePage = (deviceId: number) => {
+  detailVisible.value = false
+  router.push({ path: '/devices', query: { id: deviceId } })
 }
 
 // ---- 权限 ----
@@ -378,6 +392,31 @@ const deviceStatusMap: Record<string, { label: string; type: string }> = {
   offline: { label: '离线', type: 'info' },
 }
 
+// 设备块类型着色（与设备页 ICON_META 图标配色一致，避免用红色表示防火墙）
+const DEVICE_BLOCK_COLORS: Record<string, { from: string; to: string; border: string }> = {
+  firewall: { from: '#F8BBD0', to: '#F48FB1', border: '#EC7F9C' },
+  router: { from: '#FBC588', to: '#F5A623', border: '#E09218' },
+  switch: { from: '#A8D4FF', to: '#79BBFF', border: '#5FAAEF' },
+  'load-balancer': { from: '#E1B7EA', to: '#CE93D8', border: '#BA7FC6' },
+  server: { from: '#A8E4EE', to: '#80DEEA', border: '#63CEDB' },
+  storage: { from: '#B4DFFB', to: '#8FCBF7', border: '#6FB8EF' },
+  ap: { from: '#CBE8A4', to: '#AED581', border: '#97C368' },
+  'wireless-controller': { from: '#A8DDB2', to: '#81C784', border: '#66B36F' },
+  'ids-ips': { from: '#F7B8B8', to: '#EF9A9A', border: '#E48080' },
+  waf: { from: '#FFC5B4', to: '#FFAB91', border: '#F0937A' },
+  vpn: { from: '#E1B7EA', to: '#CE93D8', border: '#BA7FC6' },
+  other: { from: '#CFC6BD', to: '#BCAAA4', border: '#A8968D' },
+}
+const deviceBlockStyle = (device: RackDevice) => {
+  const c = DEVICE_BLOCK_COLORS[device.type || ''] || DEVICE_BLOCK_COLORS.other
+  return {
+    background: `linear-gradient(90deg, ${c.from} 0%, ${c.to} 100%)`,
+    borderColor: c.border,
+    color: '#26313f',
+  }
+}
+const deviceStatusText = (status: string) => deviceStatusMap[status]?.label || status
+
 const handleDeviceClick = (device: RackDevice) => {
   rackLog.info('handleDeviceClick: 点击设备打开详情', {
     deviceId: device.id, name: device.name, type: device.type,
@@ -457,10 +496,14 @@ const rebuildDeviceMap = () => {
 function getUSlotInfo(u: number) {
   const d = devicesMap.get(u)
   if (!d) return { device: null as RackDevice | null, isTop: true, span: 1 }
+  const size = d.uSize || 1
   return {
     device: d,
-    isTop: d.uPosition === u,
-    span: d.uSize || 1,
+    // 机柜图高位在上（显示编号自上而下 42→1）。设备占 uPosition..uPosition+size-1，
+    // 块必须锚定在视觉顶部行（编号 uPosition+size-1）向下延伸 size 行，
+    // 才能与左侧 U 位标签对齐（否则 2U 设备会视觉下移一行，顶部行变成无虚线的 spacer）。
+    isTop: u === d.uPosition + size - 1,
+    span: size,
   }
 }
 
@@ -471,7 +514,7 @@ const selectRack = async (id: number) => {
   try {
     const detail = await getRack(id)
     rackLog.info('selectRack: 获取详情成功', { id, deviceCount: detail.devices?.length,
-      utilization: detail.stats?.utilization != null ? `${Math.round(detail.stats.utilization * 100)}%` : undefined })
+      utilization: detail.stats?.utilization != null ? `${Math.round(detail.stats.utilization * 10) / 10}%` : undefined })
     currentDevices.value = detail.devices.map(d => ({
       id: d.id,
       name: d.name,
@@ -482,6 +525,7 @@ const selectRack = async (id: number) => {
       uPosition: d.u_position,
       uSize: d.u_size,
       status: d.status,
+      mgmtIp: d.mgmt_ip,
     }))
     rebuildDeviceMap()
     rackLog.debug('selectRack: 设备映射已重建', { id, count: currentDevices.value.length })
@@ -520,6 +564,9 @@ const loadAllRacks = async () => {
       totalU: r.total_u,
       status: r.status,
       description: r.description,
+      usedU: r.used_u,
+      utilization: r.utilization,
+      deviceCount: r.device_count,
     }))
     rackLog.info('loadAllRacks: 完成', { count: store.racks.length })
     rackLog.debug('loadAllRacks: store摘要',
@@ -564,9 +611,16 @@ onBeforeUnmount(() => {
         <el-button v-if="canWrite && selectedRack" :icon="Edit" size="small" @click="openEdit">
           {{ t('rack.editRack') }}
         </el-button>
-        <el-button v-if="canDelete && selectedRack" :icon="Delete" size="small" type="danger" plain @click="handleDelete">
-          {{ t('rack.deleteRack') }}
-        </el-button>
+        <el-dropdown v-if="canDelete && selectedRack" trigger="click" @command="(cmd: string) => cmd === 'delete' && openDelete()">
+          <el-button :icon="MoreFilled" size="small">{{ t('rack.more') }}</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="delete" class="more-delete-item">
+                <el-icon><Delete /></el-icon>{{ t('rack.deleteRack') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -616,16 +670,27 @@ onBeforeUnmount(() => {
                   :class="{ 'has-device': getUSlotInfo((selectedRack.totalU || 42) - u + 1).device != null }"
                 >
                   <div class="u-label">{{ (selectedRack.totalU || 42) - u + 1 }}</div>
-                  <div
+                  <el-tooltip
                     v-if="getUSlotInfo((selectedRack.totalU || 42) - u + 1).isTop && getUSlotInfo((selectedRack.totalU || 42) - u + 1).device"
-                    class="u-device"
-                    :class="getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.status"
-                    :style="{ height: `calc(var(--u-height) * ${getUSlotInfo((selectedRack.totalU || 42) - u + 1).span} + var(--u-gap) * ${getUSlotInfo((selectedRack.totalU || 42) - u + 1).span - 1})` }"
-                    :title="getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.name"
-                    @click="handleDeviceClick(getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!)"
+                    placement="left"
+                    :show-after="150"
                   >
-                    <span class="device-name">{{ getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.name }}</span>
-                  </div>
+                    <template #content>
+                      <div class="dev-tip">
+                        <div>{{ t('rack.devModel') }}: {{ getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.model || '—' }}</div>
+                        <div>{{ t('rack.devMgmtIp') }}: {{ getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.mgmtIp || '—' }}</div>
+                        <div>{{ t('rack.devStatus') }}: {{ deviceStatusText(getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.status) }}</div>
+                      </div>
+                    </template>
+                    <div
+                      class="u-device"
+                      :style="{ ...deviceBlockStyle(getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!), height: `calc(var(--u-height) * ${getUSlotInfo((selectedRack.totalU || 42) - u + 1).span} + var(--u-gap) * ${getUSlotInfo((selectedRack.totalU || 42) - u + 1).span - 1})` }"
+                      @click="handleDeviceClick(getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!)"
+                    >
+                      <span class="device-name">{{ getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.name }}</span>
+                      <span class="device-size">{{ getUSlotInfo((selectedRack.totalU || 42) - u + 1).device!.uSize }}U</span>
+                    </div>
+                  </el-tooltip>
                   <div
                     v-else-if="getUSlotInfo((selectedRack.totalU || 42) - u + 1).device != null"
                     class="u-device-spacer"
@@ -637,7 +702,7 @@ onBeforeUnmount(() => {
                     :title="canManageDevices ? t('rack.clickToPlace') : ''"
                     @click="openPlacement((selectedRack.totalU || 42) - u + 1)"
                   >
-                    <el-icon v-if="canManageDevices" class="slot-add-icon"><Aim /></el-icon>
+                    <el-icon v-if="canManageDevices" class="slot-add-icon"><Plus /></el-icon>
                   </div>
                 </div>
               </template>
@@ -743,6 +808,34 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
+    <!-- 删除机柜确认弹窗 -->
+    <el-dialog
+      v-model="deleteVisible"
+      :title="t('rack.confirmDeleteTitle')"
+      width="440px"
+      :close-on-click-modal="false"
+      class="rack-delete-dialog"
+    >
+      <template v-if="deleteTarget">
+        <p class="delete-question">
+          {{ t('rack.confirmDeleteText', { name: deleteTarget.name }) }}
+        </p>
+        <el-alert
+          :title="t('rack.deleteUnassignNote', { count: deleteTarget.deviceCount ?? 0, name: deleteTarget.name })"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="delete-note"
+        />
+      </template>
+      <template #footer>
+        <el-button @click="deleteVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="danger" :loading="deleteLoading" @click="confirmDelete">
+          {{ t('rack.confirmDeleteBtn') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 设备详情弹窗 -->
     <el-dialog
       v-model="detailVisible"
@@ -755,7 +848,7 @@ onBeforeUnmount(() => {
           <el-descriptions-item :label="t('rack.devName')" :span="2">
             <strong>{{ detailDevice.name }}</strong>
           </el-descriptions-item>
-          <el-descriptions-item :label="t('rack.devType')">{{ detailDevice.type || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('rack.devType')">{{ deviceTypeText(t, detailDevice.type) }}</el-descriptions-item>
           <el-descriptions-item :label="t('rack.devStatus')">
             <el-tag :type="(deviceStatusMap[detailDevice.status]?.type as any) || 'info'" size="small" effect="light">
               {{ deviceStatusMap[detailDevice.status]?.label || detailDevice.status }}
@@ -763,6 +856,7 @@ onBeforeUnmount(() => {
           </el-descriptions-item>
           <el-descriptions-item :label="t('rack.devVendor')">{{ detailDevice.vendor || '-' }}</el-descriptions-item>
           <el-descriptions-item :label="t('rack.devModel')">{{ detailDevice.model || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('rack.devMgmtIp')" :span="2">{{ detailDevice.mgmtIp || '-' }}</el-descriptions-item>
           <el-descriptions-item :label="t('rack.devSN')" :span="2">{{ detailDevice.sn || '-' }}</el-descriptions-item>
           <el-descriptions-item :label="t('rack.devUPos')">
             <span v-if="detailDevice">{{ 'U' + (detailDevice as any).uPosition + ((detailDevice as any).uSize > 1 ? ' ~ U' + ((detailDevice as any).uPosition + (detailDevice as any).uSize - 1) : '') }}</span>
@@ -778,6 +872,9 @@ onBeforeUnmount(() => {
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <span style="font-size: 12px; color: #909399;">{{ selectedRack?.name }} · U{{ detailDevice?.uPosition }}</span>
           <div>
+            <el-button v-if="detailDevice" type="primary" plain @click="goDevicePage(detailDevice.id)">
+              {{ t('rack.viewDevice') }}
+            </el-button>
             <el-button @click="detailVisible = false">{{ t('common.close') }}</el-button>
             <el-button
               v-if="canManageDevices"
@@ -808,10 +905,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   margin-bottom: 18px;
 }
-.rack-page-title { display: flex; align-items: baseline; gap: 12px; }
-.rack-title-text { margin: 0; font-size: 22px; font-weight: 600; color: var(--text-primary, #1f2937); }
+.rack-page-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex-shrink: 0; }
+.rack-title-text { margin: 0; font-size: 22px; font-weight: 600; color: var(--text-primary, #1f2937); white-space: nowrap; }
 .rack-subtitle { color: var(--text-secondary, #6b7280); font-size: 13px; }
 .rack-page-actions { display: flex; gap: 8px; }
 
@@ -884,8 +982,8 @@ onBeforeUnmount(() => {
 .u-slot-empty {
   flex: 1;
   border-radius: 3px;
-  border: 1px dashed rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
+  border: 1px dashed rgba(255,255,255,0.045);
+  background: rgba(255,255,255,0.008);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -893,46 +991,62 @@ onBeforeUnmount(() => {
 }
 .u-slot-clickable {
   cursor: pointer;
-  border-color: rgba(63, 131, 248, 0.25);
-}
-.u-slot-clickable:hover {
-  background: rgba(63, 131, 248, 0.12);
-  border-color: rgba(63, 131, 248, 0.5);
 }
 .slot-add-icon {
   font-size: 12px;
-  color: rgba(63, 131, 248, 0.4);
+  color: transparent;
+  transition: color 0.15s;
+}
+.u-slot-clickable:hover {
+  background: rgba(63, 131, 248, 0.1);
+  border-color: rgba(63, 131, 248, 0.45);
 }
 .u-slot-clickable:hover .slot-add-icon {
-  color: rgba(63, 131, 248, 0.9);
+  color: rgba(160, 200, 255, 0.95);
 }
 .u-device-spacer { flex: 1; }
 .u-device {
   flex: 1;
   border-radius: 3px;
-  background: linear-gradient(90deg, #4a5568 0%, #2d3748 100%);
-  color: #fff;
+  color: #26313f;
   font-size: 11px;
   padding: 0 8px;
   display: flex;
   align-items: center;
-  border: 1px solid #1a202c;
+  gap: 6px;
+  border: 1px solid;
   position: relative;
   z-index: 2;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
   cursor: pointer;
   transition: filter .15s;
   overflow: hidden;
   min-height: var(--u-height);
 }
-.u-device:hover { filter: brightness(1.2); z-index: 3; }
-.u-device.active { background: linear-gradient(90deg, #3f83f8 0%, #1e40af 100%); border-color: #172554; }
-.u-device.alert { background: linear-gradient(90deg, #f59e0b 0%, #b45309 100%); border-color: #78350f; }
-.u-device.offline { background: linear-gradient(90deg, #64748b 0%, #334155 100%); }
-.device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-device:hover { filter: brightness(1.08); z-index: 3; }
+.device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.device-size {
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.65;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .rack-right-col { display: flex; flex-direction: column; gap: 16px; }
 .rack-empty-state { padding: 40px 0; }
+
+.more-delete-item { color: var(--el-color-danger, #f56c6c); }
+
+.delete-question {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-primary, #1f2937);
+  line-height: 1.6;
+}
+.delete-note { width: 100%; }
+.rack-delete-dialog .el-alert { --el-alert-padding: 10px 12px; }
+
+.dev-tip { line-height: 1.7; font-size: 12px; }
 
 @media (max-width: 1100px) {
   .rack-layout { grid-template-columns: 240px 1fr; }

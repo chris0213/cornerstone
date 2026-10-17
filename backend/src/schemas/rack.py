@@ -40,6 +40,7 @@ class RackDevice(BaseModel):
     u_position: Optional[int]
     u_size: int
     status: str
+    mgmt_ip: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -65,6 +66,10 @@ class RackResponse(BaseModel):
     description: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
+    # 列表聚合字段（供前端侧边栏利用率条使用）
+    used_u: int = 0
+    utilization: float = 0.0
+    device_count: int = 0
 
     class Config:
         from_attributes = True

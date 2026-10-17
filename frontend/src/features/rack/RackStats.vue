@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Rack, RackStats as StatsType, RackDevice } from '../../types/domain'
+import { deviceTypeText } from './deviceTypes'
 
 const props = defineProps<{
   stats: StatsType | null
@@ -22,7 +23,7 @@ const stats = computed(() => props.stats || {
 const typeBuckets = computed(() => {
   const m = new Map<string, number>()
   for (const d of props.devices) {
-    const k = d.type || t('rack.asset')
+    const k = d.type || 'other'
     m.set(k, (m.get(k) || 0) + 1)
   }
   return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5)
@@ -32,6 +33,14 @@ const circumference = 2 * Math.PI * 50
 const usedArc = computed(() => {
   const pct = Math.max(0, Math.min(100, stats.value.utilization)) / 100
   return circumference * pct
+})
+
+// 与侧边栏 / IP 管理页阈值保持一致：>90 红、70–90 橙、<70 蓝
+const ringColor = computed(() => {
+  const p = stats.value.utilization
+  if (p > 90) return 'var(--el-color-danger, #f56c6c)'
+  if (p >= 70) return 'var(--el-color-warning, #e6a23c)'
+  return 'var(--el-color-primary, #409eff)'
 })
 </script>
 
@@ -60,11 +69,11 @@ const usedArc = computed(() => {
 
     <div class="util-ring-row">
       <svg width="140" height="140" viewBox="0 0 120 120" class="util-ring">
-        <circle cx="60" cy="60" r="50" fill="none" stroke="#eef0f3" stroke-width="12" />
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#eef0f3" stroke-width="10" />
         <circle
           cx="60" cy="60" r="50" fill="none"
-          :stroke="stats.utilization >= 90 ? '#ef4444' : stats.utilization >= 75 ? '#f59e0b' : '#3f83f8'"
-          stroke-width="12"
+          :style="{ stroke: ringColor }"
+          stroke-width="10"
           stroke-linecap="round"
           :stroke-dasharray="`${usedArc} ${circumference}`"
           stroke-dashoffset="0"
@@ -95,7 +104,7 @@ const usedArc = computed(() => {
     <div v-else class="type-bars">
       <div v-for="[name, count] in typeBuckets" :key="name" class="type-row">
         <div class="type-row-head">
-          <span class="type-name">{{ name }}</span>
+          <span class="type-name">{{ deviceTypeText(t, name) }}</span>
           <span class="type-count">{{ count }}</span>
         </div>
         <div class="type-bar-bg">
@@ -106,25 +115,8 @@ const usedArc = computed(() => {
         </div>
       </div>
     </div>
-
-    <h4 class="panel-title mt">{{ t('rack.status') }}</h4>
-    <div class="status-row">
-      <div class="status-item active">
-        <el-icon><Lightning /></el-icon>
-        <span>{{ t('rack.asset') }}</span>
-      </div>
-      <div class="status-item alert">
-        <el-icon><Connection /></el-icon>
-        <span>{{ t('rack.hardware') }}</span>
-      </div>
-    </div>
   </div>
 </template>
-
-<script lang="ts">
-import { Lightning, Connection } from '@element-plus/icons-vue'
-export default { components: { Lightning, Connection } }
-</script>
 
 <style scoped>
 .rack-stats-panel {
@@ -207,23 +199,4 @@ export default { components: { Lightning, Connection } }
   transition: width .3s;
 }
 .no-types { padding: 8px 0; }
-
-.status-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-.status-item {
-  border-radius: 6px;
-  padding: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  background: #f8fafc;
-  border: 1px solid var(--border-color, #eef0f3);
-}
-.status-item.active { color: #dc2626; }
-.status-item.alert { color: #2563eb; }
-.status-item :deep(svg) { font-size: 18px; }
 </style>
