@@ -6,12 +6,18 @@
         :placeholder="t('topology.searchPlaceholder')"
         class="search-input"
         clearable
-        @keyup.enter="handleSearch"
       >
         <template #prefix>
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
+      <span
+        v-if="searchKeyword.trim()"
+        class="search-match-count"
+        :class="{ 'no-match': searchFilteredNodes.length === 0 }"
+      >
+        {{ t('topology.searchMatchCount', { count: searchFilteredNodes.length }) }}
+      </span>
       <div class="toolbar">
         <el-select
           v-model="selectedSiteId"
@@ -176,7 +182,7 @@
           </defs>
 
           <g :transform="`translate(${panX}, ${panY}) scale(${scale})`">
-            <!-- 连接线 -->
+            <!-- 连接线（带宽标签已移除：后端无真实带宽字段，不做编造展示） -->
             <g v-for="edge in filteredEdges" :key="'edge-' + edge.id">
               <line
                 :x1="getNodePosition(edge.source).x"
@@ -186,14 +192,6 @@
                 class="topology-edge"
                 :class="getEdgeClass(edge)"
               />
-              <text
-                :x="(getNodePosition(edge.source).x + getNodePosition(edge.target).x) / 2"
-                :y="(getNodePosition(edge.source).y + getNodePosition(edge.target).y) / 2 - 8"
-                text-anchor="middle"
-                class="edge-bandwidth"
-              >
-                {{ getBandwidthLabel(edge) }}
-              </text>
             </g>
 
             <!-- 节点 -->
@@ -224,7 +222,7 @@
                 r="5"
                 class="status-dot"
                 :fill="getStatusColor(node.status)"
-                stroke="#1a2035"
+                :style="{ stroke: 'var(--topo-node-bg)' }"
                 stroke-width="1.5"
               />
               <!-- 图标区域：左侧居中（纯 SVG 路径内联，支持 html2canvas 导出） -->
@@ -302,13 +300,13 @@
         <div class="legend-section">
           <div class="legend-item">
             <svg width="30" height="4" viewBox="0 0 30 4">
-              <line x1="0" y1="2" x2="30" y2="2" stroke="#5B8DB8" stroke-width="2" />
+              <line x1="0" y1="2" x2="30" y2="2" class="legend-line legend-line-normal" stroke-width="2" />
             </svg>
             <span>{{ t('topology.legendNormalLink') }}</span>
           </div>
           <div class="legend-item">
             <svg width="30" height="4" viewBox="0 0 30 4">
-              <line x1="0" y1="2" x2="30" y2="2" stroke="#F56C6C" stroke-width="2" stroke-dasharray="6,3" />
+              <line x1="0" y1="2" x2="30" y2="2" class="legend-line legend-line-critical" stroke-width="2" stroke-dasharray="6,3" />
             </svg>
             <span>{{ t('topology.legendCriticalLink') }}</span>
           </div>
@@ -410,6 +408,8 @@ const selectedConnectionDeviceId = ref<number | null>(null)
 const isDragging = ref(false)
 const draggingNodeId = ref<string | null>(null)
 const dragOffset = ref({ x: 0, y: 0 })
+const dragMoved = ref(false)
+const dragStartClient = ref<{ x: number; y: number } | null>(null)
 const isPanning = ref(false)
 const panOffset = ref({ x: 0, y: 0 })
 
@@ -582,8 +582,6 @@ const connectedDevices = computed(() => {
   return result
 })
 
-function handleSearch() {}
-
 function getNodePosition(nodeId: string): { x: number; y: number } {
   return nodePositions.value[nodeId] || { x: 0, y: 0 }
 }
@@ -594,7 +592,7 @@ function getNodeStyle(node: DeviceNode) {
   const mappedStatus = mapStatus(node.status)
   const isOnline = mappedStatus === 'online'
   return {
-    fill: '#162035',
+    fill: 'var(--topo-node-bg)',
     fillOpacity: isOnline ? 0.95 : 0.8,
     stroke: config.color,
     strokeWidth: isOnline ? 2 : 1.5,
@@ -620,26 +618,20 @@ function getStatusColor(status: string): string {
 }
 
 function getStatusText(status: string): string {
+  // 统一走 mapStatus 归一化（critical 归为 warning），与节点卡片 getStatusSummary、图例保持一致
+  const mappedStatus = mapStatus(status)
   const map: Record<string, string> = {
-    normal: t('topology.statusNormal'),
     online: t('topology.statusOnline'),
     warning: t('topology.statusWarning'),
     offline: t('topology.statusOffline'),
-    critical: t('topology.statusCritical'),
-    error: t('topology.statusError'),
     unknown: t('topology.statusUnknown')
   }
-  return map[status] || status
+  return map[mappedStatus] || t('topology.statusUnknown')
 }
 
 function getStatusClass(status: string): string {
-  return `status-${status}`
-}
-
-function getBandwidthLabel(edge: DeviceEdge): string {
-  const bandwidths = ['100M', '1G', '10G', '100M', '1G', '10G', '1G']
-  const index = parseInt(edge.id.replace('link_', '')) % bandwidths.length
-  return index >= 0 ? bandwidths[index] : '100M'
+  // class 也按归一化状态生成，保证「警告」文案与颜色样式同步（critical 与 warning 同色）
+  return `status-${mapStatus(status)}`
 }
 
 function getDeviceTypeText(type: string): string {
@@ -813,6 +805,10 @@ function toggleFullscreen() {
 function startDrag(nodeId: string, event: MouseEvent) {
   isDragging.value = true
   draggingNodeId.value = nodeId
+  dragMoved.value = false
+  dragStartClient.value = { x: event.clientX, y: event.clientY }
+  // 拖拽开始即隐藏设备信息提示框，拖拽过程中也不再触发 hover 显示
+  hoveredNode.value = null
   dragOffset.value = {
     x: event.clientX - nodePositions.value[nodeId].x * scale.value - panX.value,
     y: event.clientY - nodePositions.value[nodeId].y * scale.value - panY.value
@@ -827,6 +823,12 @@ function startPan(event: MouseEvent) {
 
 function onMouseMove(event: MouseEvent) {
   if (isDragging.value && draggingNodeId.value) {
+    // 记录是否发生实际拖动（超过阈值），用于抑制拖拽结束后的误触 click
+    if (dragStartClient.value) {
+      const dx = event.clientX - dragStartClient.value.x
+      const dy = event.clientY - dragStartClient.value.y
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved.value = true
+    }
     const pos = nodePositions.value[draggingNodeId.value]
     pos.x = (event.clientX - dragOffset.value.x - panX.value) / scale.value
     pos.y = (event.clientY - dragOffset.value.y - panY.value) / scale.value
@@ -849,6 +851,11 @@ function onWheel(event: WheelEvent) {
 }
 
 function onNodeClick(nodeId: string) {
+  // 拖拽结束后的 mouseup 会触发 click，实际拖动过则不当作点击，避免误弹详情面板
+  if (dragMoved.value) {
+    dragMoved.value = false
+    return
+  }
   selectedNodeId.value = selectedNodeId.value === nodeId ? null : nodeId
   
   // 如果点击的是互联网出口节点，加载站点设备列表
@@ -881,6 +888,8 @@ async function loadSiteDevicesForConnection(siteId: number | null) {
 }
 
 function onNodeHover(node: DeviceNode, event: MouseEvent) {
+  // 拖拽过程中不显示设备信息提示框
+  if (isDragging.value) return
   hoveredNode.value = node
   const canvasRect = canvasWrapper.value?.getBoundingClientRect()
   if (canvasRect) {
@@ -923,12 +932,44 @@ async function loadDeviceData(keepPositions = false) {
     deviceEdges.value = data.edges
     if (!keepPositions) {
       initializePositions()
+    } else {
+      // 保留已有节点位置，仅为新增节点生成散布初始位置（否则全部兜底到 (0,0) 叠在左上角）
+      assignPositionsForNewNodes()
     }
   } catch (error) {
     console.error('Failed to load device topology data:', error)
   } finally {
     isLoading.value = false
   }
+}
+
+// 为没有布局位置的节点生成初始位置：以现有节点的包围盒中心为原点螺旋散布，避免堆叠
+function assignPositionsForNewNodes() {
+  const missing = filteredNodes.value.filter(n => !nodePositions.value[n.id])
+  if (missing.length === 0) return
+
+  const positioned = Object.values(nodePositions.value)
+  let cx: number, cy: number
+  if (positioned.length > 0) {
+    const xs = positioned.map(p => p.x)
+    const ys = positioned.map(p => p.y)
+    cx = (Math.min(...xs) + Math.max(...xs)) / 2
+    cy = (Math.min(...ys) + Math.max(...ys)) / 2
+  } else {
+    cx = canvasWidth.value / 2 / scale.value
+    cy = canvasHeight.value / 2 / scale.value
+  }
+
+  // 阿基米德螺旋：半径随索引递增，相邻节点角度错开，保证互不重叠
+  const spacing = Math.max(nodeWidth + 40, 220)
+  missing.forEach((node, i) => {
+    const angle = i * 2.399963 // 黄金角，散布更均匀
+    const radius = spacing * Math.sqrt(i + 1) / 2
+    nodePositions.value[node.id] = {
+      x: cx + radius * Math.cos(angle),
+      y: cy + radius * Math.sin(angle)
+    }
+  })
 }
 
 function onSiteChange() {
@@ -965,8 +1006,23 @@ function stopRefreshTimer() {
 
 function handleResize() {
   if (canvasWrapper.value) {
-    canvasWidth.value = canvasWrapper.value.clientWidth
-    canvasHeight.value = canvasWrapper.value.clientHeight
+    const newWidth = canvasWrapper.value.clientWidth
+    const newHeight = canvasWrapper.value.clientHeight
+    if (newWidth === canvasWidth.value && newHeight === canvasHeight.value) return
+    // 画布尺寸变化时按比例缩放节点坐标，避免原坐标落在新视口外（又出现「看不见的节点」）
+    const oldWidth = canvasWidth.value
+    const oldHeight = canvasHeight.value
+    if (oldWidth > 0 && oldHeight > 0 && Object.keys(nodePositions.value).length > 0) {
+      const ratioX = newWidth / oldWidth
+      const ratioY = newHeight / oldHeight
+      Object.keys(nodePositions.value).forEach(id => {
+        const pos = nodePositions.value[id]
+        pos.x *= ratioX
+        pos.y *= ratioY
+      })
+    }
+    canvasWidth.value = newWidth
+    canvasHeight.value = newHeight
   }
 }
 
@@ -1096,6 +1152,9 @@ onUnmounted(() => {
   --topo-danger: #f56c6c;
   --topo-unknown: #909399;
   --topo-border: rgba(64, 158, 255, 0.2);
+  --topo-node-bg: #162035;
+  --topo-canvas-bg: #0a0e1a;
+  --topo-edge-normal: #5b8db8;
 }
 
 .device-topology {
@@ -1315,24 +1374,24 @@ onUnmounted(() => {
 }
 
 .topology-edge.edge-normal {
-  stroke: #5B8DB8;
+  stroke: var(--topo-edge-normal);
   stroke-width: 2;
 }
 
 .topology-edge.edge-warning {
-  stroke: #E6A23C;
+  stroke: var(--topo-warning);
   stroke-width: 2;
   stroke-dasharray: 8,3;
 }
 
 .topology-edge.edge-offline {
-  stroke: #606266;
+  stroke: var(--topo-unknown);
   stroke-width: 1.5;
   stroke-dasharray: 4,4;
 }
 
 .topology-edge.edge-critical {
-  stroke: #F56C6C;
+  stroke: var(--topo-danger);
   stroke-width: 2;
   stroke-dasharray: 6,3;
 }
@@ -1401,21 +1460,29 @@ onUnmounted(() => {
 
 .node-status.status-online,
 .node-status.status-normal {
-  fill: #67C23A;
+  fill: var(--topo-success);
 }
 
 .node-status.status-warning {
-  fill: #E6A23C;
+  fill: var(--topo-warning);
 }
 
 .node-status.status-offline,
-.node-status.status-critical,
 .node-status.status-error {
-  fill: #F56C6C;
+  fill: var(--topo-danger);
 }
 
 .node-status.status-unknown {
-  fill: #909399;
+  fill: var(--topo-unknown);
+}
+
+/* 图例链路线：颜色与画布边线保持一致 */
+.legend-line-normal {
+  stroke: var(--topo-edge-normal);
+}
+
+.legend-line-critical {
+  stroke: var(--topo-danger);
 }
 
 /* Tooltip */
@@ -1664,20 +1731,30 @@ onUnmounted(() => {
 
 .status-normal,
 .status-online {
-  color: #67C23A;
+  color: var(--topo-success);
 }
 
 .status-warning {
-  color: #E6A23C;
+  color: var(--topo-warning);
 }
 
 .status-offline,
-.status-critical,
 .status-error {
-  color: #F56C6C;
+  color: var(--topo-danger);
 }
 
 .status-unknown {
-  color: #909399;
+  color: var(--topo-unknown);
+}
+
+/* 搜索命中计数 */
+.search-match-count {
+  color: var(--topo-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.search-match-count.no-match {
+  color: var(--topo-danger);
 }
 </style>
