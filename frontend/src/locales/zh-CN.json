@@ -927,6 +927,8 @@
     "emptySelectSiteHint": "在左上角选择一个站点，查看该站点内的设备拓扑",
     "emptyNoDataTitle": "暂无拓扑数据",
     "emptyNoDataHint": "当前站点没有可展示的设备或链路数据",
+    "emptyAllHiddenTitle": "没有可见节点",
+    "emptyAllHiddenHint": "当前站点的设备均未接入链路，可打开「显示孤立节点」查看全部设备",
     "missingEdgeNodes": "{count} 条链路因对端节点缺失未能绘制",
     "legend": "图例",
     "legendNormalLink": "正常链路",

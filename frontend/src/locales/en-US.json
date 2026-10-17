@@ -713,6 +713,8 @@
     "emptySelectSiteHint": "Choose a site from the top-left to view its device topology",
     "emptyNoDataTitle": "No Topology Data",
     "emptyNoDataHint": "No devices or links available for the current site",
+    "emptyAllHiddenTitle": "No Visible Nodes",
+    "emptyAllHiddenHint": "All devices on this site have no links. Turn on \"Show Isolated\" to view all devices",
     "missingEdgeNodes": "{count} link(s) not drawn due to missing peer nodes",
     "legend": "Legend",
     "legendNormalLink": "Normal Link",

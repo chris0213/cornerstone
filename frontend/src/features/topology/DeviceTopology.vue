@@ -328,7 +328,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { Search, Refresh, MagicStick, Grid, ZoomIn, ZoomOut, FullScreen, Close, Download, PictureFilled, Picture, Document, Loading, Share, WarningFilled } from '@element-plus/icons-vue'
 import { getDeviceGraph, getSiteDevices, type DeviceNode, type DeviceEdge, type SiteDeviceOption } from '../../api/topology'
 import { getSites as getSitesApi, type SiteResponse } from '../../api/sites'
@@ -481,22 +481,26 @@ const filteredNodes = computed(() => {
   return result
 })
 
-// 空状态：未选站点，或已选站点但无节点数据
+// 空状态：未选站点 / 无节点数据 / 节点全被过滤（如孤立节点隐藏后无可见节点）
 const showEmptyState = computed(() =>
-  selectedSiteId.value === null || deviceNodes.value.length === 0
+  selectedSiteId.value === null || deviceNodes.value.length === 0 || filteredNodes.value.length === 0
 )
 
-const emptyStateTitle = computed(() =>
-  selectedSiteId.value === null
-    ? t('topology.emptySelectSiteTitle')
-    : t('topology.emptyNoDataTitle')
-)
+const emptyStateTitle = computed(() => {
+  if (selectedSiteId.value === null) return t('topology.emptySelectSiteTitle')
+  if (deviceNodes.value.length > 0 && filteredNodes.value.length === 0) {
+    return t('topology.emptyAllHiddenTitle')
+  }
+  return t('topology.emptyNoDataTitle')
+})
 
-const emptyStateHint = computed(() =>
-  selectedSiteId.value === null
-    ? t('topology.emptySelectSiteHint')
-    : t('topology.emptyNoDataHint')
-)
+const emptyStateHint = computed(() => {
+  if (selectedSiteId.value === null) return t('topology.emptySelectSiteHint')
+  if (deviceNodes.value.length > 0 && filteredNodes.value.length === 0) {
+    return t('topology.emptyAllHiddenHint')
+  }
+  return t('topology.emptyNoDataHint')
+})
 
 // 全量节点数超过阈值时禁用「全部站点」选项
 const allSitesDisabled = computed(() => totalAllNodes.value > MAX_ALL_SITES_NODES)
@@ -670,7 +674,8 @@ function getStatusSummary(node: DeviceNode): string {
 }
 
 function initializePositions() {
-  const nodes = deviceNodes.value
+  // 只布局可见节点：隐藏节点不参与布局，避免把可见节点挤到视口外（悬空线根因）
+  const nodes = filteredNodes.value
   const layers: Record<string, typeof nodes> = {}
   
   nodes.forEach(node => {
@@ -709,14 +714,15 @@ function runForceLayout() {
   if (isLayoutRunning.value) return
   isLayoutRunning.value = true
   
-  const k = Math.sqrt(canvasWidth.value * canvasHeight.value / deviceNodes.value.length)
+  // 只对可见节点做力导布局
+  const nodes = filteredNodes.value
+  const k = Math.sqrt(canvasWidth.value * canvasHeight.value / Math.max(nodes.length, 1))
   const iterations = 100
   let iteration = 0
-  
+
   function step() {
-    const nodes = deviceNodes.value
     const forces: Record<string, { x: number; y: number }> = {}
-    
+
     nodes.forEach(node => {
       forces[node.id] = { x: 0, y: 0 }
     })
@@ -929,6 +935,13 @@ function onSiteChange() {
   resetLayout()
   loadDeviceData()
 }
+
+// 切换「显示/隐藏孤立节点」后重新布局，让新出现的节点进入视口
+watch(showIsolatedDevices, () => {
+  if (!showEmptyState.value && !isLoading.value) {
+    resetLayout()
+  }
+})
 
 function startRefreshTimer() {
   if (refreshIntervalId.value) {
