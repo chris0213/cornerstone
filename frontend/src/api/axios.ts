@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ElMessage } from 'element-plus'
 import router from '../app/router'
 
 const api = axios.create({
@@ -111,6 +112,13 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
       return handle401(error)
+    }
+    // IP 白名单拒绝（403）：token 本身有效，只是 IP 被拦，给出明确原因避免表现为莫名"掉登录"
+    if (error.response?.status === 403) {
+      const detail = error.response?.data?.detail
+      if (typeof detail === 'string' && detail.includes('白名单')) {
+        ElMessage({ message: detail, type: 'error', duration: 6000, showClose: true })
+      }
     }
     return Promise.reject(error)
   }

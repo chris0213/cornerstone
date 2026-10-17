@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime, timezone
 from typing import Optional
+import logging
 import random
 import string
 import io
@@ -14,7 +15,7 @@ from sqlalchemy import select, insert, update
 from captcha.image import ImageCaptcha
 import redis.asyncio as aioredis
 
-from ..utils.ip_whitelist import get_client_ip_from_request
+from ..utils.ip_whitelist import get_client_ip_from_request, get_cached_whitelist, is_ip_in_networks
 
 from ..database import get_db
 from ..models import User, AuditLog, UserSession, Role
@@ -36,6 +37,8 @@ from ..services.sso_service import sso_service, SSOException
 from .dependencies import get_current_active_user
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 # Request body models
 class CaptchaLoginRequest(BaseModel):
@@ -124,6 +127,24 @@ async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_a
 
 async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agent: str) -> dict:
     """公共登录核心逻辑：生成 token、创建 session、记录日志"""
+    # IP 白名单前置检查：普通用户不在白名单时拒绝登录并给出明确提示，
+    # 避免出现"登录成功但所有请求被 403、刷新即被踢回登录页"的困惑体验。
+    # super_admin 放行，保留白名单误配后从页面自救的通道（与 main.py 中间件防自锁设计一致）。
+    if client_ip not in ("127.0.0.1", "::1", "localhost") and not user.is_superuser:
+        try:
+            networks = await get_cached_whitelist(db)
+            if networks and not is_ip_in_networks(client_ip, networks):
+                await log_login_attempt(db, user.username, False, client_ip)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="您的IP地址不在访问白名单中，请联系管理员添加"
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # 检查过程出错默认放行（与中间件 fail-open 语义一致，避免锁死系统）
+            logger.error("[IP白名单] 登录前置检查出错，默认放行")
+
     stmt = select(Role).where(Role.id == user.role_id)
     result = await db.execute(stmt)
     role = result.scalar_one_or_none()

@@ -92,6 +92,9 @@ async function handleLogin() {
     if (err.response?.status === 400) {
       error.value = t('login.captchaError')
       refreshCaptcha()
+    } else if (err.response?.data?.detail) {
+      // 403 白名单拒绝等业务原因，优先展示后端具体提示
+      error.value = err.response.data.detail
     } else {
       error.value = t('login.loginFailed')
     }
