@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     
     # 凭证加密配置
     credential_secret_key: str | None = None
+
+    # 凭证测试连接限流：同一凭证 N 秒内只允许 1 次（0 = 不限流）
+    credential_test_rate_limit_seconds: int = 10
+    # 凭证测试连接是否放行私网段目标（False = 仅允许设备表内已登记 IP）
+    credential_test_allow_private: bool = True
     
     # 应用配置
     app_name: str = "Cornerstone API"

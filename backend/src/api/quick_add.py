@@ -8,7 +8,9 @@ import re
 from ..database import get_db
 from ..models import Device, IPAddress, Credential, Site
 from ..services.backup_collector import VENDOR_MAP, TEST_COMMANDS
-from .dependencies import get_current_active_user
+from ..utils.crypto import encrypt_password
+from .dependencies import get_current_active_user, require_permission
+from .backups import _check_credential_test_target
 
 router = APIRouter(tags=["quick-add"])
 
@@ -105,8 +107,12 @@ async def test_device_connection(ip_address: str, vendor: str, username: str, pa
 @router.post("/test-connection", response_model=TestConnectionResponse)
 async def test_connection(
     request: TestConnectionRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
+    # R5：测试目标 IP 必须是私网段或设备表内已登记 IP（此处不做限流）
+    await _check_credential_test_target(request.ip_address, db)
+
     success, message, device_info = await test_device_connection(
         ip_address=request.ip_address,
         vendor=request.vendor,
@@ -127,7 +133,7 @@ async def test_connection(
 async def quick_add_device(
     request: QuickAddDeviceRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("devices:write"))
 ):
     try:
         existing_ip = await db.execute(
@@ -167,12 +173,12 @@ async def quick_add_device(
         new_device = result.scalar_one()
         
         stmt = insert(Credential).values(
+            name=f"{request.name}-credential",
             device_id=new_device.id,
             username=request.username,
-            password=request.password,
+            password=encrypt_password(request.password),
             port=request.port,
-            enable_password=request.enable_password,
-            vendor=request.vendor
+            enable_password=encrypt_password(request.enable_password) if request.enable_password else "",
         )
         await db.execute(stmt)
         

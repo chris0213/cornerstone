@@ -23,6 +23,17 @@ VENDOR_MAP = {
     "aruba": "aruba_os",
 }
 
+# telnet 凭证对应的 netmiko device_type（仅 test_device_connection 的测试连接路径使用）。
+# netmiko 4.x 未提供 telnet 驱动的厂商不在表内，保持原 SSH 类型。
+TELNET_DEVICE_TYPE_MAP = {
+    "cisco_ios": "cisco_ios_telnet",
+    "cisco_nxos": "cisco_nxos_telnet",
+    "huawei_vrp": "huawei_telnet",  # 注意：华为 VRP 的 telnet 驱动名为 huawei_telnet
+    "hp_comware": "hp_comware_telnet",
+    "juniper_junos": "juniper_junos_telnet",
+    "ruijie_os": "ruijie_os_telnet",
+}
+
 # 每个厂商的采集命令
 BACKUP_COMMANDS = {
     "cisco_ios": "show running-config",
@@ -193,6 +204,10 @@ async def test_device_connection(device: Dict, credential: Dict) -> CollectResul
         # 2. 构造Netmiko连接参数
         vendor = device.get("vendor", "huawei_vrp").lower()
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
+
+        # telnet 凭证：按厂商切换到对应 telnet 驱动（仅影响本测试连接函数，备份采集路径不受影响）
+        if credential.get("protocol") == "telnet":
+            device_type = TELNET_DEVICE_TYPE_MAP.get(device_type, device_type)
         
         # 创建临时SSH配置文件以支持旧设备的密钥交换算法
         import tempfile
@@ -286,8 +301,7 @@ Host {device.get("ip_address")}
             )
     
     except Exception as e:
-        logger.error(f"设备 {ip_address} 还原配置发生错误: {str(e)}")
-        os.unlink(ssh_config_path)
+        logger.error(f"设备 {ip_address} 连接测试发生错误: {str(e)}")
         return CollectResult(
             success=False,
             error_message=f"测试异常: {str(e)}",

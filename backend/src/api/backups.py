@@ -3,13 +3,16 @@ from fastapi.websockets import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, update, desc, func
 from datetime import datetime, timezone, timedelta
+import ipaddress
+import time
 
 BJT = timezone(timedelta(hours=8))  # 北京时间
 import json
 import uuid
 
 from ..database import get_db
-from ..models import Backup, Device, Credential, IPAddress, BackupAnalysis
+from ..config import settings
+from ..models import Backup, Device, Credential, IPAddress, BackupAnalysis, BackupTask
 from ..schemas import BackupResponse, CredentialResponse, CredentialCreate, CredentialUpdate
 from ..services.backup_collector import collect_device_config, detect_config_change, \
     calculate_hash, save_config_to_file, load_config_from_file, apply_config_to_device, \
@@ -17,12 +20,74 @@ from ..services.backup_collector import collect_device_config, detect_config_cha
 from ..utils.crypto import encrypt_password, decrypt_password
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, require_permission, PageParams, pagination
 
 router = APIRouter()
 
 # 存储WebSocket连接
 active_connections: dict = {}
+
+# 凭证测试连接限流：记录每个凭证上次放行的 monotonic 时间戳
+# 仅在请求通过校验、真正发起连接前更新（无论连接结果成功或失败）
+_credential_test_last: dict[int, float] = {}
+
+
+async def _check_credential_test_target(test_ip: str, db_conn) -> None:
+    """R5：校验测试连接目标 IP。
+
+    通过条件（满足其一）：
+    - IP 已登记在设备表关联的 ip_addresses 中；
+    - credential_test_allow_private=True 且目标为私网/环回/链路本地地址。
+
+    不通过抛出 HTTPException 400（结构化错误码，与 vlan.has_prefixes 同模式）。
+    """
+    try:
+        ip_obj = ipaddress.ip_address(test_ip)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "credential.test_ip_invalid", "message": f"无效的 IP 地址: {test_ip}", "params": {}},
+        )
+
+    if settings.credential_test_allow_private and ip_obj.is_private:
+        return
+
+    result = await db_conn.execute(select(IPAddress.address).where(IPAddress.address == test_ip))
+    if result.scalar_one_or_none():
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "code": "credential.test_ip_not_allowed",
+            "message": "目标 IP 不允许测试：仅允许设备表内已登记 IP" + ("或私网段" if settings.credential_test_allow_private else ""),
+            "params": {"test_ip": test_ip},
+        },
+    )
+
+
+def _check_credential_test_rate(credential_id: int) -> None:
+    """R5：同一凭证限流，间隔不足返回 400（结构化错误码）。"""
+    limit_seconds = settings.credential_test_rate_limit_seconds
+    if limit_seconds <= 0:
+        return
+    last = _credential_test_last.get(credential_id)
+    if last is not None:
+        elapsed = time.monotonic() - last
+        if elapsed < limit_seconds:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "credential.test_rate_limited",
+                    "message": f"测试过于频繁，同一凭证每 {limit_seconds} 秒仅允许测试 1 次",
+                    "params": {"retry_after_seconds": int(limit_seconds - elapsed) + 1},
+                },
+            )
+
+
+def _mark_credential_test(credential_id: int) -> None:
+    """放行后立即记录时间戳（不论后续连接成功或失败）。"""
+    _credential_test_last[credential_id] = time.monotonic()
 
 # ==================== 凭证管理 ====================
 
@@ -31,7 +96,7 @@ active_connections: dict = {}
 async def get_credentials(
     device_id: int = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     query = select(Credential)
     if device_id:
@@ -56,7 +121,7 @@ async def get_credentials(
 async def get_credential(
     credential_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result = await db.execute(select(Credential).where(Credential.id == credential_id))
     credential = result.scalar_one_or_none()
@@ -79,7 +144,7 @@ async def create_credential(
     request: Request,
     credential: CredentialCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     # 验证名称唯一性
     result = await db.execute(select(Credential).where(Credential.name == credential.name))
@@ -122,7 +187,7 @@ async def update_credential(
     credential_id: int,
     credential: CredentialUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     result = await db.execute(select(Credential).where(Credential.id == credential_id))
     existing = result.scalar_one_or_none()
@@ -166,34 +231,76 @@ async def delete_credential(
     request: Request,
     credential_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:delete"))
 ):
     result = await db.execute(select(Credential).where(Credential.id == credential_id))
     credential = result.scalar_one_or_none()
-    
+
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
+    # R4：被备份任务引用的凭证禁止删除（结构化错误码，与 vlan.has_prefixes 同模式）
+    refs = await db.execute(
+        select(BackupTask.id, BackupTask.name).where(BackupTask.credential_id == credential_id)
+    )
+    ref_tasks = [{"id": row.id, "name": row.name} for row in refs.all()]
+    if ref_tasks:
+        task_names = "、".join(t["name"] for t in ref_tasks)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "credential.in_use",
+                "message": f"凭证已被 {len(ref_tasks)} 个备份任务使用（{task_names}），请先解绑后再删除",
+                "params": {"tasks": ref_tasks},
+            },
+        )
+
     await db.execute(delete(Credential).where(Credential.id == credential_id))
     await db.commit()
-    
+
     client_ip = get_client_ip_from_request(request)
     await audit_log(db, current_user.id, "credential", credential_id, "delete", {}, client_ip)
 
 # 测试凭证连通性
 @router.post("/credentials/{credential_id}/test")
 async def test_credential(
+    request: Request,
     credential_id: int,
     test_ip: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     result = await db.execute(select(Credential).where(Credential.id == credential_id))
     credential = result.scalar_one_or_none()
-    
+
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
+    # R5：限流与目标 IP 校验（拒绝时写审计 action=test_denied）
+    try:
+        _check_credential_test_rate(credential_id)
+        await _check_credential_test_target(test_ip, db)
+    except HTTPException as denied:
+        await audit_log(
+            db, current_user.id, "credential", credential_id, "test_denied",
+            {"test_ip": test_ip, "reason": denied.detail.get("code") if isinstance(denied.detail, dict) else str(denied.detail)},
+            get_client_ip_from_request(request),
+        )
+        raise
+
+    # R6：按凭证关联设备的厂商构造参数；取不到时保持默认并在响应中标注
+    vendor = "huawei_vrp"
+    defaults_applied = ["vendor"]
+    if credential.device_id:
+        dev = await db.execute(select(Device).where(Device.id == credential.device_id))
+        device = dev.scalar_one_or_none()
+        if device and device.vendor:
+            vendor = device.vendor
+            defaults_applied = []
+
+    # 放行：立即更新限流时间戳（不论连接成功或失败）
+    _mark_credential_test(credential_id)
+
     # 解密凭证
     credential_dict = {
         "username": credential.username,
@@ -208,20 +315,29 @@ async def test_credential(
         "jump_username": credential.jump_username,
         "jump_password": decrypt_password(credential.jump_password),
     }
-    
+
     # 测试连接
     device_dict = {
         "id": 0,
         "ip_address": test_ip,
-        "vendor": "huawei_vrp",  # 默认使用华为进行测试
+        "vendor": vendor,
     }
-    
+
     result = await test_device_connection(device_dict, credential_dict)
-    
+
+    # R7：测试连接写审计（记录目标 IP 与结果，不记录任何凭证内容）
+    await audit_log(
+        db, current_user.id, "credential", credential_id, "test",
+        {"test_ip": test_ip, "success": result.success, "error": result.error_message},
+        get_client_ip_from_request(request),
+    )
+
     return {
         "success": result.success,
         "message": result.error_message if not result.success else "连接成功",
-        "duration_ms": result.duration_ms
+        "duration_ms": result.duration_ms,
+        "vendor": vendor,
+        "defaults_applied": defaults_applied,
     }
 
 # ==================== 备份管理 ====================

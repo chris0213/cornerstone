@@ -52,6 +52,16 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture
+async def db_session(test_engine):
+    """供测试用例直接造数据的独立会话（与 app 共享同一测试库）。"""
+    TestSession = sessionmaker(
+        test_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with TestSession() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
 async def client(test_engine):
     """注入测试库并初始化权限/角色/管理员，返回免 lifespan 的 AsyncClient。"""
     TestSession = sessionmaker(
