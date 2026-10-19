@@ -77,8 +77,12 @@ export async function triggerBackup(deviceId: number, tag?: string): Promise<{
   success: boolean
   message?: string
 }> {
-  const response = await api.post('/backups/trigger', null, {
-    params: { device_id: deviceId, tag: tag || '' }
+  // 后端要求 Body(embed=True)，还原等长耗时操作统一放宽超时
+  const response = await api.post('/backups/trigger', {
+    device_id: deviceId,
+    tag: tag || '',
+  }, {
+    timeout: 300000, // 5分钟超时
   })
   return response.data
 }
@@ -95,12 +99,14 @@ export async function triggerBatchBackup(deviceIds: number[], tag?: string): Pro
   return response.data
 }
 
-export async function restoreBackup(backupId: number): Promise<{
+export async function restoreBackup(backupId: number, ipAddress: string): Promise<{
   success: boolean
   message: string
   durationMs: number
 }> {
-  const response = await api.post(`/backups/${backupId}/restore`, {}, {
+  const response = await api.post(`/backups/${backupId}/restore`, {
+    ip_address: ipAddress
+  }, {
     timeout: 300000, // 5分钟超时
   })
   return response.data

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, Connection, Box, MapLocation } from '@element-plus/icons-vue'
-import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup } from '@/api/backups'
+import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup, triggerBackup, triggerBatchBackup } from '@/api/backups'
 import { formatDateTime } from '@/lib/utils'
 import { applyKeywordFilter } from '@/lib/filters'
 import { confirmAndRun } from '@/lib/confirm'
@@ -64,9 +64,9 @@ function getDeviceIcon(type: string) {
 
 function getTriggerLabel(trigger: string): string {
   const labelMap: Record<string, string> = {
-    'manual': '手动',
-    'scheduled': '定时',
-    'pre_change': '变更前',
+    'manual': t('backups.triggerManual'),
+    'scheduled': t('backups.triggerScheduled'),
+    'pre_change': t('backups.triggerPreChange'),
   }
   return labelMap[trigger] || trigger
 }
@@ -99,19 +99,52 @@ const diffResult = ref<{
   diffText: string
   changeSummary: string
 } | null>(null)
-const tagInput = ref('')
-const showTagPopover = ref(false)
-const taggingBackupId = ref<number | null>(null)
 
-// 筛选
+// ==================== 筛选 / 分页 / 列设置 ====================
 const searchQuery = ref('')
 const filterStatus = ref('')
 const filterTrigger = ref('')
 const filterHasChange = ref<boolean | ''>('')
+const filterSiteId = ref<number | ''>('')
+const filterDeviceId = ref<number | ''>('')
+
+const currentPage = ref(1)
+const pageSize = ref(20)
+const pageSizes = [10, 20, 50, 100]
+
+// 列设置（localStorage 持久化），耗时列数据大多为空，默认隐藏
+const COLUMN_STORAGE_KEY = 'backups_column_settings_v1'
+const columnDefs = [
+  { key: 'tag', labelKey: 'backups.tagColumn' },
+  { key: 'duration', labelKey: 'backups.durationColumn' },
+] as const
+type ColumnKey = (typeof columnDefs)[number]['key']
+
+const loadColumnSettings = (): Record<ColumnKey, boolean> => {
+  const defaults = Object.fromEntries(columnDefs.map(c => [c.key, true])) as Record<ColumnKey, boolean>
+  defaults.duration = false
+  try {
+    const saved = localStorage.getItem(COLUMN_STORAGE_KEY)
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults
+  } catch {
+    return defaults
+  }
+}
+const columnVisible = ref<Record<ColumnKey, boolean>>(loadColumnSettings())
+const showColumnSettings = ref(false)
+
+watch(columnVisible, (val) => {
+  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(val))
+}, { deep: true })
+
+// ==================== 立即备份弹窗 ====================
+const showBackupNowDialog = ref(false)
+const backupNowSubmitting = ref(false)
+const backupNowDeviceIds = ref<number[]>([])
 
 const filteredBackups = computed(() => {
   let result = backups.value
-  
+
   if (searchQuery.value) {
     result = applyKeywordFilter(result, searchQuery.value, [
       (b) => b.deviceId,
@@ -125,20 +158,39 @@ const filteredBackups = computed(() => {
       (b) => getIpAddress(getDeviceInfo(b.deviceId)?.mgmt_ip_id ?? undefined),
     ])
   }
-  
+
   if (filterStatus.value) {
     result = result.filter(b => b.status === filterStatus.value)
   }
-  
+
   if (filterTrigger.value) {
     result = result.filter(b => b.trigger === filterTrigger.value)
   }
-  
+
   if (filterHasChange.value !== '') {
     result = result.filter(b => b.hasChange === filterHasChange.value)
   }
-  
+
+  if (filterSiteId.value !== '') {
+    result = result.filter(b => getDeviceInfo(b.deviceId)?.site_id === filterSiteId.value)
+  }
+
+  if (filterDeviceId.value !== '') {
+    result = result.filter(b => b.deviceId === filterDeviceId.value)
+  }
+
   return result
+})
+
+// 前端分页
+const pagedBackups = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredBackups.value.slice(start, start + pageSize.value)
+})
+
+// 筛选条件变化时回到第一页
+watch([searchQuery, filterStatus, filterTrigger, filterHasChange, filterSiteId, filterDeviceId], () => {
+  currentPage.value = 1
 })
 
 function canCompare() {
@@ -147,18 +199,18 @@ function canCompare() {
 
 async function handleCompare() {
   if (!canCompare()) {
-    ElMessage.warning('请选择恰好2条备份记录进行对比')
+    ElMessage.warning(t('backups.compareNeedTwo'))
     return
   }
-  
+
   const [a, b] = selectedBackups.value.sort((x, y) => x.version - y.version)
-  
+
   try {
     diffResult.value = await getBackupDiff(parseInt(a.id), parseInt(b.id))
     showDiffDialog.value = true
   } catch (error) {
     console.error('Failed to compare backups:', error)
-    ElMessage.error('获取差异失败')
+    ElMessage.error(t('backups.diffLoadFailed'))
   }
 }
 
@@ -170,7 +222,7 @@ async function viewBackup(backup: Backup) {
   try {
     viewingBackup.value = backup
     const result = await getBackupContent(parseInt(backup.id))
-    viewingContent.value = result.content || '暂无配置内容'
+    viewingContent.value = result.content || t('backups.loadContentEmpty')
     showViewDialog.value = true
   } catch (error) {
     console.error('Failed to load backup content:', error)
@@ -190,11 +242,13 @@ function closeDiffDialog() {
 }
 
 async function handleDelete(backup: Backup) {
+  const deviceName = getDeviceInfo(backup.deviceId)?.name || `#${backup.deviceId}`
   await confirmAndRun({
-    message: `确定要删除该备份记录吗？此操作不可撤销。`,
-    title: '确认删除',
-    confirmText: '删除',
-    cancelText: '取消',
+    message: t('backups.confirmDeleteMessage', { device: deviceName, version: backup.version }),
+    title: t('backups.confirmDeleteTitle'),
+    confirmText: t('backups.confirmDeleteText'),
+    cancelText: t('common.cancel'),
+    danger: true,
     action: async () => {
       await deleteBackup(parseInt(backup.id))
 
@@ -211,50 +265,128 @@ async function handleDelete(backup: Backup) {
 
       await loadBackups()
     },
-    successMessage: '备份记录删除成功',
-    errorMessage: '删除备份失败',
+    successMessage: t('backups.deleteSuccessText'),
+    errorMessage: t('backups.deleteFailedText'),
   })
 }
 
-function showTagInput(backup: Backup) {
-  taggingBackupId.value = parseInt(backup.id)
-  tagInput.value = backup.tag || ''
-  showTagPopover.value = true
-}
-
-async function saveTag() {
-  if (!taggingBackupId.value) return
-  
+// 「更多」菜单里的标签编辑：prompt 弹窗替代原行内 popover
+async function handleEditTag(backup: Backup) {
   try {
-    const backup = backups.value.find(b => parseInt(b.id) === taggingBackupId.value)
-    await updateBackupTag(taggingBackupId.value, tagInput.value)
-    
+    const { value } = await ElMessageBox.prompt(
+      t('backups.tagPrompt'),
+      t('backups.tagColumn'),
+      {
+        inputValue: backup.tag || '',
+        confirmButtonText: t('common.save'),
+        cancelButtonText: t('common.cancel'),
+        inputPattern: /^.{0,50}$/,
+        inputErrorMessage: t('backups.tagPrompt'),
+      }
+    )
+    await updateBackupTag(parseInt(backup.id), value.trim())
+
     // 添加操作日志
     store.addAuditLog({
       user: authStore.user?.username || 'system',
       action: '更新备份标签',
       resource: '配置备份',
-      detail: `更新设备 ${backup?.deviceId} 备份 (v${backup?.version}) 的标签为: ${tagInput.value}`,
+      detail: `更新设备 ${backup.deviceId} 备份 (v${backup.version}) 的标签为: ${value.trim()}`,
       ipAddress: null,
       createdAt: new Date().toISOString(),
       success: 'true'
     })
-    
-    ElMessage.success('标签保存成功')
-    showTagPopover.value = false
+
+    ElMessage.success(t('backups.tagSaveSuccess'))
     await loadBackups()
   } catch (error) {
-    console.error('Failed to save tag:', error)
-    ElMessage.error('保存标签失败')
+    if (error !== 'cancel') {
+      console.error('Failed to save tag:', error)
+      ElMessage.error(t('backups.tagSaveFailed'))
+    }
   }
 }
 
-function downloadBackup(backup: Backup) {
-  if (!backup.content) {
-    ElMessage.warning('该备份无配置内容')
+// ==================== 失败重试 / 立即备份 ====================
+// 对单台设备重新发起备份（失败行「重试」与「更多」菜单共用）
+async function triggerDeviceBackup(backup: Backup) {
+  try {
+    const result = await triggerBackup(backup.deviceId)
+    if (result.success) {
+      ElMessage.success(t('backups.retryStarted'))
+    } else {
+      ElMessage.warning(result.message || t('backups.retryFailed'))
+    }
+    await loadBackups()
+  } catch (error: any) {
+    console.error('Failed to trigger backup:', error)
+    ElMessage.error(error.response?.data?.detail || t('backups.retryFailed'))
+  }
+}
+
+function openBackupNowDialog() {
+  backupNowDeviceIds.value = []
+  showBackupNowDialog.value = true
+}
+
+// 立即备份：单台走 /trigger，多台走 /trigger-batch
+async function handleBackupNow() {
+  if (backupNowDeviceIds.value.length === 0) {
+    ElMessage.warning(t('backups.backupNowNoDevice'))
     return
   }
-  const blob = new Blob([backup.content], { type: 'text/plain' })
+  backupNowSubmitting.value = true
+  try {
+    if (backupNowDeviceIds.value.length === 1) {
+      await triggerBackup(backupNowDeviceIds.value[0])
+    } else {
+      await triggerBatchBackup(backupNowDeviceIds.value)
+    }
+
+    // 添加操作日志
+    store.addAuditLog({
+      user: authStore.user?.username || 'system',
+      action: '立即备份',
+      resource: '配置备份',
+      detail: `手动触发 ${backupNowDeviceIds.value.length} 台设备的配置备份`,
+      ipAddress: null,
+      createdAt: new Date().toISOString(),
+      success: 'true'
+    })
+
+    ElMessage.success(t('backups.backupNowStarted'))
+    showBackupNowDialog.value = false
+    await loadBackups()
+  } catch (error: any) {
+    console.error('Failed to trigger backup:', error)
+    ElMessage.error(error.response?.data?.detail || t('backups.backupNowFailed'))
+  } finally {
+    backupNowSubmitting.value = false
+  }
+}
+
+async function downloadBackup(backup: Backup) {
+  if (!hasContent(backup)) {
+    ElMessage.warning(t('backups.noContent'))
+    return
+  }
+  // 小配置直接用记录内 content；大配置（content 为空、存文件）走后端 content 接口
+  let content = backup.content
+  if (!content) {
+    try {
+      const result = await getBackupContent(parseInt(backup.id))
+      content = result.content
+    } catch (error) {
+      console.error('Failed to load backup content:', error)
+      ElMessage.error(t('backups.loadFailed'))
+      return
+    }
+  }
+  if (!content) {
+    ElMessage.warning(t('backups.loadContentEmpty'))
+    return
+  }
+  const blob = new Blob([content], { type: 'text/plain' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -262,7 +394,7 @@ function downloadBackup(backup: Backup) {
   // 使用设备名称（如果有）或设备ID，加上版本号生成文件名
   const deviceName = backup.deviceName || `device_${backup.deviceId}`
   const safeDeviceName = deviceName.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_')
-  a.download = `${safeDeviceName}_v${backup.version}_${backup.created_at.replace(/[:\s]/g, '-')}.cfg`
+  a.download = `${safeDeviceName}_v${backup.version}_${backup.createdAt.replace(/[:\s]/g, '-')}.cfg`
   
   a.click()
   URL.revokeObjectURL(url)
@@ -282,25 +414,31 @@ function downloadBackup(backup: Backup) {
 }
 
 async function handleRestore(backup: Backup) {
-  if (!backup.content) {
-    ElMessage.warning('该备份无配置内容，无法还原')
+  if (!hasContent(backup)) {
+    ElMessage.warning(t('backups.noContent'))
     return
   }
-  
+  // 还原目标 IP：设备主 IP（后端 restore 接口必填 ip_address）
+  const ipAddress = getDeviceIpAddress(backup.deviceId)
+  if (!ipAddress) {
+    ElMessage.warning(t('backups.restoreNoDeviceIp'))
+    return
+  }
+
   try {
     await ElMessageBox.confirm(
-      `确定要将此配置还原到设备吗？\n\n设备: ${backup.deviceId}\n版本: v${backup.version}\n备份时间: ${formatDateTime(backup.created_at)}\n\n⚠️ 警告：此操作将覆盖设备当前配置，请确保已备份最新配置！`,
-      '确认还原配置',
-      { 
-        confirmButtonText: '确认还原', 
-        cancelButtonText: '取消', 
+      `${t('backups.restoreConfirm')}<br><br>设备: ${getDeviceInfo(backup.deviceId)?.name || backup.deviceId}<br>版本: v${backup.version}<br>${t('backups.backupTime')}: ${formatDateTime(backup.createdAt)}<br><br>⚠️ ${t('backups.restoreWarning')}`,
+      t('backups.confirmRestoreTitle'),
+      {
+        confirmButtonText: t('backups.confirmRestoreText'),
+        cancelButtonText: t('common.cancel'),
         type: 'warning',
         dangerouslyUseHTMLString: true
       }
     )
-    
-    const result = await restoreBackup(parseInt(backup.id))
-    
+
+    const result = await restoreBackup(parseInt(backup.id), ipAddress)
+
     if (result.success) {
       // 添加操作日志
       store.addAuditLog({
@@ -312,8 +450,8 @@ async function handleRestore(backup: Backup) {
         createdAt: new Date().toISOString(),
         success: 'true'
       })
-      
-      ElMessage.success('配置还原成功')
+
+      ElMessage.success(t('backups.restoreSuccessText'))
     } else {
       // 添加操作日志
       store.addAuditLog({
@@ -325,13 +463,13 @@ async function handleRestore(backup: Backup) {
         createdAt: new Date().toISOString(),
         success: 'false'
       })
-      
-      ElMessage.error(`还原失败: ${result.message}`)
+
+      ElMessage.error(t('backups.restoreFailedText', { msg: result.message }))
     }
   } catch (error: any) {
     if (error !== 'cancel') {
       console.error('Failed to restore backup:', error)
-      
+
       // 添加操作日志
       store.addAuditLog({
         user: authStore.user?.username || 'system',
@@ -342,9 +480,22 @@ async function handleRestore(backup: Backup) {
         createdAt: new Date().toISOString(),
         success: 'false'
       })
-      
-      ElMessage.error('还原配置失败')
+
+      ElMessage.error(t('backups.restoreErrorText'))
     }
+  }
+}
+
+// 「更多」下拉命令分发
+function handleRowCommand(command: string, row: Backup) {
+  if (command === 'retry') {
+    triggerDeviceBackup(row)
+  } else if (command === 'tag') {
+    handleEditTag(row)
+  } else if (command === 'restore') {
+    handleRestore(row)
+  } else if (command === 'delete') {
+    handleDelete(row)
   }
 }
 
@@ -391,6 +542,49 @@ function getStatusType(status: string) {
   return map[status] || 'info'
 }
 
+function getStatusText(status: string): string {
+  const map: Record<string, string> = {
+    'success': t('backups.statusSuccess'),
+    'failed': t('backups.statusFailed'),
+    'pending': t('backups.statusPending'),
+  }
+  return map[status] || status
+}
+
+function getChangeText(hasChange: boolean): string {
+  return hasChange ? t('backups.changeYes') : t('backups.changeNo')
+}
+
+// 配置内容是否存在：小配置存 content，大配置存 file_path（content 为空但文件在）
+function hasContent(backup: Backup): boolean {
+  return !!(backup.content || backup.filePath)
+}
+
+// 还原目标 IP：设备主 IP（与备份采集目标一致）
+function getDeviceIpAddress(deviceId: number): string | undefined {
+  return deviceMap.value.get(deviceId)?.ip_address
+}
+
+// ==================== 卡片统计口径 ====================
+// 对账规则：成功 + 失败 + 进行中(pending) = 总记录数
+const successCount = computed(() => backups.value.filter(b => b.status === 'success').length)
+const failedCount = computed(() => backups.value.filter(b => b.status === 'failed').length)
+// 终态记录数（成功+失败），作为成功率分母，排除进行中
+const terminalCount = computed(() => successCount.value + failedCount.value)
+const successRateText = computed(() => {
+  if (terminalCount.value === 0) return '—'
+  return `${Math.round((successCount.value / terminalCount.value) * 100)}%`
+})
+// 近 7 天发现的变更（createdAt 在 7 天内且有变更）
+const recent7dChanges = computed(() => {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+  return backups.value.filter(b => {
+    if (!b.hasChange || !b.createdAt) return false
+    const ts = new Date(b.createdAt.replace(' ', 'T')).getTime()
+    return !Number.isNaN(ts) && ts >= cutoff
+  }).length
+})
+
 function formatDuration(ms?: number) {
   if (!ms) return '-'
   if (ms < 1000) return `${ms}ms`
@@ -413,67 +607,92 @@ onMounted(() => {
   <div class="backups-page">
     <div class="overview-cards">
       <div class="overview-card">
-        <div class="overview-card-label">{{ t('backups.title') }}</div>
+        <div class="overview-card-label">{{ t('backups.cardTotal') }}</div>
         <div class="overview-card-value">{{ backups.length }}</div>
         <div class="overview-card-trend">{{ t('backups.allRecords') }}</div>
       </div>
       <div class="overview-card overview-card-success">
-        <div class="overview-card-label">成功备份</div>
-        <div class="overview-card-value">{{ backups.filter(b => b.status === 'success').length }}</div>
-        <div class="overview-card-trend">备份成功率</div>
+        <div class="overview-card-label">{{ t('backups.cardSuccess') }}</div>
+        <div class="overview-card-value">{{ successCount }}</div>
+        <div class="overview-card-trend">{{ t('backups.subSuccessRate', { rate: successRateText }) }}</div>
       </div>
       <div class="overview-card overview-card-danger">
-        <div class="overview-card-label">失败备份</div>
-        <div class="overview-card-value">{{ backups.filter(b => b.status === 'failed').length }}</div>
-        <div class="overview-card-trend">备份失败数</div>
+        <div class="overview-card-label">{{ t('backups.cardFailed') }}</div>
+        <div class="overview-card-value">{{ failedCount }}</div>
+        <div class="overview-card-trend">{{ t('backups.subFailedHint') }}</div>
       </div>
       <div class="overview-card overview-card-warning">
-        <div class="overview-card-label">{{ t('backups.changeCount') }}</div>
-        <div class="overview-card-value">{{ backups.filter(b => b.hasChange).length }}</div>
-        <div class="overview-card-trend">近7天发现变更</div>
+        <div class="overview-card-label">{{ t('backups.cardRecentChanges') }}</div>
+        <div class="overview-card-value">{{ recent7dChanges }}</div>
+        <div class="overview-card-trend">{{ t('backups.subChangeHint') }}</div>
       </div>
     </div>
 
     <el-card class="table-card" shadow="never">
       <template #header>
         <div class="table-header">
-          <div class="card-title">
-              <el-icon><DocumentCopy /></el-icon>
-              {{ t('backups.title') }}
+          <div class="table-filters-wrapper">
+            <div class="table-filters">
+              <el-input
+                v-model="searchQuery"
+                :placeholder="t('backups.searchPlaceholder')"
+                prefix-icon="Search"
+                clearable
+                style="width: 200px"
+              />
+              <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 110px">
+                <el-option value="success" :label="t('backups.statusSuccess')" />
+                <el-option value="failed" :label="t('backups.statusFailed')" />
+                <el-option value="pending" :label="t('backups.statusPending')" />
+              </el-select>
+              <el-select v-model="filterTrigger" placeholder="触发方式" clearable style="width: 110px">
+                <el-option value="manual" :label="t('backups.triggerManual')" />
+                <el-option value="scheduled" :label="t('backups.triggerScheduled')" />
+                <el-option value="pre_change" :label="t('backups.triggerPreChange')" />
+              </el-select>
+              <el-select v-model="filterHasChange" placeholder="变更状态" clearable style="width: 110px">
+                <el-option :value="true" :label="t('backups.changeYes')" />
+                <el-option :value="false" :label="t('backups.changeNo')" />
+              </el-select>
+              <el-select v-model="filterSiteId" :placeholder="t('backups.filterSite')" clearable style="width: 120px">
+                <el-option v-for="site in sites" :key="site.id" :label="site.name" :value="site.id" />
+              </el-select>
+              <el-select v-model="filterDeviceId" :placeholder="t('backups.filterDevice')" clearable style="width: 130px">
+                <el-option v-for="device in devices" :key="device.id" :label="device.name" :value="device.id" />
+              </el-select>
             </div>
-          <div class="table-actions" v-if="canCompare()">
-            <el-button type="warning" @click="handleCompare">
+          </div>
+          <div class="table-actions">
+            <el-button v-if="canCompare()" type="warning" @click="handleCompare">
               <el-icon><Connection /></el-icon>
-              对比选中版本
+              {{ t('backups.compareSelected') }}
+            </el-button>
+            <el-popover v-model:visible="showColumnSettings" placement="bottom-end" :width="160" trigger="click">
+              <template #reference>
+                <el-button plain>
+                  <el-icon><Setting /></el-icon> {{ t('circuits.columnSettings') }}
+                </el-button>
+              </template>
+              <div class="column-settings">
+                <el-checkbox
+                  v-for="col in columnDefs"
+                  :key="col.key"
+                  v-model="columnVisible[col.key]"
+                >
+                  {{ t(col.labelKey) }}
+                </el-checkbox>
+              </div>
+            </el-popover>
+            <el-button type="primary" @click="openBackupNowDialog">
+              <el-icon><Refresh /></el-icon>
+              {{ t('backups.backupNow') }}
             </el-button>
           </div>
         </div>
       </template>
 
-      <div class="table-filters">
-        <el-input
-          v-model="searchQuery"
-          placeholder="搜索设备、标签..."
-          prefix-icon="Search"
-          clearable
-          style="width: 200px"
-        />
-        <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 120px">
-          <el-option value="success" label="成功" />
-          <el-option value="failed" label="失败" />
-        </el-select>
-        <el-select v-model="filterTrigger" placeholder="触发方式" clearable style="width: 120px">
-          <el-option value="manual" label="手动" />
-          <el-option value="scheduled" label="定时" />
-        </el-select>
-        <el-select v-model="filterHasChange" placeholder="变更状态" clearable style="width: 120px">
-          <el-option :value="true" label="有变更" />
-          <el-option :value="false" label="无变更" />
-        </el-select>
-      </div>
-
       <el-table
-        :data="filteredBackups"
+        :data="pagedBackups"
         style="width: 100%"
         stripe
         border
@@ -482,114 +701,173 @@ onMounted(() => {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="50" />
-        <el-table-column prop="version" label="版本" min-width="80" align="center">
+        <el-table-column prop="version" :label="t('backups.versionColumn')" width="80" align="center">
           <template #default="{ row }">
             <el-tag size="small">v{{ row.version }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="deviceId" label="设备" min-width="200">
+        <el-table-column prop="deviceId" :label="t('backups.deviceColumn')" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="device-info">
               <el-icon class="device-icon">
                 <component :is="getDeviceIcon(getDeviceInfo(row.deviceId)?.type || '')" />
               </el-icon>
               <div class="device-detail">
-                <div class="device-name">{{ getDeviceInfo(row.deviceId)?.name || `设备${row.deviceId}` }}</div>
-                <div class="device-meta">
-                  <span class="device-vendor">{{ getDeviceInfo(row.deviceId)?.vendor || '-' }}</span>
-                  <span class="device-model">{{ getDeviceInfo(row.deviceId)?.model || '-' }}</span>
-                </div>
+                <div class="device-name">{{ getDeviceInfo(row.deviceId)?.name || `#${row.deviceId}` }}</div>
+                <el-tooltip
+                  :content="`${getDeviceInfo(row.deviceId)?.model || '—'} · ${getDeviceInfo(row.deviceId)?.vendor || '—'}`"
+                  placement="top"
+                  :show-after="150"
+                  :disabled="!getDeviceInfo(row.deviceId)?.model && !getDeviceInfo(row.deviceId)?.vendor"
+                >
+                  <div class="device-meta nowrap-ellipsis">{{ getDeviceInfo(row.deviceId)?.model || '—' }} · {{ getDeviceInfo(row.deviceId)?.vendor || '—' }}</div>
+                </el-tooltip>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="siteId" label="站点" min-width="100">
+        <el-table-column prop="siteId" :label="t('backups.siteColumn')" width="110">
           <template #default="{ row }">
-            <div class="site-info">
+            <div class="site-info nowrap">
               <el-icon class="site-icon" size="14"><MapLocation /></el-icon>
-              <span>{{ getSiteName(getDeviceInfo(row.deviceId)?.site_id) }}</span>
+              <span v-if="getSiteName(getDeviceInfo(row.deviceId)?.site_id) !== '-'" class="nowrap-ellipsis">{{ getSiteName(getDeviceInfo(row.deviceId)?.site_id) }}</span>
+              <span v-else class="empty-placeholder">—</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="deviceIp" label="管理IP" min-width="110">
+        <el-table-column prop="deviceIp" :label="t('backups.mgmtIpColumn')" width="140">
           <template #default="{ row }">
-            {{ getIpAddress(getDeviceInfo(row.deviceId)?.mgmt_ip_id) }}
+            <span v-if="getIpAddress(getDeviceInfo(row.deviceId)?.mgmt_ip_id) !== '-'" class="ip-text nowrap">{{ getIpAddress(getDeviceInfo(row.deviceId)?.mgmt_ip_id) }}</span>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="备份时间" min-width="140">
+        <el-table-column prop="createdAt" :label="t('backups.timeColumn')" width="160">
           <template #default="{ row }">
-            {{ formatDateTime(row.created_at) }}
+            <span class="nowrap">{{ formatDateTime(row.createdAt) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="trigger" label="触发" min-width="80" align="center">
+        <el-table-column prop="trigger" :label="t('backups.triggerColumn')" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="getTriggerType(row.trigger)" effect="light" size="small">
               {{ getTriggerLabel(row.trigger) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="hasChange" label="变更" min-width="100" align="center">
+        <el-table-column prop="hasChange" :label="t('backups.changeColumn')" width="100" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.hasChange" type="warning" size="small">
-              {{ row.changeSummary || '有变更' }}
-            </el-tag>
-            <el-tag v-else type="info" size="small">无变更</el-tag>
+            <el-tooltip v-if="row.hasChange && row.changeSummary" :content="row.changeSummary" placement="top" :show-after="150">
+              <el-tag type="warning" size="small" class="nowrap">{{ t('backups.changeYes') }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else-if="row.hasChange" type="warning" size="small">{{ t('backups.changeYes') }}</el-tag>
+            <el-tag v-else type="info" size="small">{{ t('backups.changeNo') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="tag" label="标签" min-width="100">
+        <el-table-column
+          v-if="columnVisible.tag"
+          prop="tag"
+          :label="t('backups.tagColumn')"
+          min-width="100"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
             <span v-if="row.tag" class="tag-text">{{ row.tag }}</span>
-            <span v-else class="text-muted">-</span>
+            <span v-else class="empty-placeholder">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="durationMs" label="耗时" min-width="80" align="center">
-          <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" min-width="80" align="center">
+        <el-table-column v-if="columnVisible.duration" prop="durationMs" :label="t('backups.durationColumn')" width="80" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" effect="light" size="small">
-              {{ row.status === 'success' ? '成功' : row.status === 'failed' ? '失败' : '等待' }}
+            <span v-if="formatDuration(row.durationMs) !== '-'" class="nowrap">{{ formatDuration(row.durationMs) }}</span>
+            <span v-else class="empty-placeholder">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" :label="t('backups.statusColumn')" width="90" align="center">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="row.status === 'failed' && row.errorMessage"
+              :content="`${t('backups.failReason')}：${row.errorMessage}`"
+              placement="top"
+              :show-after="150"
+            >
+              <el-tag :type="getStatusType(row.status)" effect="light" size="small" class="status-help">
+                {{ getStatusText(row.status) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="getStatusType(row.status)" effect="light" size="small">
+              {{ getStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right" align="center">
+        <el-table-column :label="t('backups.actionColumn')" width="170" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="viewBackup(row)">
               <el-icon><View /></el-icon>
-              查看
+              {{ t('common.view') }}
             </el-button>
-            <el-popover
-              placement="top"
-              :width="200"
-              trigger="click"
-              v-model:visible="showTagPopover"
-            >
-              <template #reference>
-                <el-button link type="primary" size="small" @click="showTagInput(row)">
-                  <el-icon><PriceTag /></el-icon>
-                  标签
+            <el-tooltip :content="t('backups.downloadDisabledTip')" :disabled="hasContent(row)" placement="top">
+              <span class="action-wrap">
+                <el-button link type="primary" size="small" @click="downloadBackup(row)" :disabled="!hasContent(row)">
+                  <el-icon><Download /></el-icon>
+                  {{ t('common.download') }}
                 </el-button>
+              </span>
+            </el-tooltip>
+            <el-dropdown trigger="click" @command="(cmd: string) => handleRowCommand(cmd, row)">
+              <span class="more-trigger" @click.stop>
+                {{ t('backups.moreActions') }}<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="row.status === 'failed'" command="retry">
+                    <el-icon><RefreshRight /></el-icon>
+                    {{ t('backups.retryBackup') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item command="tag">
+                    <el-icon><PriceTag /></el-icon>
+                    {{ t('backups.tagColumn') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item command="restore" :disabled="!hasContent(row) || row.status !== 'success'">
+                    <el-icon><RefreshLeft /></el-icon>
+                    {{ t('backups.restore') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item command="delete" divided class="danger-item">
+                    <el-icon><Delete /></el-icon>
+                    <span class="danger-text">{{ t('common.delete') }}</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
               </template>
-              <div class="tag-popover">
-                <el-input v-model="tagInput" placeholder="输入标签" />
-                <el-button type="primary" size="small" @click="saveTag">保存</el-button>
-              </div>
-            </el-popover>
-            <el-button link type="success" size="small" @click="downloadBackup(row)" :disabled="!row.content">
-  <el-icon><Download /></el-icon>
-</el-button>
-<el-button link type="warning" size="small" @click="handleRestore(row)" :disabled="!row.content || row.status !== 'success'">
-  <el-icon><RefreshLeft /></el-icon>
-  还原
-</el-button>
-<el-button link type="danger" size="small" @click="handleDelete(row)">
-  <el-icon><Delete /></el-icon>
-</el-button>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="filteredBackups.length === 0 && !loading" description="暂无备份记录" />
+      <div class="table-footer">
+        <span class="table-total">{{ t('backups.totalRecordsText', { total: filteredBackups.length }) }}</span>
+        <div class="table-pager">
+          <el-select
+            :model-value="pageSize"
+            class="page-size-select"
+            :validate-event="false"
+            @change="(val: number) => { pageSize = val; currentPage = 1 }"
+          >
+            <el-option
+              v-for="size in pageSizes"
+              :key="size"
+              :value="size"
+              :label="t('backups.perPage', { size })"
+            />
+          </el-select>
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :page-sizes="pageSizes"
+            :total="filteredBackups.length"
+            layout="prev, pager, next, jumper"
+            background
+          />
+        </div>
+      </div>
+
+      <el-empty v-if="filteredBackups.length === 0 && !loading" :description="t('backups.noBackupRecords')" />
     </el-card>
 
     <!-- 查看配置对话框 -->
@@ -611,12 +889,12 @@ onMounted(() => {
           </div>
           <div class="meta-item">
             <span class="meta-label">时间：</span>
-            <span class="meta-value">{{ formatDateTime(viewingBackup.created_at) }}</span>
+            <span class="meta-value">{{ formatDateTime(viewingBackup.createdAt) }}</span>
           </div>
           <div class="meta-item">
             <span class="meta-label">状态：</span>
             <el-tag :type="getStatusType(viewingBackup.status)" size="small">
-              {{ viewingBackup.status === 'success' ? '成功' : '失败' }}
+              {{ getStatusText(viewingBackup.status) }}
             </el-tag>
           </div>
           <div class="meta-item">
@@ -685,6 +963,41 @@ onMounted(() => {
         <el-button @click="closeDiffDialog">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 立即备份对话框 -->
+    <el-dialog
+      v-model="showBackupNowDialog"
+      :title="t('backups.backupNowTitle')"
+      width="520px"
+      :close-on-click-modal="false"
+    >
+      <div class="backup-now-form">
+        <div class="backup-now-tip">{{ t('backups.backupNowTip') }}</div>
+        <el-select
+          v-model="backupNowDeviceIds"
+          multiple
+          filterable
+          :placeholder="t('backups.backupNowDevice')"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="device in devices"
+            :key="device.id"
+            :label="device.name"
+            :value="device.id"
+          >
+            <span>{{ device.name }}</span>
+            <span class="device-option-ip">{{ device.ip_address }}</span>
+          </el-option>
+        </el-select>
+      </div>
+      <template #footer>
+        <el-button @click="showBackupNowDialog = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="backupNowSubmitting" @click="handleBackupNow">
+          {{ t('backups.backupNowTitle') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -702,32 +1015,32 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--el-color-info);
 }
 
-.overview-card-success { border-left-color: #52c41a; }
-.overview-card-warning { border-left-color: #faad14; }
-.overview-card-danger { border-left-color: #ff4d4f; }
+.overview-card-success { border-left-color: var(--el-color-success); }
+.overview-card-warning { border-left-color: var(--el-color-warning); }
+.overview-card-danger { border-left-color: var(--el-color-danger); }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--el-text-color-placeholder);
   margin-top: 4px;
 }
 
@@ -739,25 +1052,20 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: #262626;
-}
-
-.card-title .el-icon {
-  color: #1890ff;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .table-filters {
   display: flex;
   gap: 12px;
-  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .device-info {
@@ -767,7 +1075,7 @@ onMounted(() => {
 }
 
 .device-icon {
-  color: #1890ff;
+  color: var(--el-color-primary);
   font-size: 18px;
 }
 
@@ -775,31 +1083,39 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .device-name {
   font-weight: 500;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
+/* 设备副行：型号 · 平台，灰色小字一行，超出省略（tooltip 由外层 el-tooltip 提供） */
 .device-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
-.device-vendor {
-  padding: 2px 6px;
-  background: #f5f5f5;
-  border-radius: 4px;
+.nowrap {
+  white-space: nowrap;
 }
 
-.device-model {
-  padding: 2px 6px;
-  background: #f5f5f5;
-  border-radius: 4px;
+.nowrap-ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 空值占位：灰色 em dash（对齐专线页） */
+.empty-placeholder {
+  color: var(--el-text-color-placeholder);
+}
+
+/* 管理 IP 等宽，便于对齐阅读 */
+.ip-text {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
 }
 
 .site-info {
@@ -807,24 +1123,92 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  color: #595959;
+  color: var(--el-text-color-regular);
 }
 
 .site-icon {
-  color: #52c41a;
+  color: var(--el-color-success);
+  flex-shrink: 0;
 }
 
 .tag-text {
-  color: #1890ff;
+  color: var(--el-color-primary);
 }
 
-.text-muted {
-  color: #bfbfbf;
+/* 禁用按钮外包一层 span 才能触发 tooltip */
+.action-wrap {
+  display: inline-flex;
 }
 
-.tag-popover {
+/* 失败记录可 hover 查看失败原因 */
+.status-help {
+  cursor: help;
+}
+
+/* 操作列「更多」触发器（el-dropdown 内原生 span） */
+.more-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  outline: none;
+}
+
+.more-trigger:hover {
+  color: var(--el-color-primary-light-3);
+}
+
+/* 下拉菜单危险项标红（scoped 外的 popper 需全局类配合，见 style 后段） */
+
+/* 列设置面板 */
+.column-settings {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 分页底栏 */
+.table-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.table-total {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.page-size-select {
+  width: 110px;
+}
+
+.table-pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 立即备份弹窗 */
+.backup-now-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.backup-now-tip {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.device-option-ip {
+  float: right;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 
 .config-view {
@@ -838,7 +1222,7 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 24px;
   padding: 16px;
-  background: #fafafa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
 
@@ -850,11 +1234,11 @@ onMounted(() => {
 
 .meta-label {
   font-weight: 600;
-  color: #595959;
+  color: var(--el-text-color-regular);
 }
 
 .meta-value {
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .config-content {
@@ -881,12 +1265,12 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  background: #fafafa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
 
 .summary-text {
-  color: #262626;
+  color: var(--el-text-color-primary);
   font-weight: 500;
 }
 
@@ -920,7 +1304,7 @@ onMounted(() => {
 }
 
 .diff-line.header {
-  color: #1890ff;
+  color: var(--el-color-primary);
   font-weight: 600;
 }
 
@@ -938,5 +1322,22 @@ onMounted(() => {
   .overview-cards {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+</style>
+
+<!-- 下拉菜单渲染在 body 的 popper 中，scoped 样式作用不到，需非 scoped 块 -->
+<style>
+.el-dropdown-menu__item.danger-item .danger-text,
+.el-dropdown-menu__item.danger-item .el-icon {
+  color: var(--el-color-danger);
+}
+
+.el-dropdown-menu__item.danger-item:not(.is-disabled):hover {
+  background-color: var(--el-color-danger-light-9);
+}
+
+.el-dropdown-menu__item.danger-item:not(.is-disabled):hover .danger-text,
+.el-dropdown-menu__item.danger-item:not(.is-disabled):hover .el-icon {
+  color: var(--el-color-danger);
 }
 </style>
