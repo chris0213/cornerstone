@@ -9,11 +9,52 @@ from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger("cornerstone")
 
+# 备份保留策略：自动备份（scheduled/pre_change）保留天数，手动备份（manual）永久保留
+AUTO_BACKUP_RETENTION_DAYS = 30
+
 # 全局调度器实例
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 # 存储运行中的任务
 running_tasks: Dict[int, bool] = {}
+
+async def cleanup_expired_backups():
+    """清理过期自动备份：scheduled/pre_change 保留 AUTO_BACKUP_RETENTION_DAYS 天，manual 永久保留"""
+    import os
+    from sqlalchemy import select
+    from ..models import Backup
+    from ..database import async_session
+
+    # SQLite 存储为无时区字符串，去掉 tzinfo 以保证比较一致
+    cutoff = datetime.now(BJT).replace(tzinfo=None) - timedelta(days=AUTO_BACKUP_RETENTION_DAYS)
+
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(Backup).where(Backup.trigger != "manual", Backup.created_at < cutoff)
+            )
+            expired = result.scalars().all()
+            if not expired:
+                logger.info("备份保留策略清理：无过期自动备份")
+                return
+
+            removed_files = 0
+            for backup in expired:
+                if backup.file_path:
+                    try:
+                        os.remove(backup.file_path)
+                        removed_files += 1
+                    except OSError:
+                        pass
+                await db.delete(backup)
+            await db.commit()
+            logger.info(
+                f"备份保留策略清理完成：删除 {len(expired)} 条超过 {AUTO_BACKUP_RETENTION_DAYS} 天的自动备份"
+                f"（含文件 {removed_files} 个），手动备份不受影响"
+            )
+        except Exception as e:
+            logger.error(f"备份保留策略清理失败: {e}")
+            await db.rollback()
 
 async def run_backup_task(task_id: int, trigger: str = "scheduled"):
     """执行一次备份任务
@@ -331,6 +372,13 @@ async def reload_tasks(db_session):
 def start_scheduler():
     """启动调度器"""
     logger.info("启动备份调度器")
+    # 每天凌晨 3:30 清理过期自动备份（manual 永久保留）
+    scheduler.add_job(
+        cleanup_expired_backups,
+        CronTrigger(hour=3, minute=30),
+        id="backup_retention_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(f"调度器状态: running={scheduler.running}, jobs={[job.id for job in scheduler.get_jobs()]}")
 
