@@ -3,7 +3,7 @@ import { ref, computed, reactive, onMounted, onBeforeUnmount, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
-import { Plus, Edit, Delete, Aim, MoreFilled } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, MoreFilled } from '@element-plus/icons-vue'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import RackSidebar from './RackSidebar.vue'
@@ -502,7 +502,7 @@ function getUSlotInfo(u: number) {
     // 机柜图高位在上（显示编号自上而下 42→1）。设备占 uPosition..uPosition+size-1，
     // 块必须锚定在视觉顶部行（编号 uPosition+size-1）向下延伸 size 行，
     // 才能与左侧 U 位标签对齐（否则 2U 设备会视觉下移一行，顶部行变成无虚线的 spacer）。
-    isTop: u === d.uPosition + size - 1,
+    isTop: u === d.uPosition! + size - 1,
     span: size,
   }
 }

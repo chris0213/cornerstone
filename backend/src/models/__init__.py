@@ -9,6 +9,7 @@ from .ip_address import IPAddress
 from .rack import Rack
 from .device import Device
 from .device_link import DeviceLink
+from .discovery import DiscoveryUnknownEndpoint
 from .credential import Credential
 from .backup import Backup
 from .backup_task import BackupTask
@@ -29,7 +30,7 @@ __all__ = [
     'User', 'Role', 'Permission', 'RolePermission', 'UserSession',
     'Site', 'Circuit', 'CircuitChange', 'CircuitIncident', 'CircuitIncidentLog',
     'Aggregate', 'Prefix', 'IPAddress', 'Rack',
-    'Device', 'DeviceLink', 'Credential', 'Backup', 'BackupTask', 'AuditLog',
+    'Device', 'DeviceLink', 'DiscoveryUnknownEndpoint', 'Credential', 'Backup', 'BackupTask', 'AuditLog',
     'VlanGroup', 'Vlan', 'LinkMonitor', 'SystemConfig', 'Setting', 'BackupAnalysis',
     'InspectionTask', 'InspectionResult', 'InspectionDeviceResult', 'DeviceFingerprint',
     'AlertRule', 'AlertRecord', 'AlertNotification',

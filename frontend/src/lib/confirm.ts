@@ -28,8 +28,8 @@ export interface ConfirmRunOptions {
   action: () => Promise<unknown> | unknown
   /** 成功提示（缺省不提示） */
   successMessage?: string
-  /** 失败提示（缺省不提示，仅记录日志） */
-  errorMessage?: string
+  /** 失败提示：静态文案，或函数形式从 error 动态解析（如后端错误码本地化） */
+  errorMessage?: string | ((error: unknown) => string)
 }
 
 /** 确认后执行动作；返回 true=执行成功，false=用户取消或执行失败 */
@@ -56,7 +56,12 @@ export async function confirmAndRun({
   } catch (error) {
     if (error !== 'cancel') {
       console.error('confirmAndRun failed:', error)
-      if (errorMessage) ElMessage.error(errorMessage)
+      if (typeof errorMessage === 'function') {
+        const msg = errorMessage(error)
+        if (msg) ElMessage.error(msg)
+      } else if (errorMessage) {
+        ElMessage.error(errorMessage)
+      }
     }
     return false
   }

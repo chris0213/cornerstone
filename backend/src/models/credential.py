@@ -25,5 +25,7 @@ class Credential(Base):
     jump_username = Column(String(50))  # 跳板机用户名
     jump_password = Column(String(500))  # 跳板机密码，加密存储
     description = Column(String(500))
+    last_tested_at = Column(DateTime(timezone=True))  # 最近一次测试连接时间（UTC）
+    last_test_status = Column(String(20))  # success / failed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

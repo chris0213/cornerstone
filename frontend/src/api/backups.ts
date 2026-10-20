@@ -154,6 +154,8 @@ export async function testCredential(id: number, testIp: string): Promise<{
   success: boolean
   message: string
   durationMs: number
+  vendor?: string
+  defaultsApplied?: string[]
 }> {
   const response = await api.post(`/backups/credentials/${id}/test`, {
     test_ip: testIp
@@ -162,7 +164,9 @@ export async function testCredential(id: number, testIp: string): Promise<{
   return {
     success: data.success,
     message: data.message,
-    durationMs: data.duration_ms || 0
+    durationMs: data.duration_ms || 0,
+    vendor: data.vendor,
+    defaultsApplied: data.defaults_applied
   }
 }
 

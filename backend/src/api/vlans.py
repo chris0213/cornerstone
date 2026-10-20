@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from ..database import get_db
 from ..models import VlanGroup, Vlan, Prefix
-from ..schemas import VlanGroupCreate, VlanGroupUpdate, VlanGroupResponse, VlanCreate, VlanUpdate, VlanResponse
+from ..schemas import VlanGroupCreate, VlanGroupUpdate, VlanGroupResponse, VlanCreate, VlanUpdate, VlanResponse, PrefixResponse
 from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
@@ -69,7 +69,11 @@ async def delete_vlan_group(
     # 检查是否有VLAN关联到该组
     result = await db.execute(select(Vlan).where(Vlan.group_id == group_id))
     if result.scalars().first():
-        raise HTTPException(status_code=400, detail="该VLAN组下还有VLAN，请先删除关联的VLAN")
+        raise HTTPException(status_code=400, detail={
+            "code": "vlan.group_not_empty",
+            "message": "该VLAN组下还有VLAN，请先删除关联的VLAN",
+            "params": {},
+        })
     
     await db.execute(delete(VlanGroup).where(VlanGroup.id == group_id))
     await db.commit()
@@ -91,6 +95,8 @@ async def read_vlans(
     
     if group_id is not None:
         query = query.where(Vlan.group_id == group_id)
+    if site_id is not None:
+        query = query.where(Vlan.site_id == site_id)
     if status is not None:
         query = query.where(Vlan.status == status)
     
@@ -107,8 +113,12 @@ async def create_vlan(
     """创建VLAN（自动检测同组内VID重复）"""
     # 验证VID范围
     if vlan.vid < 1 or vlan.vid > 4094:
-        raise HTTPException(status_code=400, detail="VLAN ID必须在1-4094之间")
-    
+        raise HTTPException(status_code=400, detail={
+            "code": "vlan.vid_out_of_range",
+            "message": "VLAN ID必须在1-4094之间",
+            "params": {"vid": vlan.vid},
+        })
+
     # 检查同站点+同组内VID是否重复
     query = select(Vlan).where(Vlan.vid == vlan.vid)
     if vlan.site_id is None:
@@ -122,8 +132,12 @@ async def create_vlan(
 
     result = await db.execute(query)
     if result.scalars().first():
-        raise HTTPException(status_code=400, detail=f"该站点/组下 VLAN ID {vlan.vid}已存在")
-    
+        raise HTTPException(status_code=400, detail={
+            "code": "vlan.vid_exists",
+            "message": f"该站点/组下 VLAN ID {vlan.vid}已存在",
+            "params": {"vid": vlan.vid},
+        })
+
     stmt = insert(Vlan).values(**vlan.model_dump()).returning(Vlan)
     result = await db.execute(stmt)
     await db.commit()
@@ -148,7 +162,11 @@ async def update_vlan(
     # 如果修改了VID，检查同站点+同组内是否重复
     if vlan.vid is not None and vlan.vid != existing_vlan.vid:
         if vlan.vid < 1 or vlan.vid > 4094:
-            raise HTTPException(status_code=400, detail="VLAN ID必须在1-4094之间")
+            raise HTTPException(status_code=400, detail={
+                "code": "vlan.vid_out_of_range",
+                "message": "VLAN ID必须在1-4094之间",
+                "params": {"vid": vlan.vid},
+            })
         
         query = select(Vlan).where(Vlan.vid == vlan.vid)
         if existing_vlan.site_id is None:
@@ -162,7 +180,11 @@ async def update_vlan(
         
         result = await db.execute(query)
         if result.scalars().first():
-            raise HTTPException(status_code=400, detail=f"该站点/组下 VLAN ID {vlan.vid}已存在")
+            raise HTTPException(status_code=400, detail={
+                "code": "vlan.vid_exists",
+                "message": f"该站点/组下 VLAN ID {vlan.vid}已存在",
+                "params": {"vid": vlan.vid},
+            })
     
     stmt = update(Vlan).where(Vlan.id == vlan_id).values(**vlan.model_dump(exclude_unset=True)).returning(Vlan)
     result = await db.execute(stmt)
@@ -182,16 +204,25 @@ async def delete_vlan(
     if vlan is None:
         raise HTTPException(status_code=404, detail="VLAN not found")
     
-    # 检查是否有子网关联到该VLAN
-    result = await db.execute(select(Prefix).where(Prefix.vlan == str(vlan.vid)))
+    # 检查是否有子网关联到该VLAN（同VID且同站点口径，避免跨站点误拦）
+    prefix_query = select(Prefix).where(Prefix.vlan == str(vlan.vid))
+    if vlan.site_id is None:
+        prefix_query = prefix_query.where(Prefix.site_id.is_(None))
+    else:
+        prefix_query = prefix_query.where(Prefix.site_id == vlan.site_id)
+    result = await db.execute(prefix_query)
     if result.scalars().first():
-        raise HTTPException(status_code=400, detail="该VLAN已关联子网，请先解除关联")
+        raise HTTPException(status_code=400, detail={
+            "code": "vlan.has_prefixes",
+            "message": "该VLAN已关联子网，请先解除关联",
+            "params": {},
+        })
     
     await db.execute(delete(Vlan).where(Vlan.id == vlan_id))
     await db.commit()
 
 
-@router.get("/vlans/{vlan_id}/prefixes", response_model=list)
+@router.get("/vlans/{vlan_id}/prefixes", response_model=list[PrefixResponse])
 async def get_vlan_prefixes(
     vlan_id: int,
     db: AsyncSession = Depends(get_db),
@@ -204,6 +235,11 @@ async def get_vlan_prefixes(
     if not vlan:
         raise HTTPException(status_code=404, detail="VLAN not found")
     
-    # 获取关联的子网（通过VLAN号匹配）
-    result = await db.execute(select(Prefix).where(Prefix.vlan == str(vlan.vid)))
+    # 获取关联的子网（同VID且同站点口径，避免跨站点误关联）
+    prefix_query = select(Prefix).where(Prefix.vlan == str(vlan.vid))
+    if vlan.site_id is None:
+        prefix_query = prefix_query.where(Prefix.site_id.is_(None))
+    else:
+        prefix_query = prefix_query.where(Prefix.site_id == vlan.site_id)
+    result = await db.execute(prefix_query)
     return result.scalars().all()

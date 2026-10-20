@@ -1,16 +1,18 @@
+import asyncio
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.database import get_db
+from src.database import get_db, async_session
 from src.api.dependencies import PageParams, pagination
 from src.models.site import Site
 from src.models.circuit import Circuit
 from src.models.device import Device
 from src.models.device_link import DeviceLink
 from src.models.ip_address import IPAddress
+from src.models.discovery import DiscoveryUnknownEndpoint
 from src.schemas import DeviceLinkCreate, DeviceLinkUpdate, DeviceLinkResponse
 
 router = APIRouter(tags=["topology"])
@@ -585,11 +587,260 @@ async def get_site_devices(
 async def discover_lldp_neighbors(
     db: AsyncSession = Depends(get_db)
 ):
-    """触发 LLDP/CDP 邻居发现"""
+    """启动 LLDP/CDP 邻居发现后台任务，返回 task_id（进度经 /discovery-tasks/{id} 轮询）"""
+    from src.services.discovery_task_manager import manager, run_discovery_task
     from src.services.lldp_discovery import run_full_discovery
-    
+
+    if manager.has_running("lldp"):
+        task = manager.latest("lldp")
+        return {"task_id": task.id, "running": True}
+
+    # 启动前先做前置校验（无设备/无凭证立即报错，不留失败任务）
+    from src.services.lldp_discovery import get_all_credentials
     try:
-        await run_full_discovery(db)
-        return {"message": "LLDP discovery completed successfully"}
+        result = await db.execute(select(Device).where(Device.status != "offline"))
+        devices = result.scalars().all()
+        if not devices:
+            raise Exception("没有可用设备")
+        credentials = await get_all_credentials(db)
+        if not credentials:
+            raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
+        devices_with_ip = [d for d in devices if d.mgmt_ip_id]
+        if not devices_with_ip:
+            raise Exception("没有设备配置了管理IP，无法进行LLDP发现")
+
+        task = manager.create("lldp", total=len(devices_with_ip))
+        asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: asyncio.run(run_discovery_task(task, run_full_discovery, async_session))
+        )
+        return {"task_id": task.id, "running": False}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Discovery failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/discover-mac")
+async def discover_mac_endpoints(
+    db: AsyncSession = Depends(get_db)
+):
+    """启动 MAC/ARP 表发现后台任务（发现交换机下挂服务器等不开 LLDP 的终端）"""
+    from src.services.discovery_task_manager import manager, run_discovery_task
+    from src.services.mac_discovery import run_mac_discovery
+
+    if manager.has_running("mac"):
+        task = manager.latest("mac")
+        return {"task_id": task.id, "running": True}
+
+    from src.services.lldp_discovery import get_all_credentials
+    try:
+        result = await db.execute(select(Device).where(Device.status != "offline"))
+        devices = result.scalars().all()
+        credentials = await get_all_credentials(db)
+        if not credentials:
+            raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
+        scannable = [d for d in devices if d.mgmt_ip_id]
+        if not scannable:
+            raise Exception("没有可扫描的网络设备（需为交换机/路由器配置管理IP）")
+
+        task = manager.create("mac", total=len(scannable))
+        asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: asyncio.run(run_discovery_task(task, run_mac_discovery, async_session))
+        )
+        return {"task_id": task.id, "running": False}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/discovery-tasks/{task_id}")
+async def read_discovery_task(
+    task_id: str,
+):
+    """轮询发现任务进度与结果"""
+    from src.services.discovery_task_manager import manager
+
+    task = manager.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="发现任务不存在（服务可能已重启，请重新发起发现）")
+    return task.to_dict()
+
+
+# 未知接入终端 API
+@router.get("/unknown-endpoints")
+async def read_unknown_endpoints(
+    device_id: Optional[int] = Query(None, description="按接入设备过滤"),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取拓扑发现的未知接入终端列表（含接入设备名称）"""
+    query = select(
+        DiscoveryUnknownEndpoint,
+        Device.name.label("device_name"),
+        Device.site_id.label("device_site_id"),
+    ).outerjoin(Device, DiscoveryUnknownEndpoint.device_id == Device.id)
+
+    if device_id:
+        query = query.where(DiscoveryUnknownEndpoint.device_id == device_id)
+
+    query = query.order_by(DiscoveryUnknownEndpoint.last_seen_at.desc())
+    result = await db.execute(query)
+
+    endpoints = []
+    for ep, device_name, site_id in result.all():
+        endpoints.append({
+            "id": ep.id,
+            "device_id": ep.device_id,
+            "device_name": device_name,
+            "site_id": site_id,
+            "local_interface": ep.local_interface,
+            "mac_address": ep.mac_address,
+            "ip_address": ep.ip_address,
+            "first_seen_at": ep.first_seen_at,
+            "last_seen_at": ep.last_seen_at,
+        })
+    return endpoints
+
+
+@router.post("/unknown-endpoints/{endpoint_id}/accept")
+async def accept_unknown_endpoint(
+    endpoint_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """将未知接入终端一键入库为服务器资产
+
+    payload:
+      - name: 设备名称（必填）
+      - device_type: 设备类型，默认 server
+      - site_id: 站点 ID（可选，默认跟随接入交换机所在站点）
+      - owner: 负责人（可选）
+      - note: 备注（可选）
+      - create_ip: 是否同步录入 IP 到 IPAM（有 IP 时默认 true）
+    入库后自动创建「接入交换机-终端」连接关系，并删除该未知接入记录。
+    """
+    from pydantic import BaseModel, field_validator
+    from src.constants.device_type import normalize_device_type
+
+    class AcceptPayload(BaseModel):
+        name: str
+        device_type: str = "server"
+        site_id: int | None = None
+        owner: str | None = None
+        note: str | None = None
+        create_ip: bool = True
+
+        _validate_type = field_validator("device_type")(normalize_device_type)
+
+    try:
+        data = AcceptPayload(**payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # 查找未知接入记录
+    query = select(DiscoveryUnknownEndpoint).where(DiscoveryUnknownEndpoint.id == endpoint_id)
+    result = await db.execute(query)
+    endpoint = result.scalar_one_or_none()
+    if endpoint is None:
+        raise HTTPException(status_code=404, detail="未知接入记录不存在")
+
+    # 接入交换机
+    sw_query = select(Device).where(Device.id == endpoint.device_id)
+    sw_result = await db.execute(sw_query)
+    switch = sw_result.scalar_one_or_none()
+    if switch is None:
+        raise HTTPException(status_code=404, detail="接入设备不存在，无法入库")
+
+    # 站点默认跟随交换机
+    site_id = data.site_id or switch.site_id
+
+    # 名称去重校验
+    dup_query = select(Device).where(Device.name == data.name.strip())
+    dup_result = await db.execute(dup_query)
+    if dup_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"设备名称「{data.name.strip()}」已存在")
+
+    # 创建设备资产
+    new_device = Device(
+        name=data.name.strip(),
+        type=data.device_type,
+        site_id=site_id,
+        owner=data.owner,
+        note=data.note,
+        status="active",
+    )
+    db.add(new_device)
+    await db.flush()
+
+    # 同步录入 IP 到 IPAM 并绑定设备
+    ip_record = None
+    if data.create_ip and endpoint.ip_address:
+        ip_query = select(IPAddress).where(IPAddress.address == endpoint.ip_address)
+        ip_result = await db.execute(ip_query)
+        ip_record = ip_result.scalar_one_or_none()
+        if ip_record:
+            # 已有 IPAM 记录则补绑设备与 MAC
+            if not ip_record.device_id:
+                ip_record.device_id = new_device.id
+            if not ip_record.mac_address:
+                ip_record.mac_address = endpoint.mac_address
+            if ip_record.status == "available":
+                ip_record.status = "assigned"
+        else:
+            ip_record = IPAddress(
+                address=endpoint.ip_address,
+                device_id=new_device.id,
+                mac_address=endpoint.mac_address,
+                status="assigned",
+            )
+            db.add(ip_record)
+            await db.flush()
+        new_device.mgmt_ip_id = ip_record.id
+
+    # 创建「接入交换机-终端」连接关系（避免重复）
+    link_query = select(DeviceLink).where(
+        ((DeviceLink.source_device_id == switch.id) &
+         (DeviceLink.target_device_id == new_device.id)) |
+        ((DeviceLink.source_device_id == new_device.id) &
+         (DeviceLink.target_device_id == switch.id))
+    )
+    link_result = await db.execute(link_query)
+    existing_link = link_result.scalar_one_or_none()
+    if not existing_link:
+        db.add(DeviceLink(
+            source_device_id=switch.id,
+            source_interface=endpoint.local_interface,
+            target_device_id=new_device.id,
+            target_interface=None,
+            link_type="mac_arp",
+            confidence=90,
+            discovered_at=datetime.now(),
+            note=f"未知接入入库（MAC {endpoint.mac_address}）",
+        ))
+
+    # 删除未知接入记录
+    await db.delete(endpoint)
+    await db.commit()
+    await db.refresh(new_device)
+
+    return {
+        "device_id": new_device.id,
+        "device_name": new_device.name,
+        "ip_address_id": ip_record.id if ip_record else None,
+        "message": "入库成功",
+    }
+
+
+@router.delete("/unknown-endpoints/{endpoint_id}")
+async def delete_unknown_endpoint(
+    endpoint_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """忽略（删除）未知接入终端记录"""
+    query = select(DiscoveryUnknownEndpoint).where(DiscoveryUnknownEndpoint.id == endpoint_id)
+    result = await db.execute(query)
+    endpoint = result.scalar_one_or_none()
+    if endpoint is None:
+        raise HTTPException(status_code=404, detail="未知接入记录不存在")
+
+    await db.delete(endpoint)
+    await db.commit()
+    return {"message": "已忽略该未知接入"}

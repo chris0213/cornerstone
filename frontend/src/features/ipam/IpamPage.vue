@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ElCheckbox } from 'element-plus'
 import { Search as SearchIcon, Edit, Plus, Delete, Download, Upload, View, ArrowDown, Connection, Setting } from '@element-plus/icons-vue'
@@ -100,6 +101,15 @@ const loadData = async () => {
 }
 
 onMounted(() => {
+  // 支持从 VLAN 管理页跳转带入过滤：/ipam?siteId=1&vlan=10
+  const query = useRoute().query
+  if (query.siteId) {
+    const sid = Number(query.siteId)
+    selectedSiteFilter.value = Number.isFinite(sid) && sid > 0 ? sid : NO_SITE_FILTER
+  }
+  if (query.vlan) {
+    searchPrefixQuery.value = String(query.vlan)
+  }
   loadData()
 })
 

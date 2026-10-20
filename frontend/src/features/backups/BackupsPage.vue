@@ -551,18 +551,17 @@ function getStatusText(status: string): string {
   return map[status] || status
 }
 
-function getChangeText(hasChange: boolean): string {
-  return hasChange ? t('backups.changeYes') : t('backups.changeNo')
-}
-
 // 配置内容是否存在：小配置存 content，大配置存 file_path（content 为空但文件在）
 function hasContent(backup: Backup): boolean {
   return !!(backup.content || backup.filePath)
 }
 
-// 还原目标 IP：设备主 IP（与备份采集目标一致）
+// 还原目标 IP：设备管理 IP（与备份采集目标一致）
 function getDeviceIpAddress(deviceId: number): string | undefined {
-  return deviceMap.value.get(deviceId)?.ip_address
+  const mgmtIpId = deviceMap.value.get(deviceId)?.mgmt_ip_id
+  if (!mgmtIpId) return undefined
+  const address = ipMap.value.get(mgmtIpId)?.address
+  return address && address !== '-' ? address : undefined
 }
 
 // ==================== 卡片统计口径 ====================
@@ -987,7 +986,7 @@ onMounted(() => {
             :value="device.id"
           >
             <span>{{ device.name }}</span>
-            <span class="device-option-ip">{{ device.ip_address }}</span>
+            <span v-if="getIpAddress(device.mgmt_ip_id) !== '-'" class="device-option-ip">{{ getIpAddress(device.mgmt_ip_id) }}</span>
           </el-option>
         </el-select>
       </div>

@@ -377,6 +377,96 @@ async def test_no_plaintext_or_ciphertext_in_responses(client, db_session):
     await client.delete(f"/api/v1/backups/credentials/{cred_id}", headers=headers)
 
 
+# ==================== 使用情况 / 上次测试 ====================
+
+@pytest.mark.asyncio
+async def test_list_returns_usage_fields(client, db_session):
+    """列表返回 used_by_count / used_by_tasks：被引用凭证计数与任务名正确，无引用凭证为 0/[]。"""
+    headers = await _login(client, "admin", "admin123")
+    cred_used = await _make_credential(db_session, "usage-used")
+    cred_free = await _make_credential(db_session, "usage-free")
+    task_a = BackupTask(name="usage-任务A", credential_id=cred_used.id)
+    task_b = BackupTask(name="usage-任务B", credential_id=cred_used.id)
+    db_session.add_all([task_a, task_b])
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/backups/credentials", headers=headers)
+    assert resp.status_code == 200, resp.text
+    items = {c["id"]: c for c in resp.json()}
+
+    assert items[cred_used.id]["used_by_count"] == 2
+    assert {t["name"] for t in items[cred_used.id]["used_by_tasks"]} == {"usage-任务A", "usage-任务B"}
+    assert items[cred_free.id]["used_by_count"] == 0
+    assert items[cred_free.id]["used_by_tasks"] == []
+
+    # 清理造数
+    await db_session.delete(task_a)
+    await db_session.delete(task_b)
+    await db_session.commit()
+    await client.delete(f"/api/v1/backups/credentials/{cred_used.id}", headers=headers)
+    await client.delete(f"/api/v1/backups/credentials/{cred_free.id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_persists_last_test_result(client, db_session, mock_connect):
+    """测试连接后 last_tested_at / last_test_status 写回：成功→success，失败→failed。"""
+    from src.services.backup_collector import CollectResult
+
+    headers = await _login(client, "admin", "admin123")
+    cred_ok = await _make_credential(db_session, "lasttest-ok")
+    cred_fail = await _make_credential(db_session, "lasttest-fail")
+
+    assert cred_ok.last_tested_at is None  # 初始从未测试
+
+    resp_ok = await client.post(
+        f"/api/v1/backups/credentials/{cred_ok.id}/test",
+        json={"test_ip": "192.168.1.70"},
+        headers=headers,
+    )
+    assert resp_ok.status_code == 200 and resp_ok.json()["success"] is True
+
+    async def fake_fail(device_dict, credential_dict):
+        return CollectResult(success=False, error_message="设备不可达", duration_ms=1)
+
+    import src.api.backups as bm
+    bm.test_device_connection = fake_fail
+    try:
+        resp_fail = await client.post(
+            f"/api/v1/backups/credentials/{cred_fail.id}/test",
+            json={"test_ip": "192.168.1.71"},
+            headers=headers,
+        )
+        assert resp_fail.status_code == 200 and resp_fail.json()["success"] is False
+    finally:
+        from src.services.backup_collector import test_device_connection as real
+        bm.test_device_connection = real
+
+    # 绕过 identity map 直接查库验证持久化
+    from sqlalchemy import func
+    ok_row = (await db_session.execute(
+        select(Credential).where(Credential.id == cred_ok.id)
+    )).scalar_one()
+    fail_row = (await db_session.execute(
+        select(func.count()).select_from(Credential).where(
+            Credential.id == cred_fail.id,
+            Credential.last_test_status == "failed",
+            Credential.last_tested_at.isnot(None),
+        )
+    )).scalar_one()
+    assert ok_row.last_test_status == "success"
+    assert ok_row.last_tested_at is not None
+    assert fail_row == 1
+
+    # 列表返回字段
+    listed = {c["id"]: c for c in (await client.get("/api/v1/backups/credentials", headers=headers)).json()}
+    assert listed[cred_ok.id]["last_test_status"] == "success"
+    assert listed[cred_ok.id]["last_tested_at"]
+
+    # 清理
+    await client.delete(f"/api/v1/backups/credentials/{cred_ok.id}", headers=headers)
+    await client.delete(f"/api/v1/backups/credentials/{cred_fail.id}", headers=headers)
+
+
 # ==================== quick-add R3 ====================
 
 @pytest.mark.asyncio

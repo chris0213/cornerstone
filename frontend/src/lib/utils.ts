@@ -60,13 +60,17 @@ export function formatDateTime(
 ): string {
   if (!dateText) return '-'
   let date: Date
-  if (dateText.includes('T') || dateText.includes('Z')) {
-    date = new Date(dateText)
-  } else if (dateText.includes('+')) {
-    // PostgreSQL 格式：2026-06-17 15:33:24.455473+08
+  if (dateText.includes('+') || /[Zz]$/.test(dateText)) {
+    // 显式携带时区偏移或 Z 后缀：按原样解析
+    date = new Date(dateText.replace(' ', 'T'))
+  } else if (dateText.includes('T')) {
+    // ISO 格式但无时区后缀：后端存 UTC（与存储约定一致），补 Z 解析
+    date = new Date(dateText + 'Z')
+  } else if (dateText.includes('-') && dateText.indexOf('-') !== 4) {
+    // PostgreSQL 格式：2026-06-17 15:33:24.455473+08（此分支已并入上方 + 判断，保留兜底）
     date = new Date(dateText.replace(' ', 'T'))
   } else {
-    // 无时区信息，按 UTC 解释（与后端存储约定一致）
+    // 无时区信息的空格分隔格式，按 UTC 解释（与后端存储约定一致）
     date = new Date(dateText.replace(' ', 'T') + 'Z')
   }
   if (isNaN(date.getTime())) return dateText

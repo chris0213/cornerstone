@@ -157,8 +157,99 @@ export async function deleteDeviceLink(linkId: number): Promise<void> {
   await request.delete(`/topology/device-links/${linkId}`)
 }
 
-export async function discoverLldpNeighbors(): Promise<void> {
-  await request.post('/topology/discover-lldp')
+export interface DiscoveryStats {
+  devices_total: number
+  devices_ok: number
+  devices_failed: number
+  links_created: number
+  links_updated: number
+  unmatched_neighbors_total?: number
+  unmatched_neighbors?: string[]
+  unknown_endpoints_total?: number
+  unknown_endpoints_sample?: string[]
+  failed_devices?: { device: string; error: string }[]
+}
+// 拓扑发现（后台任务 + 进度轮询）
+export interface DiscoveryStartResult {
+  task_id: string
+  running: boolean
+}
+
+export interface DiscoveryTask {
+  task_id: string
+  type: 'lldp' | 'mac'
+  status: 'running' | 'completed' | 'failed'
+  phase: string
+  done: number
+  total: number
+  percent: number
+  message: string
+  result: DiscoveryStats | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export async function startLldpDiscovery(): Promise<DiscoveryStartResult> {
+  const response = await request.post('/topology/discover-lldp')
+  return response.data
+}
+
+export async function startMacDiscovery(): Promise<DiscoveryStartResult> {
+  const response = await request.post('/topology/discover-mac')
+  return response.data
+}
+
+export async function getDiscoveryTask(taskId: string): Promise<DiscoveryTask> {
+  const response = await request.get(`/topology/discovery-tasks/${taskId}`)
+  return response.data
+}
+
+// 未知接入终端（拓扑发现中无法与既有资产关联的终端）
+export interface UnknownEndpoint {
+  id: number
+  device_id: number
+  device_name: string | null
+  site_id: number | null
+  local_interface: string
+  mac_address: string
+  ip_address: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+}
+
+export interface AcceptEndpointPayload {
+  name: string
+  device_type?: string
+  site_id?: number | null
+  owner?: string | null
+  note?: string | null
+  create_ip?: boolean
+}
+
+export interface AcceptEndpointResult {
+  device_id: number
+  device_name: string
+  ip_address_id: number | null
+  message: string
+}
+
+export async function getUnknownEndpoints(deviceId?: number): Promise<UnknownEndpoint[]> {
+  const params = deviceId ? { device_id: deviceId } : {}
+  const response = await request.get('/topology/unknown-endpoints', { params })
+  return response.data
+}
+
+export async function acceptUnknownEndpoint(
+  endpointId: number,
+  payload: AcceptEndpointPayload
+): Promise<AcceptEndpointResult> {
+  const response = await request.post(`/topology/unknown-endpoints/${endpointId}/accept`, payload)
+  return response.data
+}
+
+export async function deleteUnknownEndpoint(endpointId: number): Promise<void> {
+  await request.delete(`/topology/unknown-endpoints/${endpointId}`)
 }
 
 // 获取站点设备列表

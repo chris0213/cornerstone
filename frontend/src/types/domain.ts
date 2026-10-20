@@ -137,6 +137,10 @@ export interface Credential {
   jumpUsername?: string
   jumpPassword?: string
   description?: string
+  usedByCount?: number
+  usedByTasks?: Array<{ id: number; name: string }>
+  lastTestedAt?: string
+  lastTestStatus?: 'success' | 'failed'
 }
 
 export interface Backup {
@@ -179,6 +183,12 @@ export interface BackupTask {
   last_run_at?: string
   lastRunAt?: string
   lastRunStatus?: string
+  scopeType?: 'devices' | 'site' | 'all'
+  credentialMissing?: boolean
+  credentialProtocol?: 'ssh' | 'telnet' | null
+  deviceMissingIds?: number[]
+  nextRunAt?: string | null
+  isRunning?: boolean
   deviceCount?: number
   created_at?: string
   createdAt?: string

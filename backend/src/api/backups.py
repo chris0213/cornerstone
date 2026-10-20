@@ -103,7 +103,16 @@ async def get_credentials(
         query = query.where(Credential.device_id == device_id)
     result = await db.execute(query)
     credentials = result.scalars().all()
-    
+
+    # 使用情况：一次查询取全部引用，按 credential_id 分组（避免 N+1）
+    refs = await db.execute(
+        select(BackupTask.id, BackupTask.name, BackupTask.credential_id)
+        .where(BackupTask.credential_id.isnot(None))
+    )
+    ref_map: dict[int, list[dict]] = {}
+    for row in refs.all():
+        ref_map.setdefault(row.credential_id, []).append({"id": row.id, "name": row.name})
+
     # 隐藏密码字段
     result = []
     for cred in credentials:
@@ -112,8 +121,10 @@ async def get_credentials(
         cred_dict["enable_password"] = "********" if cred_dict["enable_password"] else ""
         cred_dict["private_key"] = "********" if cred_dict["private_key"] else ""
         cred_dict["jump_password"] = "********" if cred_dict["jump_password"] else ""
+        cred_dict["used_by_tasks"] = ref_map.get(cred.id, [])
+        cred_dict["used_by_count"] = len(cred_dict["used_by_tasks"])
         result.append(cred_dict)
-    
+
     return result
 
 # 获取单个凭证
@@ -331,6 +342,11 @@ async def test_credential(
         {"test_ip": test_ip, "success": result.success, "error": result.error_message},
         get_client_ip_from_request(request),
     )
+
+    # 持久化最近一次测试结果（「上次测试」列展示用）
+    credential.last_tested_at = datetime.now(timezone.utc)
+    credential.last_test_status = "success" if result.success else "failed"
+    await db.commit()
 
     return {
         "success": result.success,

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import { getCredentials, createCredential, updateCredential, deleteCredential, testCredential } from '@/api/backups'
 import { confirmAndRun } from '@/lib/confirm'
+import { resolveErrorMessage, extractErrorDetail } from '@/lib/apiError'
 import type { Credential } from '@/types/domain'
+import { formatDateTime } from '@/lib/utils'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -13,10 +16,23 @@ const loading = ref(false)
 const showDialog = ref(false)
 const showTestDialog = ref(false)
 const editingCredential = ref<Credential | null>(null)
-const testingCredentialId = ref<number | null>(null)
+const testingCredential = ref<Credential | null>(null)
+const testing = ref(false)
 const testIp = ref('')
-const testResult = ref<{ success: boolean; message: string; durationMs: number } | null>(null)
+const testResult = ref<{
+  success: boolean
+  message: string
+  durationMs: number
+  vendor?: string
+  defaultsApplied?: string[]
+} | null>(null)
 const selectedCredentialIds = ref<number[]>([])
+
+// 搜索 / 协议筛选 / 客户端分页
+const searchText = ref('')
+const protocolFilter = ref('')
+const currentPage = ref(1)
+const pageSize = ref(20)
 
 const form = ref({
   name: '',
@@ -44,6 +60,25 @@ const authTypeOptions = computed(() => [
   { value: 'password', label: t('backups.authPassword') },
   { value: 'key', label: t('backups.authKey') },
 ])
+
+const filteredCredentials = computed(() => {
+  const kw = searchText.value.trim().toLowerCase()
+  return credentials.value.filter((c) => {
+    if (protocolFilter.value && c.protocol !== protocolFilter.value) return false
+    if (kw && !c.name.toLowerCase().includes(kw) && !c.username.toLowerCase().includes(kw)) return false
+    return true
+  })
+})
+
+const pagedCredentials = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredCredentials.value.slice(start, start + pageSize.value)
+})
+
+// 「使用情况」列 tooltip：任务名以「、」拼接
+function usageTooltip(row: Credential): string {
+  return (row.usedByTasks || []).map((task) => task.name).join('、')
+}
 
 function resetForm() {
   form.value = {
@@ -78,14 +113,15 @@ function openEditDialog(credential: Credential) {
     protocol: credential.protocol,
     port: credential.port,
     username: credential.username,
-    password: '********',
-    enablePassword: credential.enablePassword || '',
+    // R10：敏感字段一律留空表示不修改，不回填掩码或明文
+    password: '',
+    enablePassword: '',
     authType: credential.authType,
-    privateKey: credential.privateKey || '',
+    privateKey: '',
     jumpHost: credential.jumpHost || '',
     jumpPort: credential.jumpPort,
     jumpUsername: credential.jumpUsername || '',
-    jumpPassword: credential.jumpPassword || '',
+    jumpPassword: '',
     description: credential.description || '',
   }
   showDialog.value = true
@@ -124,24 +160,17 @@ async function handleSave() {
     if (form.value.deviceId) {
       data.deviceId = parseInt(form.value.deviceId)
     }
-    if (form.value.password && form.value.password !== '********') {
-      data.password = form.value.password
-    }
-    if (form.value.enablePassword && form.value.enablePassword !== '********') {
-      data.enablePassword = form.value.enablePassword
-    }
-    if (form.value.privateKey && form.value.privateKey !== '********') {
-      data.privateKey = form.value.privateKey
-    }
+    // 留空 = 不修改（API 层会剔除空值字段）
+    if (form.value.password) data.password = form.value.password
+    if (form.value.enablePassword) data.enablePassword = form.value.enablePassword
+    if (form.value.privateKey) data.privateKey = form.value.privateKey
     if (form.value.jumpHost) {
       data.jumpHost = form.value.jumpHost
     }
     if (form.value.jumpUsername) {
       data.jumpUsername = form.value.jumpUsername
     }
-    if (form.value.jumpPassword && form.value.jumpPassword !== '********') {
-      data.jumpPassword = form.value.jumpPassword
-    }
+    if (form.value.jumpPassword) data.jumpPassword = form.value.jumpPassword
 
     if (editingCredential.value) {
       await updateCredential(parseInt(editingCredential.value.id), data)
@@ -152,24 +181,49 @@ async function handleSave() {
     }
     await loadCredentials()
     closeDialog()
-  } catch (error) {
-    console.error('Failed to save credential:', error)
-    ElMessage.error(t('backups.saveFailed'))
+  } catch (error: any) {
+    console.error('保存凭证失败:', error?.message)
+    ElMessage.error(resolveErrorMessage(error, 'backups.saveFailed'))
   }
+}
+
+/** 删除被引用凭证的 409 拦截弹窗 */
+function showInUseBlocked(error: unknown) {
+  const detail = extractErrorDetail(error)
+  let taskNames: string[] = []
+  if (detail && typeof detail === 'object') {
+    const tasks = (detail.params as { tasks?: { name: string }[] } | undefined)?.tasks
+    taskNames = tasks?.map((task) => task.name) ?? []
+  }
+  const message = taskNames.length
+    ? t('backups.credentialErrors.inUse', { count: taskNames.length, tasks: taskNames.join('、') })
+    : t('backups.deleteBlocked')
+  ElMessageBox.alert(message, t('backups.cannotDeleteTitle'), {
+    type: 'warning',
+    confirmButtonText: t('backups.okBtn'),
+  })
 }
 
 async function handleDelete(credential: Credential) {
   await confirmAndRun({
     message: t('backups.confirmDelete', { name: credential.name }),
     title: t('backups.deleteTitle'),
-    confirmText: t('common.delete'),
+    confirmText: t('common.confirmDelete'),
     cancelText: t('common.cancel'),
+    danger: true,
     action: async () => {
       await deleteCredential(parseInt(credential.id))
       await loadCredentials()
     },
     successMessage: t('backups.deleteSuccess'),
-    errorMessage: t('backups.deleteFailed'),
+    errorMessage: (error) => {
+      // 409：被备份任务引用，弹拦截框说明
+      if ((error as { response?: { status?: number } })?.response?.status === 409) {
+        showInUseBlocked(error)
+        return ''
+      }
+      return resolveErrorMessage(error, 'backups.deleteFailed')
+    },
   })
 }
 
@@ -185,6 +239,7 @@ async function handleBatchDelete() {
     title: t('backups.batchDeleteTitle'),
     confirmText: t('common.delete'),
     cancelText: t('common.cancel'),
+    danger: true,
     action: async () => {
       // 逐个删除（可以优化为批量API）
       for (const id of selectedCredentialIds.value) {
@@ -194,12 +249,18 @@ async function handleBatchDelete() {
       await loadCredentials()
     },
     successMessage: t('backups.batchDeleteSuccess', { count: selectedCredentialIds.value.length }),
-    errorMessage: t('backups.batchDeleteFailed'),
+    errorMessage: (error) => {
+      if ((error as { response?: { status?: number } })?.response?.status === 409) {
+        showInUseBlocked(error)
+        return ''
+      }
+      return resolveErrorMessage(error, 'backups.batchDeleteFailed')
+    },
   })
 }
 
 function openTestDialog(credential: Credential) {
-  testingCredentialId.value = parseInt(credential.id)
+  testingCredential.value = credential
   testIp.value = ''
   testResult.value = null
   showTestDialog.value = true
@@ -210,19 +271,42 @@ async function handleTest() {
     ElMessage.error(t('validation.testIpRequired'))
     return
   }
+  const credential = testingCredential.value
+  if (!credential || testing.value) return
 
-  if (!testingCredentialId.value) return
-
+  // 测试前确认：告知将真实登录目标设备
   try {
-    testResult.value = await testCredential(testingCredentialId.value, testIp.value)
+    await ElMessageBox.confirm(
+      t('backups.testConfirm', { ip: testIp.value }),
+      t('backups.testConfirmTitle'),
+      {
+        confirmButtonText: t('backups.testConfirmBtn'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+
+  testing.value = true
+  try {
+    testResult.value = await testCredential(parseInt(credential.id), testIp.value)
     if (testResult.value.success) {
       ElMessage.success(t('backups.testSuccess', { ms: testResult.value.durationMs }))
     } else {
-      ElMessage.error(testResult.value.message)
+      // telnet 凭证测试失败：附加厂商可能不支持 Telnet 的提示
+      const baseMsg = testResult.value.message || t('backups.testFailed')
+      const failMsg = credential.protocol === 'telnet'
+        ? `${baseMsg}；${t('backups.telnetFailHint')}`
+        : baseMsg
+      ElMessage.error(failMsg)
     }
-  } catch (error) {
-    console.error('Failed to test credential:', error)
-    ElMessage.error(t('backups.testFailed'))
+  } catch (error: any) {
+    console.error('测试连接失败:', error?.message)
+    ElMessage.error(resolveErrorMessage(error, 'backups.testFailed'))
+  } finally {
+    testing.value = false
   }
 }
 
@@ -230,12 +314,24 @@ async function loadCredentials() {
   loading.value = true
   try {
     credentials.value = await getCredentials()
-  } catch (error) {
-    console.error('Failed to load credentials:', error)
-    ElMessage.error(t('backups.loadCredentialsFailed'))
+  } catch (error: any) {
+    console.error('加载凭证列表失败:', error?.message)
+    ElMessage.error(resolveErrorMessage(error, 'backups.loadCredentialsFailed'))
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  currentPage.value = 1
+}
+
+function handleFilterChange() {
+  currentPage.value = 1
+}
+
+function onRowCommand(command: string, credential: Credential) {
+  if (command === 'delete') handleDelete(credential)
 }
 
 onMounted(() => {
@@ -253,9 +349,31 @@ onMounted(() => {
             {{ t('backups.credentials') }}
           </div>
           <div class="table-actions">
-            <el-button 
-              v-if="selectedCredentialIds.length > 0" 
-              type="danger" 
+            <el-input
+              v-model="searchText"
+              class="search-input"
+              :placeholder="t('backups.searchPlaceholder')"
+              clearable
+              :prefix-icon="Search"
+              @input="handleSearch"
+            />
+            <el-select
+              v-model="protocolFilter"
+              class="protocol-filter"
+              :placeholder="t('backups.protocolFilterAll')"
+              clearable
+              @change="handleFilterChange"
+            >
+              <el-option
+                v-for="opt in protocolOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+            <el-button
+              v-if="selectedCredentialIds.length > 0"
+              type="danger"
               @click="handleBatchDelete"
             >
               <el-icon><Delete /></el-icon>
@@ -263,7 +381,7 @@ onMounted(() => {
             </el-button>
             <el-button type="primary" @click="openCreateDialog">
               <el-icon><Plus /></el-icon>
-              {{ t('backups.newCredential') }}
+              {{ t('backups.addCredential') }}
             </el-button>
           </div>
         </div>
@@ -271,16 +389,16 @@ onMounted(() => {
 
       <el-table
         class="credential-table"
-        :data="credentials"
+        :data="pagedCredentials"
         style="width: 100%"
         stripe
         border
         v-loading="loading"
-        height="calc(100vh - 220px)"
+        height="calc(100vh - 280px)"
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="name" :label="t('backups.credentialName')" min-width="150">
+        <el-table-column prop="name" :label="t('backups.nameColumn')" min-width="150">
           <template #default="{ row }">
             <div class="credential-name">
               <el-icon class="cred-icon"><Key /></el-icon>
@@ -288,20 +406,17 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="protocol" label="协议" min-width="100" align="center">
+        <el-table-column prop="protocol" :label="t('backups.protocolPortColumn')" min-width="110" align="center">
           <template #default="{ row }">
             <el-tag :type="row.protocol === 'ssh' ? 'success' : 'warning'" size="small">
-              {{ row.protocol?.toUpperCase() }}
+              {{ row.protocol?.toUpperCase() }}:{{ row.port }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="port" label="端口" min-width="80" align="center">
-          <template #default="{ row }">{{ row.port }}</template>
-        </el-table-column>
-        <el-table-column prop="username" label="用户名" min-width="120">
+        <el-table-column prop="username" :label="t('backups.usernameColumn')" min-width="120">
           <template #default="{ row }">{{ row.username }}</template>
         </el-table-column>
-        <el-table-column prop="password" label="密码" min-width="120" align="center">
+        <el-table-column prop="password" :label="t('backups.passwordColumn')" min-width="100" align="center">
           <template #default>
             <span class="password-masked">********</span>
           </template>
@@ -309,17 +424,40 @@ onMounted(() => {
         <el-table-column prop="jumpHost" :label="t('backups.jumpHost')" min-width="150">
           <template #default="{ row }">
             <span v-if="row.jumpHost">{{ row.jumpHost }}:{{ row.jumpPort }}</span>
-            <span v-else class="text-muted">-</span>
+            <span v-else class="text-muted">{{ t('backups.portEmpty') }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="authType" label="认证方式" min-width="100" align="center">
+        <el-table-column prop="authType" :label="t('backups.authTypeColumn')" min-width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.authType === 'key' ? 'info' : 'primary'" size="small">
-              {{ row.authType === 'key' ? '密钥' : '密码' }}
+              {{ row.authType === 'key' ? t('backups.authTypeKey') : t('backups.authTypePassword') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.actions')" width="220" fixed="right" align="center">
+        <el-table-column prop="usedByCount" :label="t('backups.usageColumn')" min-width="110" align="center">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="row.usedByCount > 0"
+              :content="usageTooltip(row)"
+              placement="top"
+            >
+              <el-tag type="info" size="small">
+                {{ t('backups.usedByTasks', { count: row.usedByCount }) }}
+              </el-tag>
+            </el-tooltip>
+            <span v-else class="text-muted">{{ t('backups.notReferenced') }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="lastTestedAt" :label="t('backups.lastTestColumn')" min-width="150">
+          <template #default="{ row }">
+            <template v-if="row.lastTestedAt">
+              <span class="test-status-dot" :class="row.lastTestStatus === 'success' ? 'is-success' : 'is-failed'" />
+              <span class="last-test-text">{{ formatDateTime(row.lastTestedAt) }}</span>
+            </template>
+            <span v-else class="text-muted">{{ t('backups.neverTested') }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('common.actions')" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openTestDialog(row)">
               <el-icon><Connection /></el-icon>
@@ -329,27 +467,49 @@ onMounted(() => {
               <el-icon><Edit /></el-icon>
               {{ t('common.edit') }}
             </el-button>
-            <el-button link type="danger" size="small" @click="handleDelete(row)">
-              <el-icon><Delete /></el-icon>
-              {{ t('common.delete') }}
-            </el-button>
+            <el-dropdown trigger="click" @command="(cmd: string) => onRowCommand(cmd, row)">
+              <el-button link type="primary" size="small" class="more-trigger">
+                {{ t('backups.moreActions') }}
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="delete" class="danger-item">
+                    <el-icon><Delete /></el-icon>
+                    {{ t('common.delete') }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="credentials.length === 0 && !loading" :description="t('backups.noCredentials')" />
+      <div class="table-footer">
+        <span class="total-text">{{ t('backups.totalCount', { count: filteredCredentials.length }) }}</span>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="filteredCredentials.length"
+          :page-sizes="[10, 20, 50]"
+          layout="sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
+
+      <el-empty v-if="filteredCredentials.length === 0 && !loading" :description="t('backups.noCredentials')" />
     </el-card>
 
     <!-- 新建/编辑凭证对话框 -->
     <el-dialog
       v-model="showDialog"
-      :title="editingCredential ? '编辑凭证' : '新建凭证'"
+      :title="editingCredential ? t('backups.editDialogTitle') : t('backups.addDialogTitle')"
       width="700px"
       :close-on-click-modal="false"
     >
       <el-form label-position="top">
-        <el-form-item label="凭证名称" required>
-          <el-input v-model="form.name" placeholder="如：华为核心设备组" />
+        <el-form-item :label="t('backups.nameColumn')" required>
+          <el-input v-model="form.name" :placeholder="t('backups.namePlaceholder')" />
         </el-form-item>
 
         <el-row :gutter="16">
@@ -361,12 +521,12 @@ onMounted(() => {
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="端口">
+            <el-form-item :label="t('backups.portLabel')">
               <el-input-number v-model="form.port" :min="1" :max="65535" style="width: 100%" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="认证方式">
+            <el-form-item :label="t('backups.authType')">
               <el-select v-model="form.authType" style="width: 100%">
                 <el-option v-for="opt in authTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
@@ -376,13 +536,18 @@ onMounted(() => {
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item :label="t('backups.username')" required>
-              <el-input v-model="form.username" placeholder="请输入用户名" />
+            <el-form-item :label="t('backups.usernameColumn')" required>
+              <el-input v-model="form.username" :placeholder="t('backups.usernamePlaceholder')" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item :label="editingCredential ? t('backups.passwordKeepEmpty') : t('backups.password')" :required="!editingCredential">
-              <el-input v-model="form.password" type="password" show-password :placeholder="editingCredential ? t('backups.passwordNoChange') : t('validation.passwordRequired')" />
+            <el-form-item :label="editingCredential ? t('backups.passwordLabelEdit') : t('backups.password')" :required="!editingCredential">
+              <el-input
+                v-model="form.password"
+                type="password"
+                show-password
+                :placeholder="editingCredential ? t('backups.passwordPlaceholderEdit') : t('backups.passwordPlaceholderNew')"
+              />
             </el-form-item>
           </el-col>
         </el-row>
@@ -390,12 +555,22 @@ onMounted(() => {
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item :label="t('backups.enablePassword')">
-              <el-input v-model="form.enablePassword" type="password" show-password placeholder="可选，Cisco设备用" />
+              <el-input
+                v-model="form.enablePassword"
+                type="password"
+                show-password
+                :placeholder="editingCredential ? t('backups.passwordPlaceholderEdit') : t('backups.enablePasswordPlaceholder')"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item :label="t('backups.privateKey')" v-if="form.authType === 'key'">
-              <el-input v-model="form.privateKey" type="textarea" :rows="3" placeholder="SSH私钥内容" />
+              <el-input
+                v-model="form.privateKey"
+                type="textarea"
+                :rows="3"
+                :placeholder="editingCredential ? t('backups.passwordPlaceholderEdit') : t('backups.privateKeyPlaceholder')"
+              />
             </el-form-item>
           </el-col>
         </el-row>
@@ -406,12 +581,12 @@ onMounted(() => {
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="跳板机IP">
-              <el-input v-model="form.jumpHost" placeholder="如：192.0.2.1" />
+            <el-form-item :label="t('backups.jumpHostIpLabel')">
+              <el-input v-model="form.jumpHost" :placeholder="t('backups.jumpHostIpPlaceholder')" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="跳板机端口">
+            <el-form-item :label="t('backups.jumpHostPortLabel')">
               <el-input-number v-model="form.jumpPort" :min="1" :max="65535" style="width: 100%" />
             </el-form-item>
           </el-col>
@@ -419,13 +594,18 @@ onMounted(() => {
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="跳板机用户名">
-              <el-input v-model="form.jumpUsername" placeholder="跳板机用户名" />
+            <el-form-item :label="t('backups.jumpHostUserLabel')">
+              <el-input v-model="form.jumpUsername" :placeholder="t('backups.jumpHostUserPlaceholder')" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item :label="t('backups.jumpHostPassword')">
-              <el-input v-model="form.jumpPassword" type="password" show-password placeholder="跳板机密码" />
+              <el-input
+                v-model="form.jumpPassword"
+                type="password"
+                show-password
+                :placeholder="editingCredential ? t('backups.passwordPlaceholderEdit') : t('backups.jumpPasswordPlaceholder')"
+              />
             </el-form-item>
           </el-col>
         </el-row>
@@ -436,36 +616,62 @@ onMounted(() => {
       </el-form>
 
       <template #footer>
-        <el-button @click="closeDialog">取消</el-button>
-        <el-button type="primary" @click="handleSave">保存</el-button>
+        <el-button @click="closeDialog">{{ t('backups.cancelBtn') }}</el-button>
+        <el-button type="primary" @click="handleSave">{{ t('backups.saveBtn') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 测试连接对话框 -->
     <el-dialog
       v-model="showTestDialog"
-      title="测试连接"
+      :title="t('backups.testDialogTitle')"
       width="500px"
     >
       <el-form label-position="top">
         <el-form-item :label="t('backups.testDeviceIp')">
-          <el-input v-model="testIp" placeholder="请输入测试设备IP地址" />
+          <el-input
+            v-model="testIp"
+            :placeholder="t('backups.testIpPlaceholder')"
+            :disabled="testing"
+            @keyup.enter="handleTest"
+          />
+          <div class="test-ip-hint">{{ t('backups.testIpHint') }}</div>
         </el-form-item>
 
         <div v-if="testResult" class="test-result" :class="{ success: testResult.success, error: !testResult.success }">
           <el-icon v-if="testResult.success" class="result-icon"><CircleCheck /></el-icon>
           <el-icon v-else class="result-icon"><CircleClose /></el-icon>
           <div class="result-text">
-            <div class="result-title">{{ testResult.success ? '连接成功' : '连接失败' }}</div>
+            <div class="result-title">{{ testResult.success ? t('backups.resultSuccessTitle') : t('backups.resultFailTitle') }}</div>
             <div class="result-message">{{ testResult.message }}</div>
-            <div v-if="testResult.success" class="result-duration">耗时: {{ (testResult.durationMs / 1000).toFixed(1) }}s</div>
+            <div v-if="testResult.success" class="result-duration">
+              {{ t('backups.resultDuration', { seconds: (testResult.durationMs / 1000).toFixed(1) }) }}
+            </div>
+            <el-alert
+              v-if="testResult.success && testResult.defaultsApplied?.includes('vendor')"
+              class="result-hint"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="t('backups.vendorDefaultHint', { vendor: testResult.vendor || 'huawei_vrp' })"
+            />
+            <el-alert
+              v-if="!testResult.success && testingCredential?.protocol === 'telnet'"
+              class="result-hint"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="t('backups.telnetFailHint')"
+            />
           </div>
         </div>
       </el-form>
 
       <template #footer>
         <el-button @click="showTestDialog = false">{{ t('common.close') }}</el-button>
-        <el-button type="primary" @click="handleTest">{{ t('backups.testConnection') }}</el-button>
+        <el-button type="primary" :loading="testing" @click="handleTest">
+          {{ testing ? t('backups.testing') : t('backups.testConfirmBtn') }}
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -486,6 +692,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
 .card-title {
@@ -494,11 +701,25 @@ onMounted(() => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--el-color-primary);
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-input {
+  width: 220px;
+}
+
+.protocol-filter {
+  width: 140px;
 }
 
 .credential-name {
@@ -508,21 +729,70 @@ onMounted(() => {
 }
 
 .cred-icon {
-  color: #1890ff;
+  color: var(--el-color-primary);
 }
 
 .password-masked {
   font-family: monospace;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
 }
 
 .text-muted {
-  color: #bfbfbf;
+  color: var(--el-text-color-placeholder);
+}
+
+.test-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+
+  &.is-success {
+    background-color: var(--el-color-success);
+  }
+
+  &.is-failed {
+    background-color: var(--el-color-danger);
+  }
+}
+
+.last-test-text {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
 }
 
 .divider-text {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
+}
+
+.more-trigger {
+  margin-left: 12px;
+}
+
+:deep(.danger-item) {
+  color: var(--el-color-danger);
+}
+
+.table-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.total-text {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.test-ip-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
 }
 
 .test-result {
@@ -535,13 +805,13 @@ onMounted(() => {
 }
 
 .test-result.success {
-  background: #f6ffed;
-  border: 1px solid #b7eb8f;
+  background: var(--el-color-success-light-9);
+  border: 1px solid var(--el-color-success-light-5);
 }
 
 .test-result.error {
-  background: #fff2f0;
-  border: 1px solid #ffccc7;
+  background: var(--el-color-danger-light-9);
+  border: 1px solid var(--el-color-danger-light-5);
 }
 
 .result-icon {
@@ -549,28 +819,32 @@ onMounted(() => {
 }
 
 .success .result-icon {
-  color: #52c41a;
+  color: var(--el-color-success);
 }
 
 .error .result-icon {
-  color: #ff4d4f;
+  color: var(--el-color-danger);
 }
 
 .result-title {
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .result-message {
-  color: #595959;
+  color: var(--el-text-color-regular);
   font-size: 13px;
   margin-top: 4px;
 }
 
 .result-duration {
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-top: 4px;
+}
+
+.result-hint {
+  margin-top: 8px;
 }
 
 .credential-table :deep(.cell) {
