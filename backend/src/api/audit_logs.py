@@ -5,7 +5,7 @@ from sqlalchemy import select, insert
 from ..database import get_db
 from ..models import AuditLog, Role
 from ..schemas import AuditLogResponse
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
 
 router = APIRouter()
 
@@ -89,8 +89,9 @@ async def read_log(
 async def create_log(
     log: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_superuser)
 ):
+    """手动写入审计日志（仅超级管理员，防止任意登录用户伪造审计记录）"""
     stmt = insert(AuditLog).values(**log).returning(AuditLog)
     result = await db.execute(stmt)
     await db.commit()

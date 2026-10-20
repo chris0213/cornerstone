@@ -15,4 +15,5 @@ class CircuitChange(Base):
     new_value = Column(Text)
     operator = Column(String(50))
     remark = Column(String(500))
+    batch_id = Column(String(36), index=True, comment="操作批次ID：同一次请求的多字段变更共用")
     created_at = Column(DateTime(timezone=True), server_default=func.now())

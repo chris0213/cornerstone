@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update, delete
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from ..database import get_db
 from ..models import Circuit, CircuitChange
@@ -9,6 +10,11 @@ from ..schemas import CircuitCreate, CircuitUpdate, CircuitResponse
 from .dependencies import get_current_active_user, PageParams, pagination
 
 router = APIRouter()
+
+
+def _circuit_snapshot(circuit: Circuit) -> str:
+    """电路字段快照（仅业务列，避免 __dict__ 混入 ORM 内部状态）"""
+    return str({c.name: getattr(circuit, c.name) for c in circuit.__table__.columns})
 
 
 @router.get("/", response_model=list[CircuitResponse])
@@ -52,7 +58,8 @@ async def create_circuit(
             old_value="",
             new_value=str(circuit.model_dump()),
             operator=current_user.username,
-            remark="创建专线"
+            remark="创建专线",
+            batch_id=str(uuid4())
         )
     )
     
@@ -74,6 +81,13 @@ async def update_circuit(
     
     update_data = circuit.model_dump(exclude_unset=True)
     
+    # 同一次请求的多字段变更共用一个批次ID，便于聚合展示
+    batch_id = str(uuid4())
+    changed_fields = [
+        field_name for field_name, new_value in update_data.items()
+        if getattr(existing_circuit, field_name, None) != new_value
+    ]
+    
     for field_name, new_value in update_data.items():
         old_value = getattr(existing_circuit, field_name, None)
         if old_value != new_value:
@@ -85,7 +99,8 @@ async def update_circuit(
                     old_value=str(old_value) if old_value is not None else "",
                     new_value=str(new_value) if new_value is not None else "",
                     operator=current_user.username,
-                    remark=f"修改{field_name}"
+                    remark=f"修改了{len(changed_fields)}个字段",
+                    batch_id=batch_id
                 )
             )
     
@@ -106,8 +121,8 @@ async def delete_circuit(
     if circuit is None:
         raise HTTPException(status_code=404, detail="Circuit not found")
     
-    # 保存电路快照用于审计日志
-    circuit_data = str(circuit.__dict__)
+    # 保存电路快照用于审计日志（仅业务列）
+    circuit_data = _circuit_snapshot(circuit)
     
     # 先记录删除操作（在电路删除前）
     await db.execute(
@@ -118,7 +133,8 @@ async def delete_circuit(
             old_value=circuit_data,
             new_value="",
             operator=current_user.username,
-            remark=f"删除专线 #{circuit_id}"
+            remark=f"删除专线 #{circuit_id}",
+            batch_id=str(uuid4())
         )
     )
     

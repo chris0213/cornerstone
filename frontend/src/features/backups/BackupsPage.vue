@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, Connection, Box, MapLocation } from '@element-plus/icons-vue'
 import { getBackups, getBackupContent, getBackupDiff, updateBackupTag, deleteBackup, restoreBackup, triggerBackup, triggerBatchBackup } from '@/api/backups'
@@ -107,6 +108,13 @@ const filterTrigger = ref('')
 const filterHasChange = ref<boolean | ''>('')
 const filterSiteId = ref<number | ''>('')
 const filterDeviceId = ref<number | ''>('')
+
+// 深链定位：/backups?device_id=N 预置设备筛选（变更管理页「配置变更」对象跳转）
+const route = useRoute()
+const deepLinkDeviceId = Number(route.query.device_id)
+if (deepLinkDeviceId) {
+  filterDeviceId.value = deepLinkDeviceId
+}
 
 const currentPage = ref(1)
 const pageSize = ref(20)

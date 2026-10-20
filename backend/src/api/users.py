@@ -254,15 +254,14 @@ async def update_user(
     result = await db.execute(stmt)
     updated_user = result.scalar_one_or_none()
     
-    # 记录审计日志
+    # 记录审计日志（脱敏：只记字段名，不记字段值，避免敏感数据进日志）
     if update_data:
-        changes = ", ".join([f"{k}={v}" for k, v in update_data.items()])
         client_ip = get_client_ip_from_request(request)
         stmt = insert(AuditLog).values(
             user=current_user.username,
             action="编辑用户",
             resource="用户",
-            detail=f"编辑用户 {updated_user.username}，修改内容: {changes}",
+            detail=f"编辑用户 {updated_user.username}，修改字段: {', '.join(update_data.keys())}",
             ip_address=client_ip,
             success="true"
         )
