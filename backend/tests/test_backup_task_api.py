@@ -9,6 +9,16 @@ from src.services.permission_service import pwd_context
 from src.utils.crypto import encrypt_password
 
 
+@pytest.fixture(autouse=True)
+def _clean_running_tasks():
+    """running_tasks 是模块级全局，端点内同步置位后由真实执行复位；
+    测试拦截了执行函数，需在每个用例后清空防止跨用例泄漏。"""
+    from src.api import backup_tasks as bt_module
+
+    yield
+    bt_module.running_tasks.clear()
+
+
 async def _login(client, username: str, password: str) -> dict:
     resp = await client.post(
         "/api/v1/auth/token",
@@ -221,6 +231,41 @@ async def test_run_now_conflict_when_already_running(client, db_session, monkeyp
 
     # 清理
     monkeypatch.undo()
+    await client.delete(f"/api/v1/backup-tasks/{task_id}", headers=admin)
+
+
+@pytest.mark.asyncio
+async def test_run_now_concurrent_gather_one_wins(client, db_session, monkeypatch):
+    """并发两次 run-now（asyncio.gather）：恰一次 200、一次 409（检查+置位同步段无让出点）。"""
+    import asyncio as _asyncio
+    from src.api import backup_tasks as bt_module
+
+    # 拦截真正执行，任务保持「占位执行中」状态以模拟长任务
+    async def _noop(task_id, trigger):
+        return
+
+    monkeypatch.setattr(bt_module, "run_backup_task", _noop)
+    cred = await _make_credential(db_session, "gather-cred")
+    dev = await _make_device(db_session, "gather-dev")
+    admin = await _login(client, "admin", "admin123")
+
+    resp = await client.post(
+        "/api/v1/backup-tasks/",
+        json={"name": "gather-task", "cron_expr": "0 2 * * *", "credential_id": cred.id, "device_ids": [dev.id]},
+        headers=admin,
+    )
+    task_id = resp.json()["id"]
+
+    results = await _asyncio.gather(*[
+        client.post(f"/api/v1/backup-tasks/{task_id}/run-now", headers=admin) for _ in range(2)
+    ])
+    codes = sorted(r.status_code for r in results)
+    assert codes == [200, 409], f"期望一次 200 一次 409，实际 {codes}"
+    conflict = next(r for r in results if r.status_code == 409)
+    assert conflict.json()["detail"]["code"] == "backup_task.already_running"
+
+    # 清理
+    bt_module.running_tasks.pop(task_id, None)
     await client.delete(f"/api/v1/backup-tasks/{task_id}", headers=admin)
 
 

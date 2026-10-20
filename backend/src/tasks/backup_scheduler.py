@@ -77,6 +77,12 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
         from ..services.alert_service import AlertService
         await AlertService.send_backup_failure_notification(db, task_id, task.name, summary)
     
+    # 防重复执行守卫（仅定时触发）：手动触发的检查+置位已在端点内同步完成，
+    # 定时触发若与执行中的任务重叠则跳过本次（finally 复位由执行中的那次负责）
+    if trigger == "scheduled" and running_tasks.get(task_id):
+        logger.warning(f"备份任务 {task_id} 已在执行中，跳过本次定时触发")
+        return
+
     running_tasks[task_id] = True
     
     try:

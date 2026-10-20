@@ -360,7 +360,8 @@ async def run_backup_task_now(
     if not task:
         raise HTTPException(status_code=404, detail="Backup task not found")
 
-    # 防重复执行：与定时触发共用 running_tasks 状态（run_backup_task 内部置位/复位）
+    # 防重复执行：与定时触发共用 running_tasks 状态（run_backup_task 内部复位）
+    # 检查与置位为同步段（中间无 await），同一事件循环内并发请求无法插入
     if running_tasks.get(task_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -369,13 +370,19 @@ async def run_backup_task_now(
                 "message": "任务正在执行中，请稍后再试",
             },
         )
+    running_tasks[task_id] = True
 
-    import asyncio
-    asyncio.create_task(run_backup_task(task_id, "manual"))
-    
-    client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup_task", task_id, "run_now", {}, client_ip)
-    
+    try:
+        import asyncio
+        asyncio.create_task(run_backup_task(task_id, "manual"))
+
+        client_ip = get_client_ip_from_request(request)
+        await audit_log(db, current_user.id, "backup_task", task_id, "run_now", {}, client_ip)
+    except Exception:
+        # 启动失败（如审计写入异常）时释放占位，避免任务永远卡在「执行中」
+        running_tasks[task_id] = False
+        raise
+
     return {"message": "任务已启动，请在几秒后刷新历史记录查看结果"}
 
 # 获取任务执行历史
