@@ -7,7 +7,7 @@ import './style.css'
 import router from './app/router'
 import { createPinia } from 'pinia'
 import { useAppStore } from './store'
-import { STORE_KEY } from './store/seed'
+import { STORE_KEY, LEGACY_STORE_KEYS } from './store/seed'
 import { setupPermissionDirective } from './lib/directives/permission'
 import i18n from './i18n'
 import { useLocaleStore } from './store/locale'
@@ -33,6 +33,10 @@ localeStore.initialize()
 
 // 跨标签页数据同步
 if (typeof window !== 'undefined') {
+  // 旧版本 store key 一次性清理：旧数据含已废弃的演示记录，迁移代价高于重置
+  for (const legacyKey of LEGACY_STORE_KEYS) {
+    localStorage.removeItem(legacyKey)
+  }
   window.addEventListener('storage', (event) => {
     if (event.key === STORE_KEY && event.newValue) {
       try {

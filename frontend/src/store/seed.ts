@@ -1,6 +1,9 @@
 import type { AppState } from '../types/domain'
 
-export const STORE_KEY = 'cornerstone-state-v1'
+export const STORE_KEY = 'cornerstone-state-v2'
+
+// 历史版本 key：启动时一次性清理，防止旧版残留数据（如已删除的演示失败备份）反复出现
+export const LEGACY_STORE_KEYS = ['cornerstone-state-v1']
 
 export const seedState: AppState = {
   sites: [
