@@ -4,19 +4,30 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
-import { ElMessage, ElDialog, ElButton, ElDatePicker, ElTabPane, ElTabs, ElBadge } from 'element-plus'
+import { ElMessage, ElDialog, ElButton, ElDatePicker, ElTabPane, ElTabs, ElMessageBox } from 'element-plus'
 import { confirmAndRun } from '@/lib/confirm'
-import { Bell, Refresh, CircleClose, Warning, DataLine, Connection, View, InfoFilled, Calendar, Monitor, DocumentCopy, SetUp, BellFilled, WarningFilled, ArrowDown } from '@element-plus/icons-vue'
+import { Bell, Refresh, CircleClose, Warning, DataLine, Connection, View, InfoFilled, Calendar, Monitor, DocumentCopy, SetUp, BellFilled, WarningFilled } from '@element-plus/icons-vue'
 import AIPrediction from '../../components/AIPrediction.vue'
 import AnomalyCard, { type Anomaly } from './AnomalyCard.vue'
 import { onNewAlert } from '@/lib/alertSocket'
-import { getAlertRecords, acknowledgeAlert, resolveAlert, muteAlertRule, type AlertRecord } from '../../api/alerts'
+import {
+  getAlertRecords,
+  getAlertFullSummary,
+  acknowledgeAlert,
+  batchAcknowledgeAlerts,
+  resolveAlert,
+  muteAlertRule,
+  type AlertRecord
+} from '../../api/alerts'
+import type { UserResponse } from '../../api/users'
+import { getUsers } from '../../api/users'
 import { getLocale } from '@/i18n'
 import { useI18n } from 'vue-i18n'
 
 const { locale, t } = useI18n()
 const authStore = useAuthStore()
 const isViewer = computed(() => authStore.isReadOnly())
+const canWrite = computed(() => authStore.hasPermission('alerts', 'write'))
 interface Alert {
   type: string
   title: string
@@ -56,117 +67,328 @@ const renewForm = ref({
   expireAt: ''
 })
 
-const searchKeyword = ref('')
-const selectedLevel = ref('all')
+// ==================== 告警记录：筛选/分页/批量 ====================
+// 注意：搜索与筛选仅作用于「告警记录」卡片（统一列表），
+// 各预警 Tab（实时/到期/容量）为按现状数据实时计算的预警，不受筛选影响。
+const filterSeverity = ref<'all' | 'info' | 'warning' | 'critical'>('all')
+const filterStatus = ref<'all' | 'active' | 'acknowledged' | 'resolved'>('all')
+const filterType = ref<'all' | 'latency' | 'packet_loss' | 'status' | 'circuit_expire' | 'inspection_offline' | 'inspection_new_device' | 'inspection_fingerprint_change'>('all')
+const filterTimeRange = ref<[Date, Date] | null>(null)
 
-// 告警通知状态（含处置闭环：待处理 → 认领 → 处理）
-const notifications = ref<{
-  id: string
-  type: string
-  title: string
-  message: string
-  time: string
-  read: boolean
-  recordId: number
-  status: 'active' | 'acknowledged' | 'resolved'
-  ruleId: number | null
-}[]>([])
+const records = ref<AlertRecord[]>([])
+const recordsTotal = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
+const loadingRecords = ref(false)
 
-async function loadAlertRecords() {
+// ID → 用户名映射（展示认领人/处理人）
+const userNameMap = ref<Record<number, string>>({})
+
+function formatRelativeTime(dateText: string): string {
+  const now = new Date()
+  const createdAt = new Date(dateText)
+  const diffMinutes = Math.floor((now.getTime() - createdAt.getTime()) / 60000)
+  if (diffMinutes < 1) return t('alerts.justNow')
+  if (diffMinutes < 60) return t('alerts.minutesAgo', { count: diffMinutes })
+  if (diffMinutes < 1440) return t('alerts.hoursAgo', { count: Math.floor(diffMinutes / 60) })
+  return t('alerts.daysAgo', { count: Math.floor(diffMinutes / 1440) })
+}
+
+function formatDateTime(dateText?: string): string {
+  if (!dateText) return '-'
+  return new Date(dateText).toLocaleString(getLocale() || 'zh-CN')
+}
+
+// 告警标题：优先规则名，无规则时按类型映射
+const ruleNameMap = ref<Record<number, string>>({})
+
+async function loadRuleNameMap() {
   try {
-    // 拉取最近记录（含已认领/已处理），便于处置闭环与回看
-    const records = await getAlertRecords({ limit: 15 })
-    notifications.value = records.map((record: AlertRecord) => {
-      const now = new Date()
-      const createdAt = new Date(record.created_at)
-      const diffMinutes = Math.floor((now.getTime() - createdAt.getTime()) / 60000)
-      let timeText = ''
-      if (diffMinutes < 1) {
-        timeText = t('alerts.justNow')
-      } else if (diffMinutes < 60) {
-        timeText = t('alerts.minutesAgo', { count: diffMinutes })
-      } else if (diffMinutes < 1440) {
-        timeText = t('alerts.hoursAgo', { count: Math.floor(diffMinutes / 60) })
-      } else {
-        timeText = t('alerts.daysAgo', { count: Math.floor(diffMinutes / 1440) })
-      }
-      
-      let title = ''
-      if (record.alert_type === 'latency') {
-        title = t('alerts.highLatency')
-      } else if (record.alert_type === 'packet_loss') {
-        title = t('alerts.highPacketLoss')
-      } else if (record.alert_type === 'status') {
-        title = t('alerts.statusAbnormal')
-      } else {
-        title = t('alerts.alertTriggered')
-      }
-      
-      return {
-        id: String(record.id),
-        type: record.severity === 'critical' ? 'danger' : record.severity === 'warning' ? 'warn' : 'info',
-        title,
-        message: record.message,
-        time: timeText,
-        read: record.status !== 'active',
-        recordId: record.id,
-        status: record.status,
-        ruleId: record.rule_id ?? null
-      }
+    const { getAlertRules } = await import('../../api/alerts')
+    const rules = await getAlertRules()
+    const map: Record<number, string> = {}
+    rules.forEach((rule) => {
+      map[rule.id] = rule.name
     })
-  } catch (error) {
-    console.error('加载告警记录失败:', error)
-    // 如果API调用失败，显示空列表或提示信息
+    ruleNameMap.value = map
+  } catch {
+    // 兜底走类型名
   }
 }
 
-function markAllAsRead() {
-  notifications.value.forEach(n => n.read = true)
-  ElMessage.success(t('alerts.markedAllAsRead'))
+function alertTitle(record: AlertRecord): string {
+  if (record.rule_id && ruleNameMap.value[record.rule_id]) return ruleNameMap.value[record.rule_id]
+  const typeMap: Record<string, string> = {
+    latency: t('alerts.highLatency'),
+    packet_loss: t('alerts.highPacketLoss'),
+    status: t('alerts.statusAbnormal'),
+    circuit_expire: t('alerts.circuitContractAlerts'),
+    inspection_offline: t('alerts.offlineAlert'),
+    inspection_new_device: t('alerts.newDevice'),
+    inspection_fingerprint_change: t('alerts.fingerprintChange')
+  }
+  return typeMap[record.alert_type] || t('alerts.alertTriggered')
 }
 
-// ===== 告警处置：认领 / 处理 / 静默 =====
-async function handleAcknowledge(notification: typeof notifications.value[number]) {
+// 对象跳转：circuit 类告警跳专线，其余跳设备
+function goToRecordTarget(record: AlertRecord) {
+  if (record.object_type === 'circuit') {
+    router.push(`/circuits?id=${record.device_id}`)
+  } else if (record.device_id) {
+    router.push(`/devices?id=${record.device_id}`)
+  }
+}
+
+async function loadUserNameMap() {
   try {
-    await acknowledgeAlert(notification.recordId)
+    const users = await getUsers()
+    const map: Record<number, string> = {}
+    users.forEach((u: UserResponse) => {
+      map[u.id] = u.full_name || u.username
+    })
+    userNameMap.value = map
+  } catch {
+    // 权限不足或接口异常时兜底显示 ID
+  }
+}
+
+function displayName(userId?: number): string {
+  if (!userId) return '-'
+  return userNameMap.value[userId] || `#${userId}`
+}
+
+async function loadRecords() {
+  loadingRecords.value = true
+  try {
+    const params: Record<string, unknown> = {
+      page: currentPage.value,
+      page_size: pageSize.value
+    }
+    if (filterSeverity.value !== 'all') params.severity = filterSeverity.value
+    if (filterStatus.value !== 'all') params.status = filterStatus.value
+    if (filterType.value !== 'all') params.alert_type = filterType.value
+    if (filterTimeRange.value) {
+      params.start_time = filterTimeRange.value[0].toISOString()
+      params.end_time = filterTimeRange.value[1].toISOString()
+    }
+    const data = await getAlertRecords(params)
+    records.value = data.items
+    recordsTotal.value = data.total
+  } catch (error) {
+    console.error('加载告警记录失败:', error)
+  } finally {
+    loadingRecords.value = false
+  }
+}
+
+// ==================== 统一统计（与列表同源，后端 /summary/full） ====================
+const fullSummary = ref<{
+  by_status: { total: number; active: number; acknowledged: number; resolved: number }
+  by_severity: { info: number; warning: number; critical: number }
+  open_by_severity: { info: number; warning: number; critical: number }
+} | null>(null)
+
+async function loadFullSummary() {
+  try {
+    fullSummary.value = await getAlertFullSummary()
+  } catch (error) {
+    console.error('加载告警统计失败:', error)
+  }
+}
+
+const statTotal = computed(() => fullSummary.value?.by_status.total ?? 0)
+const statUnacknowledged = computed(() => fullSummary.value?.by_status.active ?? 0)
+const statAcknowledged = computed(() => fullSummary.value?.by_status.acknowledged ?? 0)
+const statResolved = computed(() => fullSummary.value?.by_status.resolved ?? 0)
+const statCriticalOpen = computed(() => fullSummary.value?.open_by_severity.critical ?? 0)
+const statWarningOpen = computed(() => fullSummary.value?.open_by_severity.warning ?? 0)
+
+// 卡片 → 记录列表联动筛选
+function applyStatusFilter(status: 'all' | 'active' | 'acknowledged' | 'resolved') {
+  filterStatus.value = status
+  currentPage.value = 1
+  loadRecords()
+}
+function applySeverityFilter(severity: 'all' | 'critical' | 'warning') {
+  filterSeverity.value = severity
+  currentPage.value = 1
+  loadRecords()
+}
+
+// ==================== 处置动作：认领 / 批量认领 / 处理 / 静默 ====================
+const selectedRecords = ref<AlertRecord[]>([])
+
+async function handleAcknowledge(record: AlertRecord) {
+  try {
+    await acknowledgeAlert(record.id)
     ElMessage.success(t('alerts.acknowledgeSuccess'))
-    await loadAlertRecords()
+    await Promise.all([loadRecords(), loadFullSummary()])
   } catch (error) {
     console.error('认领告警失败:', error)
     ElMessage.error(t('alerts.acknowledgeFailed'))
   }
 }
 
-async function handleResolve(notification: typeof notifications.value[number]) {
+async function handleBatchAcknowledge() {
+  const ids = selectedRecords.value.filter(r => r.status === 'active').map(r => r.id)
+  if (ids.length === 0) return
   try {
-    await resolveAlert(notification.recordId)
-    ElMessage.success(t('alerts.resolveSuccess'))
-    await loadAlertRecords()
+    await ElMessageBox.confirm(
+      t('alerts.batchAcknowledgeConfirm', { count: ids.length }),
+      t('common.confirm'),
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await batchAcknowledgeAlerts(ids)
+    ElMessage.success(t('alerts.batchAcknowledgeSuccess', { count: res.acknowledged, skipped: res.skipped }))
+    selectedRecords.value = []
+    await Promise.all([loadRecords(), loadFullSummary()])
   } catch (error) {
-    console.error('处理告警失败:', error)
-    ElMessage.error(t('alerts.resolveFailed'))
+    console.error('批量认领失败:', error)
+    ElMessage.error(t('alerts.acknowledgeFailed'))
   }
 }
 
-async function handleMute(notification: typeof notifications.value[number], hours: number) {
-  if (!notification.ruleId) return
+// 处理弹窗：必填备注
+const showResolveDialog = ref(false)
+const resolvingRecord = ref<AlertRecord | null>(null)
+const resolveNote = ref('')
+const resolveSubmitting = ref(false)
+
+function openResolveDialog(record: AlertRecord) {
+  resolvingRecord.value = record
+  resolveNote.value = ''
+  showResolveDialog.value = true
+}
+
+async function confirmResolve() {
+  const note = resolveNote.value.trim()
+  if (!note) {
+    ElMessage.warning(t('alerts.resolveNoteRequired'))
+    return
+  }
+  if (!resolvingRecord.value) return
   try {
-    await muteAlertRule(notification.ruleId, hours)
+    await ElMessageBox.confirm(t('alerts.resolveConfirm'), t('common.confirm'), { type: 'warning' })
+  } catch {
+    return
+  }
+  resolveSubmitting.value = true
+  try {
+    await resolveAlert(resolvingRecord.value.id, note)
+    ElMessage.success(t('alerts.resolveSuccess'))
+    showResolveDialog.value = false
+    resolvingRecord.value = null
+    await Promise.all([loadRecords(), loadFullSummary()])
+  } catch (error) {
+    console.error('处理告警失败:', error)
+    ElMessage.error(t('alerts.resolveFailed'))
+  } finally {
+    resolveSubmitting.value = false
+  }
+}
+
+async function handleMute(record: AlertRecord, hours: number) {
+  if (!record.rule_id) return
+  try {
+    await muteAlertRule(record.rule_id, hours)
     ElMessage.success(t('alerts.muteSuccess', { hours }))
-    await loadAlertRecords()
+    await loadRecords()
   } catch (error: any) {
     console.error('静默规则失败:', error)
     ElMessage.error(error.response?.data?.detail || t('alerts.muteFailed'))
   }
 }
 
+function handleSelectionChange(rows: AlertRecord[]) {
+  selectedRecords.value = rows
+}
+
+const hasActiveSelection = computed(() => selectedRecords.value.some(r => r.status === 'active'))
+
+// 严重未处理置顶排序（同页内）：active+critical → 其他 active → 已认领 → 已处理
+function recordSortWeight(r: AlertRecord): number {
+  if (r.status === 'resolved') return 3
+  if (r.status === 'acknowledged') return 2
+  return r.severity === 'critical' ? 0 : 1
+}
+const sortedRecords = computed(() => {
+  // 默认后端按时间倒序；这里仅做严重置顶的稳定分组，不破坏同组内时间序
+  const map = new Map<number, AlertRecord[]>()
+  records.value.forEach(r => {
+    const w = recordSortWeight(r)
+    if (!map.has(w)) map.set(w, [])
+    map.get(w)!.push(r)
+  })
+  return [...map.keys()].sort((a, b) => a - b).flatMap(w => map.get(w)!)
+})
+
+const hasCriticalUnacknowledged = computed(() =>
+  records.value.some(r => r.status === 'active' && r.severity === 'critical')
+)
+
+// ==================== 展示辅助：重置/级别徽标/状态文案/对象文案/行样式 ====================
+function resetFilters() {
+  filterSeverity.value = 'all'
+  filterStatus.value = 'all'
+  filterType.value = 'all'
+  filterTimeRange.value = null
+  currentPage.value = 1
+  loadRecords()
+}
+
+function severityTagType(severity: string) {
+  const map: Record<string, 'danger' | 'warning' | 'info'> = {
+    critical: 'danger',
+    warning: 'warning',
+    info: 'info'
+  }
+  return map[severity] || 'info'
+}
+
+function severityLabel(severity: string): string {
+  const map: Record<string, string> = {
+    critical: t('alerts.critical'),
+    warning: t('alerts.warning'),
+    info: t('alerts.info')
+  }
+  return map[severity] || severity
+}
+
+function statusLabel(status: string): string {
+  const map: Record<string, string> = {
+    active: t('alerts.unacknowledged'),
+    acknowledged: t('alerts.acknowledged'),
+    resolved: t('alerts.resolved')
+  }
+  return map[status] || status
+}
+
+function recordTargetLabel(record: AlertRecord): string {
+  if (record.object_type === 'circuit') return t('alerts.circuit')
+  if (record.device_id) return t('alerts.device')
+  return ''
+}
+
+function recordRowClass({ row }: { row: AlertRecord }): string {
+  return row.status === 'active' && row.severity === 'critical' ? 'row-critical-open' : ''
+}
+
+// ==================== 实时推送 ====================
 let unsubscribeRealtimeAlert: (() => void) | null = null
 
 onMounted(() => {
-  loadAlertRecords()
-  // 实时推送到达时刷新告警通知列表
+  loadRecords()
+  loadFullSummary()
+  loadUserNameMap()
+  loadRuleNameMap()
+  // 实时推送到达时刷新记录与统计
   unsubscribeRealtimeAlert = onNewAlert(() => {
-    loadAlertRecords()
+    loadRecords()
+    loadFullSummary()
   })
 })
 
@@ -202,39 +424,6 @@ const expiringIPs = computed((): ExpiringIP[] => {
   })
   return result.sort((a, b) => a.remainingDays - b.remainingDays)
 })
-
-const filteredExpiringIPs = computed(() => {
-  let result = expiringIPs.value
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(ip => 
-      ip.address.toLowerCase().includes(keyword) ||
-      ip.usage.toLowerCase().includes(keyword) ||
-      ip.owner.toLowerCase().includes(keyword)
-    )
-  }
-  if (selectedLevel.value === 'danger') {
-    result = result.filter(ip => ip.remainingDays <= 7)
-  } else if (selectedLevel.value === 'warn') {
-    result = result.filter(ip => ip.remainingDays > 7)
-  }
-  return result
-})
-
-/** 统一的告警筛选：关键字（title/detail）+ 严重等级 */
-function filterAlerts(list: Alert[], getKeywords: (a: Alert) => string[]): Alert[] {
-  const kw = searchKeyword.value.toLowerCase()
-  const level = selectedLevel.value
-  return list.filter(a =>
-    (!kw || getKeywords(a).some(f => f.toLowerCase().includes(kw))) &&
-    (level === 'all' || a.level === level)
-  )
-}
-
-const filteredDeviceAlerts = computed(() => filterAlerts(deviceAlerts.value, a => [a.title, a.detail || '']))
-const filteredCircuitAlerts = computed(() => filterAlerts(circuitAlerts.value, a => [a.title, a.detail || '']))
-const filteredBackupAlerts = computed(() => filterAlerts(backupAlerts.value, a => [a.title, a.detail || '']))
-const filteredPrefixAlerts = computed(() => filterAlerts(prefixAlerts.value, a => [a.title, a.detail || '']))
 
 // 专线合同预警
 const circuitAlerts = computed((): Alert[] => {
@@ -276,11 +465,11 @@ const deviceAlerts = computed((): Alert[] => {
   return result.sort((a, b) => a.days - b.days)
 })
 
-// 备份失败预警
+// 备份失败预警（status 数据值为英文枚举：success/failed/pending）
 const backupAlerts = computed((): Alert[] => {
   const result: Alert[] = []
   backups.value
-    .filter((backup) => backup.status === t('alerts.failed'))
+    .filter((backup) => backup.status === 'failed')
     .forEach((backup) => {
       const device = devices.value.find((d) => d.id === backup.deviceId)
       result.push({
@@ -322,7 +511,7 @@ const prefixAlerts = computed((): Alert[] => {
 // AI异常检测 - 设备状态异常
 const deviceAnomalies = computed((): Anomaly[] => {
   const anomalies: Anomaly[] = []
-  
+
   devices.value.forEach((device) => {
     if (device.status === 'offline') {
       anomalies.push({
@@ -356,14 +545,14 @@ const deviceAnomalies = computed((): Anomaly[] => {
       })
     }
   })
-  
+
   return anomalies
 })
 
 // AI异常检测 - 专线质量异常
 const circuitAnomalies = computed((): Anomaly[] => {
   const anomalies: Anomaly[] = []
-  
+
   circuits.value.forEach((circuit) => {
     if (circuit.status === 'down') {
       anomalies.push({
@@ -397,7 +586,7 @@ const circuitAnomalies = computed((): Anomaly[] => {
       })
     }
   })
-  
+
   return anomalies
 })
 
@@ -405,17 +594,17 @@ const circuitAnomalies = computed((): Anomaly[] => {
 const backupAnomaly = computed((): Anomaly | null => {
   const sevenDaysAgo = new Date()
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-  
+
   const recentBackups = backups.value.filter((backup) => {
     const backupDate = new Date(backup.createdAt)
     return backupDate >= sevenDaysAgo
   })
-  
+
   if (recentBackups.length === 0) return null
-  
-  const failedCount = recentBackups.filter((b) => b.status === t('alerts.failed')).length
+
+  const failedCount = recentBackups.filter((b) => b.status === 'failed').length
   const successRate = ((recentBackups.length - failedCount) / recentBackups.length) * 100
-  
+
   if (successRate < 80) {
     return {
       id: 'backup-success-rate',
@@ -432,21 +621,21 @@ const backupAnomaly = computed((): Anomaly | null => {
       detectedAt: new Date().toLocaleString(locale.value || getLocale() || 'zh-CN')
     }
   }
-  
+
   return null
 })
 
 // AI异常检测 - IP池耗尽预测
 const ipPoolAnomaly = computed((): Anomaly | null => {
   const anomalies: Anomaly[] = []
-  
+
   prefixes.value.forEach((prefix) => {
     const used = ipAddresses.value.filter((ip) => ip.prefixId === prefix.id && ip.status !== 'available').length
     const percent = (used / 254) * 100
-    
+
     if (percent >= 70) {
       const daysToExhaust = Math.ceil((254 - used) / Math.max(1, used / 30))
-      
+
       anomalies.push({
         id: `ip-pool-${prefix.id}`,
         type: t('alerts.ipPoolWarning'),
@@ -463,7 +652,7 @@ const ipPoolAnomaly = computed((): Anomaly | null => {
       })
     }
   })
-  
+
   return anomalies.sort((a, b) => (b.level === 'danger' ? 1 : 0) - (a.level === 'danger' ? 1 : 0))[0] || null
 })
 
@@ -473,42 +662,12 @@ const aiAnomalies = computed((): Anomaly[] => {
     ...deviceAnomalies.value,
     ...circuitAnomalies.value
   ]
-  
+
   if (backupAnomaly.value) all.push(backupAnomaly.value)
   if (ipPoolAnomaly.value) all.push(ipPoolAnomaly.value)
-  
+
   return all
 })
-
-// 所有预警
-const allAlerts = computed((): Alert[] => {
-  const result: Alert[] = []
-  
-  expiringIPs.value.forEach((ip) => {
-    result.push({
-      type: t('alerts.ipExpiring'),
-      title: ip.address,
-      due: ip.expireAt,
-      days: ip.remainingDays,
-      level: ip.remainingDays <= 7 ? 'danger' : 'warn',
-      detail: ip.usage,
-      ipId: ip.id
-    })
-  })
-  
-  result.push(...circuitAlerts.value)
-  result.push(...deviceAlerts.value)
-  result.push(...backupAlerts.value)
-  result.push(...prefixAlerts.value)
-  
-  return result.sort((a, b) => a.days - b.days)
-})
-
-const dangerAlerts = computed(() => allAlerts.value.filter(a => a.level === 'danger'))
-const warnAlerts = computed(() => allAlerts.value.filter(a => a.level === 'warn'))
-const unreadCount = computed(() => notifications.value.filter(n => !n.read).length)
-
-
 
 function getLevelType(level: string) {
   const map: Record<string, string> = {
@@ -533,7 +692,7 @@ function handleRenew() {
     return
   }
   if (!editingIP.value) return
-  
+
   updateIPAddress(String(editingIP.value.id), { expireAt: renewForm.value.expireAt })
   ElMessage.success(t('alerts.ipRenewed'))
   showRenewDialog.value = false
@@ -597,7 +756,7 @@ function goToAISettings() {
     <!-- 页面头部 -->
     <div class="page-header">
       <div class="header-left">
-        <p class="description">{{ t('alerts.description') }}</p>
+        <p class="description">{{ t('alerts.pageDescription') }}</p>
         <el-alert
           v-if="isViewer"
           type="info"
@@ -605,162 +764,270 @@ function goToAISettings() {
           show-icon
           style="margin-top: 12px;"
         >
-          <span>您当前为IT负责人角色，仅展示合同到期、保修到期和专线故障相关预警</span>
+          <span>{{ t('alerts.viewerHint') }}</span>
         </el-alert>
       </div>
       <div class="header-right">
-        <el-button type="primary" @click="goToAISettings">
-          <el-icon><Setting /></el-icon>
+        <el-button text @click="goToAISettings">
+          <el-icon><SetUp /></el-icon>
           {{ t('alerts.aiSettings') }}
         </el-button>
       </div>
     </div>
 
-    <!-- 统计概览卡片 -->
+    <!-- 统计概览卡片：与告警记录同源（/summary/full），点击联动筛选 -->
     <div class="overview-cards">
-      <div class="overview-card">
+      <div class="overview-card overview-card-clickable" :class="{ 'is-active': filterStatus === 'all' }" @click="applyStatusFilter('all')">
         <div class="overview-card-icon"><BellFilled /></div>
         <div class="overview-card-content">
           <div class="overview-card-label">{{ t('alerts.totalAlerts') }}</div>
-          <div class="overview-card-value">{{ allAlerts.length }}</div>
+          <div class="overview-card-value">{{ statTotal }}</div>
         </div>
       </div>
-      <div class="overview-card overview-card-danger">
+      <div class="overview-card overview-card-clickable overview-card-danger" :class="{ 'is-active': filterStatus === 'active' }" @click="applyStatusFilter('active')">
         <div class="overview-card-icon"><WarningFilled /></div>
         <div class="overview-card-content">
-          <div class="overview-card-label">{{ t('alerts.criticalAlerts') }}</div>
-          <div class="overview-card-value">{{ dangerAlerts.length }}</div>
+          <div class="overview-card-label">{{ t('alerts.unackedCount') }}</div>
+          <div class="overview-card-value">{{ statUnacknowledged }}</div>
         </div>
       </div>
-      <div class="overview-card overview-card-warning">
-        <div class="overview-card-icon"><Warning /></div>
+      <div class="overview-card overview-card-clickable" :class="{ 'is-active': filterStatus === 'acknowledged' }" @click="applyStatusFilter('acknowledged')">
+        <div class="overview-card-icon"><Bell /></div>
         <div class="overview-card-content">
-          <div class="overview-card-label">{{ t('alerts.warningAlerts') }}</div>
-          <div class="overview-card-value">{{ warnAlerts.length }}</div>
+          <div class="overview-card-label">{{ t('alerts.ackCount') }}</div>
+          <div class="overview-card-value">{{ statAcknowledged }}</div>
         </div>
       </div>
-      <div class="overview-card overview-card-success">
+      <div class="overview-card overview-card-clickable overview-card-success" :class="{ 'is-active': filterStatus === 'resolved' }" @click="applyStatusFilter('resolved')">
         <div class="overview-card-icon"><DataLine /></div>
         <div class="overview-card-content">
-          <div class="overview-card-label">{{ t('alerts.aiAnomalyDetection') }}</div>
-          <div class="overview-card-value">{{ aiAnomalies.length }}</div>
+          <div class="overview-card-label">{{ t('alerts.resolvedCount') }}</div>
+          <div class="overview-card-value">{{ statResolved }}</div>
+        </div>
+      </div>
+      <div class="overview-card overview-card-clickable overview-card-warning" :class="{ 'is-active': filterSeverity === 'critical' }" @click="applySeverityFilter(filterSeverity === 'critical' ? 'all' : 'critical')">
+        <div class="overview-card-icon"><Warning /></div>
+        <div class="overview-card-content">
+          <div class="overview-card-label">{{ t('alerts.criticalAlerts') }} · {{ t('alerts.unresolved') }}</div>
+          <div class="overview-card-value" :class="{ 'zero-muted': statCriticalOpen === 0 }">{{ statCriticalOpen }}</div>
+        </div>
+      </div>
+      <div class="overview-card overview-card-clickable" :class="{ 'is-active': filterSeverity === 'warning' }" @click="applySeverityFilter(filterSeverity === 'warning' ? 'all' : 'warning')">
+        <div class="overview-card-icon"><Warning /></div>
+        <div class="overview-card-content">
+          <div class="overview-card-label">{{ t('alerts.warningAlerts') }} · {{ t('alerts.unresolved') }}</div>
+          <div class="overview-card-value" :class="{ 'zero-muted': statWarningOpen === 0 }">{{ statWarningOpen }}</div>
         </div>
       </div>
     </div>
 
-    <!-- 告警通知面板 -->
-    <el-card class="notifications-card" shadow="never">
+    <!-- 告警记录（统一列表：合并原「通知面板」，支持认领/处理/批量/静默） -->
+    <el-card class="records-card" shadow="never">
       <template #header>
         <div class="table-header">
           <div class="card-title">
             <el-icon><Bell /></el-icon>
             {{ t('alerts.alertNotifications') }}
-            <el-badge v-if="unreadCount > 0" :value="unreadCount" class="notification-badge" />
+            <el-badge v-if="statUnacknowledged > 0" :value="statUnacknowledged" class="notification-badge" />
           </div>
-          <el-button v-if="unreadCount > 0" text @click="markAllAsRead">
-            {{ t('alerts.markAllAsRead') }}
-          </el-button>
+          <div class="header-ops">
+            <span v-if="selectedRecords.length > 0" class="selected-count">{{ t('alerts.selectedCount', { count: selectedRecords.length }) }}</span>
+            <el-button
+              v-if="canWrite && hasActiveSelection"
+              type="primary"
+              plain
+              size="small"
+              @click="handleBatchAcknowledge"
+            >
+              {{ t('alerts.batchAcknowledge') }}
+            </el-button>
+          </div>
         </div>
       </template>
-      
-      <div class="notifications-list">
-        <div 
-          v-for="notification in notifications" 
-          :key="notification.id" 
-          :class="['notification-item', { 'unread': !notification.read }]"
-        >
-          <div class="notification-icon" :class="`notification-${notification.type}`">
-            <el-icon><component :is="notification.type === 'danger' ? WarningFilled : Warning" /></el-icon>
-          </div>
-          <div class="notification-content">
-            <div class="notification-title">
-              <el-tag :type="notification.type === 'danger' ? 'danger' : 'warning'" size="small">
-                {{ notification.type === 'danger' ? t('alerts.critical') : t('alerts.warning') }}
-              </el-tag>
-              {{ notification.title }}
-            </div>
-            <div class="notification-message">{{ notification.message }}</div>
-          </div>
-          <div class="notification-side">
-            <div class="notification-time">
-              {{ notification.time }}
-              <el-tag
-                v-if="notification.status !== 'active'"
-                :type="notification.status === 'resolved' ? 'success' : 'primary'"
-                size="small"
-                effect="plain"
-              >
-                {{ notification.status === 'resolved' ? t('alerts.resolved') : t('alerts.acknowledged') }}
-              </el-tag>
-            </div>
-            <div class="notification-ops">
-              <el-button
-                v-if="notification.status === 'active'"
-                size="small"
-                type="primary"
-                plain
-                @click="handleAcknowledge(notification)"
-              >
-                {{ t('alerts.acknowledge') }}
-              </el-button>
-              <el-button
-                v-if="notification.status === 'acknowledged'"
-                size="small"
-                type="success"
-                plain
-                @click="handleResolve(notification)"
-              >
-                {{ t('alerts.resolve') }}
-              </el-button>
-              <el-dropdown
-                v-if="notification.status === 'active' && notification.ruleId"
-                @command="(cmd: number) => handleMute(notification, cmd)"
-              >
-                <el-button size="small" plain>
-                  {{ t('alerts.mute') }}
-                  <el-icon><ArrowDown /></el-icon>
-                </el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item :command="1">{{ t('alerts.mute1h') }}</el-dropdown-item>
-                    <el-dropdown-item :command="8">{{ t('alerts.mute8h') }}</el-dropdown-item>
-                    <el-dropdown-item :command="24">{{ t('alerts.mute24h') }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </div>
-        </div>
-      </div>
-    </el-card>
 
-    <!-- 搜索和筛选栏 -->
-    <el-card class="table-card" shadow="never">
+      <el-alert
+        v-if="hasCriticalUnacknowledged"
+        type="error"
+        :title="t('alerts.escalatedWarning')"
+        show-icon
+        :closable="false"
+        class="critical-banner"
+      />
+
+      <!-- 级别/状态/类型/时间四维筛选（仅作用于本列表；后端 records 不支持关键字搜索） -->
       <div class="search-bar">
-        <el-input
-          v-model="searchKeyword"
-          :placeholder="t('alerts.searchPlaceholder')"
-          class="search-input"
-          clearable
-          prefix-icon="Search"
-        />
-        <el-select
-          v-model="selectedLevel"
-          :placeholder="t('alerts.filterByLevel')"
-          clearable
-          class="level-select"
-        >
-          <el-option label="全部" value="all" />
-          <el-option :label="t('alerts.critical')" value="danger" />
-          <el-option :label="t('alerts.warning')" value="warn" />
+        <el-select v-model="filterSeverity" class="filter-select" :placeholder="t('alerts.levelAll')" @change="currentPage = 1; loadRecords()">
+          <el-option :label="t('alerts.levelAll')" value="all" />
+          <el-option :label="t('alerts.critical')" value="critical" />
+          <el-option :label="t('alerts.warning')" value="warning" />
+          <el-option :label="t('alerts.info')" value="info" />
         </el-select>
+        <el-select v-model="filterStatus" class="filter-select" :placeholder="t('alerts.statusAll')" @change="currentPage = 1; loadRecords()">
+          <el-option :label="t('alerts.statusAll')" value="all" />
+          <el-option :label="t('alerts.unacknowledged')" value="active" />
+          <el-option :label="t('alerts.acknowledged')" value="acknowledged" />
+          <el-option :label="t('alerts.resolved')" value="resolved" />
+        </el-select>
+        <el-select v-model="filterType" class="filter-select filter-select-type" :placeholder="t('alerts.typeAll')" @change="currentPage = 1; loadRecords()">
+          <el-option :label="t('alerts.typeAll')" value="all" />
+          <el-option :label="t('alerts.highLatency')" value="latency" />
+          <el-option :label="t('alerts.highPacketLoss')" value="packet_loss" />
+          <el-option :label="t('alerts.statusAbnormal')" value="status" />
+          <el-option :label="t('alerts.circuitContractAlerts')" value="circuit_expire" />
+          <el-option :label="t('alerts.offlineAlert')" value="inspection_offline" />
+          <el-option :label="t('alerts.newDevice')" value="inspection_new_device" />
+          <el-option :label="t('alerts.fingerprintChange')" value="inspection_fingerprint_change" />
+        </el-select>
+        <el-date-picker
+          v-model="filterTimeRange"
+          type="datetimerange"
+          :start-placeholder="t('alerts.timeRangePlaceholder')"
+          :end-placeholder="t('alerts.timeRangePlaceholder')"
+          class="time-range"
+          @change="currentPage = 1; loadRecords()"
+        />
         <el-button
-          v-if="searchKeyword || selectedLevel !== 'all'"
+          v-if="filterSeverity !== 'all' || filterStatus !== 'all' || filterType !== 'all' || filterTimeRange"
           text
-          @click="searchKeyword = ''; selectedLevel = 'all'"
+          @click="resetFilters"
         >
           {{ t('alerts.resetFilter') }}
         </el-button>
+      </div>
+      <div class="filter-scope-hint">{{ t('alerts.filterScopeHint') }}</div>
+
+      <el-table
+        :data="sortedRecords"
+        v-loading="loadingRecords"
+        class="records-table"
+        style="width: 100%"
+        stripe
+        border
+        @selection-change="handleSelectionChange"
+        :row-class-name="recordRowClass"
+      >
+        <el-table-column v-if="canWrite" type="selection" width="42" :selectable="(row: AlertRecord) => row.status === 'active'" />
+        <el-table-column :label="t('alerts.alertLevel')" width="86" align="center">
+          <template #default="{ row }">
+            <el-tag :type="severityTagType(row.severity)" size="small" effect="dark">
+              {{ severityLabel(row.severity) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.alertMessage')" min-width="150">
+          <template #default="{ row }">
+            <div class="record-title">
+              <span class="record-name">{{ alertTitle(row) }}</span>
+              <el-tag v-if="row.escalated_at" type="danger" size="small" effect="plain">{{ t('alerts.escalatedWarning') }}</el-tag>
+            </div>
+            <div class="record-message">{{ row.message }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.object')" width="130">
+          <template #default="{ row }">
+            <el-button
+              v-if="recordTargetLabel(row)"
+              link
+              type="primary"
+              size="small"
+              @click="goToRecordTarget(row)"
+            >
+              {{ recordTargetLabel(row) }}
+              <el-icon><View /></el-icon>
+            </el-button>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.status')" width="96" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="row.status === 'resolved' ? 'success' : row.status === 'acknowledged' ? 'primary' : 'warning'"
+              size="small"
+              effect="plain"
+            >
+              {{ statusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.alertTime')" width="160">
+          <template #default="{ row }">
+            <div>{{ formatDateTime(row.created_at) }}</div>
+            <div class="record-time-relative">{{ formatRelativeTime(row.created_at) }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.acknowledgedBy')" width="150">
+          <template #default="{ row }">
+            <span v-if="row.acknowledged_by">{{ displayName(row.acknowledged_by) }}</span>
+            <span v-if="row.acknowledged_at" class="record-time-sub">{{ formatDateTime(row.acknowledged_at) }}</span>
+            <span v-if="!row.acknowledged_by && !row.acknowledged_at">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('alerts.resolvedBy')" width="150">
+          <template #default="{ row }">
+            <template v-if="row.resolved_by || row.resolve_note">
+              <span v-if="row.resolved_by">{{ displayName(row.resolved_by) }}</span>
+              <span v-if="row.resolved_at" class="record-time-sub">{{ formatDateTime(row.resolved_at) }}</span>
+              <el-tooltip v-if="row.resolve_note" :content="row.resolve_note" placement="top">
+                <div class="record-note">{{ row.resolve_note }}</div>
+              </el-tooltip>
+            </template>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canWrite" :label="t('common.actions')" width="210" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.status === 'active'"
+              size="small"
+              type="primary"
+              plain
+              @click="handleAcknowledge(row)"
+            >
+              {{ t('alerts.acknowledge') }}
+            </el-button>
+            <el-button
+              v-if="row.status === 'acknowledged'"
+              size="small"
+              type="success"
+              plain
+              @click="openResolveDialog(row)"
+            >
+              {{ t('alerts.resolve') }}
+            </el-button>
+            <el-dropdown
+              v-if="row.status !== 'resolved' && row.rule_id"
+              trigger="click"
+              @command="(cmd: number) => handleMute(row, cmd)"
+            >
+              <el-button size="small" plain>
+                {{ t('alerts.mute') }}
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item :command="1">{{ t('alerts.mute1h') }}</el-dropdown-item>
+                  <el-dropdown-item :command="8">{{ t('alerts.mute8h') }}</el-dropdown-item>
+                  <el-dropdown-item :command="24">{{ t('alerts.mute24h') }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty :description="t('alerts.noRecords')" />
+        </template>
+      </el-table>
+
+      <div class="pagination-bar">
+        <span class="total-text">{{ t('alerts.totalItems', { total: recordsTotal }) }}</span>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="recordsTotal"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="sizes, prev, pager, next, jumper"
+          @current-change="loadRecords"
+          @size-change="currentPage = 1; loadRecords()"
+        />
       </div>
     </el-card>
 
@@ -799,11 +1066,11 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div v-if="filteredBackupAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noBackupFailures')" />
+          <div v-if="backupAlerts.length === 0" class="empty-state">
+            <el-empty :description="t('alerts.noBackupFailures')" />
           </div>
 
-          <el-table v-else class="alerts-backup-table" :data="filteredBackupAlerts" style="width: 100%" stripe border>
+          <el-table v-else class="alerts-backup-table" :data="backupAlerts" style="width: 100%" stripe border>
             <el-table-column :label="t('alerts.alertType')" min-width="100">
               <template #default="{ row }">
                 <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
@@ -853,11 +1120,11 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div v-if="filteredCircuitAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noCircuitContractAlerts')" />
+          <div v-if="circuitAlerts.length === 0" class="empty-state">
+            <el-empty :description="t('alerts.noCircuitContractAlerts')" />
           </div>
 
-          <el-table v-else class="alerts-circuit-table" :data="filteredCircuitAlerts" style="width: 100%" stripe border>
+          <el-table v-else class="alerts-circuit-table" :data="circuitAlerts" style="width: 100%" stripe border>
             <el-table-column :label="t('alerts.alertType')" min-width="100">
               <template #default="{ row }">
                 <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
@@ -904,11 +1171,11 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div v-if="filteredDeviceAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noDeviceWarrantyAlerts')" />
+          <div v-if="deviceAlerts.length === 0" class="empty-state">
+            <el-empty :description="t('alerts.noDeviceWarrantyAlerts')" />
           </div>
 
-          <el-table v-else class="alerts-device-table" :data="filteredDeviceAlerts" style="width: 100%" stripe border>
+          <el-table v-else class="alerts-device-table" :data="deviceAlerts" style="width: 100%" stripe border>
             <el-table-column :label="t('alerts.alertType')" min-width="100">
               <template #default="{ row }">
                 <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
@@ -955,14 +1222,14 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div v-if="filteredExpiringIPs.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noExpiringIPs')" />
+          <div v-if="expiringIPs.length === 0" class="empty-state">
+            <el-empty :description="t('alerts.noExpiringIPs')" />
           </div>
 
           <el-table
             v-else
             class="alerts-ip-expire-table"
-            :data="filteredExpiringIPs"
+            :data="expiringIPs"
             style="width: 100%"
             stripe
             border
@@ -1031,11 +1298,11 @@ function goToAISettings() {
             </div>
           </template>
 
-          <div v-if="filteredPrefixAlerts.length === 0" class="empty-state">
-            <el-empty :description="searchKeyword || selectedLevel !== 'all' ? t('alerts.noMatchingResults') : t('alerts.noSubnetCapacityAlerts')" />
+          <div v-if="prefixAlerts.length === 0" class="empty-state">
+            <el-empty :description="t('alerts.noSubnetCapacityAlerts')" />
           </div>
 
-          <el-table v-else class="alerts-prefix-table" :data="filteredPrefixAlerts" style="width: 100%" stripe border>
+          <el-table v-else class="alerts-prefix-table" :data="prefixAlerts" style="width: 100%" stripe border>
             <el-table-column :label="t('alerts.alertType')" min-width="100">
               <template #default="{ row }">
                 <el-tag :type="getLevelType(row.level)" effect="dark" size="small">{{ row.type }}</el-tag>
@@ -1107,6 +1374,40 @@ function goToAISettings() {
       </el-tab-pane>
     </el-tabs>
 
+    <!-- 处理告警对话框（必填备注 + 二次确认） -->
+    <ElDialog
+      v-model="showResolveDialog"
+      :title="t('alerts.resolveAlert')"
+      width="520px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="resolvingRecord" class="resolve-form">
+        <div class="form-row">
+          <label>{{ t('alerts.alertName') }}</label>
+          <span>{{ alertTitle(resolvingRecord) }}</span>
+        </div>
+        <div class="form-row form-row-top">
+          <label>{{ t('alerts.alertMessage') }}</label>
+          <span class="resolve-message">{{ resolvingRecord.message }}</span>
+        </div>
+        <div class="form-row form-row-top">
+          <label>{{ t('alerts.resolveNoteLabel') }} *</label>
+          <el-input
+            v-model="resolveNote"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            :placeholder="t('alerts.resolveNotePlaceholder')"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showResolveDialog = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="resolveSubmitting" @click="confirmResolve">{{ t('alerts.resolve') }}</el-button>
+      </template>
+    </ElDialog>
+
     <!-- IP续期对话框 -->
     <ElDialog
       v-model="showRenewDialog"
@@ -1154,33 +1455,33 @@ function goToAISettings() {
   align-items: flex-start;
 }
 
-.header-left h1 {
-  font-size: 24px;
-  font-weight: 600;
-  color: #262626;
-  margin: 0 0 8px 0;
-}
-
 .header-left .description {
   font-size: 14px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   margin: 0;
 }
 
+.header-ops {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ==================== 统计概览卡片 ==================== */
 .overview-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 16px;
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 12px;
-  padding: 24px;
+  padding: 20px;
   display: flex;
   align-items: center;
-  gap: 20px;
-  border: 1px solid #e8e8e8;
+  gap: 14px;
+  border: 1px solid var(--el-border-color);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   overflow: hidden;
@@ -1193,25 +1494,39 @@ function goToAISettings() {
   left: 0;
   right: 0;
   height: 3px;
-  background: linear-gradient(90deg, #d9d9d9, transparent);
+  background: linear-gradient(90deg, var(--el-border-color), transparent);
 }
 
-.overview-card:hover {
+.overview-card-clickable {
+  cursor: pointer;
+}
+
+.overview-card-clickable:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--el-box-shadow-light);
+}
+
+.overview-card.is-active {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
+
+.overview-card.is-active::before {
+  background: linear-gradient(90deg, var(--el-color-primary), transparent);
 }
 
 .overview-card-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #e6f7ff, #fff);
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--el-fill-color-light);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
-  color: #1890ff;
+  font-size: 22px;
+  color: var(--el-color-primary);
   transition: transform 0.3s ease;
+  flex-shrink: 0;
 }
 
 .overview-card:hover .overview-card-icon {
@@ -1219,89 +1534,88 @@ function goToAISettings() {
 }
 
 .overview-card-danger {
-  border-color: #ffccc7;
+  border-color: var(--el-color-danger-light-7);
 }
 
 .overview-card-danger::before {
-  background: linear-gradient(90deg, #ff4d4f, #ff7875);
+  background: linear-gradient(90deg, var(--el-color-danger), transparent);
 }
 
 .overview-card-danger .overview-card-icon {
-  background: linear-gradient(135deg, #fff2f0, #fff);
-  color: #ff4d4f;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
 }
 
 .overview-card-danger .overview-card-value {
-  color: #ff4d4f;
+  color: var(--el-color-danger);
 }
 
 .overview-card-warning {
-  border-color: #ffe58f;
+  border-color: var(--el-color-warning-light-7);
 }
 
 .overview-card-warning::before {
-  background: linear-gradient(90deg, #faad14, #ffc53d);
+  background: linear-gradient(90deg, var(--el-color-warning), transparent);
 }
 
 .overview-card-warning .overview-card-icon {
-  background: linear-gradient(135deg, #fffbe6, #fff);
-  color: #faad14;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
 }
 
 .overview-card-warning .overview-card-value {
-  color: #faad14;
+  color: var(--el-color-warning);
 }
 
 .overview-card-success {
-  border-color: #b7eb8f;
+  border-color: var(--el-color-success-light-7);
 }
 
 .overview-card-success::before {
-  background: linear-gradient(90deg, #52c41a, #73d13d);
+  background: linear-gradient(90deg, var(--el-color-success), transparent);
 }
 
 .overview-card-success .overview-card-icon {
-  background: linear-gradient(135deg, #f6ffed, #fff);
-  color: #52c41a;
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
 }
 
 .overview-card-success .overview-card-value {
-  color: #52c41a;
+  color: var(--el-color-success);
 }
 
 .overview-card-content {
   flex: 1;
+  min-width: 0;
 }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--el-text-color-secondary);
   margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overview-card-value {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
 }
 
-.table-card {
+.zero-muted {
+  color: var(--el-text-color-placeholder);
+}
+
+/* ==================== 告警记录卡片 ==================== */
+.records-card {
   border-radius: 8px;
 }
 
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.search-input {
-  width: 300px;
-}
-
-.level-select {
-  width: 160px;
+.records-card :deep(.el-card__header) {
+  padding: 14px 20px;
 }
 
 .table-header {
@@ -1317,118 +1631,185 @@ function goToAISettings() {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--el-text-color-primary);
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--el-color-primary);
 }
 
 .notification-badge {
   margin-left: 8px;
 }
 
-.notifications-card {
-  border-radius: 8px;
+.selected-count {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
-.notifications-list {
+.critical-banner {
+  margin-bottom: 12px;
+}
+
+/* ==================== 筛选栏 ==================== */
+.search-bar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.filter-select {
+  width: 140px;
+}
+
+.filter-select-type {
+  width: 170px;
+}
+
+.time-range {
+  width: 340px;
+}
+
+.filter-scope-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  margin-top: 8px;
+}
+
+/* ==================== 记录表格 ==================== */
+.records-table {
+  margin-top: 12px;
+}
+
+.records-table :deep(.row-critical-open) {
+  background: var(--el-color-danger-light-9);
+}
+
+.records-table :deep(.row-critical-open:hover > td) {
+  background: var(--el-color-danger-light-8);
+}
+
+.record-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.record-name {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.record-message {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+}
+
+.record-time-relative {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  margin-top: 2px;
+}
+
+.record-time-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.record-note {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
-.notification-item {
+.total-text {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* ==================== 处理弹窗 ==================== */
+.resolve-form {
+  padding: 4px 0;
+}
+
+.form-row {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: #fafafa;
-  border-radius: 8px;
-  border-left: 3px solid #d9d9d9;
-  transition: all 0.2s ease;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-.notification-item.unread {
-  background: #fffbe6;
-  border-left-color: #faad14;
+.form-row-top {
+  align-items: flex-start;
 }
 
-.notification-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: #f5f5f5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  color: #8c8c8c;
-}
-
-.notification-icon.notification-danger {
-  background: #fff2f0;
-  color: #ff4d4f;
-}
-
-.notification-icon.notification-warning {
-  background: #fffbe6;
-  color: #faad14;
-}
-
-.notification-content {
-  flex: 1;
-}
-
-.notification-title {
+.form-row label {
   font-size: 14px;
   font-weight: 500;
-  color: #262626;
-  margin-bottom: 4px;
-}
-
-.notification-message {
-  font-size: 13px;
-  color: #8c8c8c;
-}
-
-.notification-time {
-  font-size: 12px;
-  color: #bfbfbf;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.notification-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  color: var(--el-text-color-regular);
   flex-shrink: 0;
 }
 
-.notification-ops {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.form-row code {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 14px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 4px 8px;
+  border-radius: 4px;
 }
 
+.form-row span {
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.resolve-message {
+  text-align: right;
+  color: var(--el-text-color-secondary) !important;
+  max-width: 320px;
+}
+
+.resolve-form .el-textarea {
+  margin-top: 8px;
+}
+
+/* ==================== 预警 Tab ==================== */
 .alerts-tabs {
   background: transparent;
 }
 
 .alerts-tabs :deep(.el-tabs__header) {
-  margin-bottom: 0;
-  background: #fff;
+  margin-bottom: 16px;
+  background: var(--el-bg-color);
   padding: 0 16px;
   border-radius: 8px 8px 0 0;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--el-border-color);
 }
 
 .alerts-tabs :deep(.el-tabs__content) {
   padding: 0;
+}
+
+.table-card {
+  border-radius: 8px;
+  margin-bottom: 16px;
 }
 
 .empty-state {
@@ -1439,8 +1820,8 @@ function goToAISettings() {
 .ip-address {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   font-size: 14px;
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
   padding: 4px 8px;
   border-radius: 4px;
 }
@@ -1449,168 +1830,23 @@ function goToAISettings() {
   font-weight: bold;
 }
 
-.quick-alert-list {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
-.quick-alert-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: #fafafa;
-  border-radius: 8px;
-  border-left: 3px solid #d9d9d9;
-}
-
-.quick-alert-item.alert-danger {
-  background: #fff2f0;
-  border-left-color: #ff4d4f;
-}
-
-.quick-alert-item.alert-warn {
-  background: #fffbe6;
-  border-left-color: #faad14;
-}
-
-.quick-alert-icon {
-  font-size: 20px;
-  color: #8c8c8c;
-}
-
-.quick-alert-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.quick-alert-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #262626;
-  margin-bottom: 4px;
-}
-
-.quick-alert-meta {
-  font-size: 12px;
-  color: #8c8c8c;
-}
-
-.alert-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.alert-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 16px;
-  background: #fafafa;
-  border-radius: 8px;
-  border-left: 3px solid #d9d9d9;
-}
-
-.alert-item.alert-danger {
-  background: #fff2f0;
-  border-left-color: #ff4d4f;
-}
-
-.alert-item.alert-warn {
-  background: #fffbe6;
-  border-left-color: #faad14;
-}
-
-.alert-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  color: #8c8c8c;
-  flex-shrink: 0;
-}
-
-.alert-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.alert-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
-.alert-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #262626;
-}
-
-.alert-detail {
-  font-size: 13px;
-  color: #8c8c8c;
-}
-
-.alert-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.alert-due {
-  font-size: 13px;
-  color: #8c8c8c;
-}
-
-.alert-action {
-  display: flex;
-  gap: 8px;
-}
-
 .renew-form {
   padding: 16px 0;
 }
 
-.form-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.form-row label {
-  font-size: 14px;
-  font-weight: 500;
-  color: #595959;
-}
-
-.form-row code {
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 14px;
-  color: #1890ff;
-  background: #e6f7ff;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.form-row span {
-  font-size: 14px;
-  color: #262626;
+@media (max-width: 1400px) {
+  .overview-cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 @media (max-width: 1200px) {
   .overview-cards {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .time-range {
+    width: 100%;
   }
 }
 
@@ -1624,8 +1860,10 @@ function goToAISettings() {
     gap: 16px;
   }
 
-  .quick-alert-list {
-    grid-template-columns: 1fr;
+  .filter-select,
+  .filter-select-type,
+  .time-range {
+    width: 100%;
   }
 }
 

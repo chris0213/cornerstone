@@ -52,13 +52,18 @@ class AlertRecord(Base):
     status = Column(String(20), nullable=False, default="active", comment="状态：active/acknowledged/resolved")
     acknowledged_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="确认人")
     acknowledged_at = Column(DateTime, comment="确认时间")
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="处理人")
     resolved_at = Column(DateTime, comment="恢复时间")
+    resolve_note = Column(Text, nullable=True, comment="处理备注（手动处理必填）")
+    object_type = Column(String(20), nullable=True, comment="告警对象类型：device/circuit/prefix/ip/system（消除 device_id 语义过载）")
     ai_analysis = Column(Text, nullable=True, comment="AI根因分析结果")
+    escalated_at = Column(DateTime, nullable=True, comment="严重告警升级提醒时间（长时间未认领时重复提醒）")
     created_at = Column(DateTime, server_default=func.now())
     
     rule = relationship("AlertRule")
     device = relationship("Device", back_populates="alert_records")
-    acknowledged_user = relationship("User")
+    acknowledged_user = relationship("User", foreign_keys=[acknowledged_by])
+    resolved_user = relationship("User", foreign_keys=[resolved_by])
 
 
 class AlertNotification(Base):

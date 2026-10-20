@@ -1,16 +1,19 @@
 """告警管理API"""
 from datetime import datetime, timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, Query, HTTPException, Request, WebSocket
 from pydantic import BaseModel
-from sqlalchemy import select, update, delete, desc
+from sqlalchemy import select, update, delete, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models.alert import AlertRule, AlertRecord, AlertNotification
 from src.models.device import Device
-from src.services.alert_service import alert_service
-from src.api.dependencies import get_current_active_user
+from src.models import User
+from src.services.alert_service import AlertService, alert_service
+from src.api.dependencies import get_current_active_user, require_permission
+from src.utils.logger import audit_log
+from src.utils.ip_whitelist import get_client_ip_from_request
 from src.schemas.alert import AlertRuleCreate, AlertRuleUpdate
 
 router = APIRouter(tags=["alerts"])
@@ -163,24 +166,46 @@ async def get_alert_records(
     device_id: Optional[int] = None,
     severity: Optional[str] = Query(None, enum=["info", "warning", "critical"]),
     status: Optional[str] = Query(None, enum=["active", "acknowledged", "resolved"]),
-    limit: int = Query(100, ge=1, le=1000),
+    alert_type: Optional[str] = Query(None, description="告警类型：latency/packet_loss/status/circuit_expire/system"),
+    start_time: Optional[datetime] = Query(None, description="触发时间起点（含）"),
+    end_time: Optional[datetime] = Query(None, description="触发时间终点（含）"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    """获取告警记录列表"""
-    query = select(AlertRecord).order_by(AlertRecord.created_at.desc()).limit(limit)
-    
+    """获取告警记录列表（分页 + total，支持级别/状态/类型/时间筛选）"""
+    conditions = []
     if device_id:
-        query = query.where(AlertRecord.device_id == device_id)
+        conditions.append(AlertRecord.device_id == device_id)
     if severity:
-        query = query.where(AlertRecord.severity == severity)
+        conditions.append(AlertRecord.severity == severity)
     if status:
-        query = query.where(AlertRecord.status == status)
-    
+        conditions.append(AlertRecord.status == status)
+    if alert_type:
+        conditions.append(AlertRecord.alert_type == alert_type)
+    if start_time:
+        conditions.append(AlertRecord.created_at >= start_time)
+    if end_time:
+        conditions.append(AlertRecord.created_at <= end_time)
+
+    base_query = select(AlertRecord)
+    if conditions:
+        base_query = base_query.where(*conditions)
+
+    total_result = await db.execute(select(func.count()).select_from(base_query.subquery()))
+    total = total_result.scalar_one()
+
+    query = (
+        base_query
+        .order_by(AlertRecord.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await db.execute(query)
     records = result.scalars().all()
-    
-    return {"code": 0, "message": "ok", "data": records}
+
+    return {"code": 0, "message": "ok", "data": {"items": records, "total": total, "page": page, "page_size": page_size}}
 
 
 @router.get("/records/{record_id}")
@@ -248,29 +273,106 @@ async def get_alert_record_history(
 @router.post("/records/{record_id}/acknowledge")
 async def acknowledge_alert(
     record_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("alerts:write"))
 ):
-    """确认告警"""
+    """认领告警（标记已知悉，进入处理流程）"""
+    result = await db.execute(select(AlertRecord).where(AlertRecord.id == record_id))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="告警记录不存在")
+    if record.status == "resolved":
+        raise HTTPException(status_code=400, detail="告警已处理，无需认领")
+
     await alert_service.acknowledge_alert(db, record_id, current_user.id)
-    return {"code": 0, "message": "告警已确认"}
+
+    await audit_log(
+        db, current_user.id, "alert_record", record_id, "acknowledge",
+        {"severity": record.severity, "message": record.message},
+        get_client_ip_from_request(request)
+    )
+    return {"code": 0, "message": "告警已认领"}
+
+
+class ResolveRequest(BaseModel):
+    """处理告警请求：备注必填"""
+    note: str
 
 
 @router.post("/records/{record_id}/resolve")
 async def resolve_alert(
     record_id: int,
+    body: ResolveRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("alerts:write"))
 ):
-    """手动恢复告警"""
+    """手动处理告警（备注必填）"""
+    note = (body.note or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="处理备注不能为空")
+
+    result = await db.execute(select(AlertRecord).where(AlertRecord.id == record_id))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="告警记录不存在")
+    if record.status == "resolved":
+        raise HTTPException(status_code=400, detail="告警已是处理完成状态")
+
     stmt = update(AlertRecord).where(AlertRecord.id == record_id).values(
         status="resolved",
-        resolved_at=datetime.now()
+        resolved_by=current_user.id,
+        resolved_at=datetime.now(),
+        resolve_note=note
     )
     await db.execute(stmt)
     await db.commit()
 
-    return {"code": 0, "message": "告警已恢复"}
+    await audit_log(
+        db, current_user.id, "alert_record", record_id, "resolve",
+        {"note": note, "severity": record.severity, "message": record.message},
+        get_client_ip_from_request(request)
+    )
+
+    return {"code": 0, "message": "告警已处理"}
+
+
+class BatchAcknowledgeRequest(BaseModel):
+    """批量认领请求"""
+    record_ids: List[int]
+
+
+@router.post("/records/batch-acknowledge")
+async def batch_acknowledge_alerts(
+    body: BatchAcknowledgeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("alerts:write"))
+):
+    """批量认领告警：仅处理 active 状态的记录，已认领/已处理自动跳过"""
+    if not body.record_ids:
+        raise HTTPException(status_code=400, detail="record_ids 不能为空")
+
+    now = datetime.now()
+    stmt = (
+        update(AlertRecord)
+        .where(AlertRecord.id.in_(body.record_ids), AlertRecord.status == "active")
+        .values(status="acknowledged", acknowledged_by=current_user.id, acknowledged_at=now)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+
+    acknowledged = result.rowcount
+    skipped = len(body.record_ids) - acknowledged
+
+    await audit_log(
+        db, current_user.id, "alert_record", 0, "batch_acknowledge",
+        {"record_ids": body.record_ids, "acknowledged": acknowledged, "skipped": skipped},
+        get_client_ip_from_request(request)
+    )
+
+    return {"code": 0, "message": f"已认领 {acknowledged} 条，跳过 {skipped} 条", "data": {"acknowledged": acknowledged, "skipped": skipped}}
 
 
 class MuteRequest(BaseModel):
@@ -282,8 +384,9 @@ class MuteRequest(BaseModel):
 async def mute_alert_rule(
     rule_id: int,
     body: MuteRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("alerts:write"))
 ):
     """静默规则：到期前该规则不再产生新告警（已有告警不受影响）"""
     if not 1 <= body.hours <= 168:
@@ -298,6 +401,12 @@ async def mute_alert_rule(
     rule.muted_until = muted_until
     await db.commit()
 
+    await audit_log(
+        db, current_user.id, "alert_rule", rule_id, "mute",
+        {"hours": body.hours, "name": rule.name},
+        get_client_ip_from_request(request)
+    )
+
     return {
         "code": 0,
         "message": f"规则已静默 {body.hours} 小时",
@@ -308,8 +417,9 @@ async def mute_alert_rule(
 @router.post("/rules/{rule_id}/unmute")
 async def unmute_alert_rule(
     rule_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("alerts:write"))
 ):
     """取消静默"""
     result = await db.execute(select(AlertRule).where(AlertRule.id == rule_id))
@@ -319,6 +429,13 @@ async def unmute_alert_rule(
 
     rule.muted_until = None
     await db.commit()
+
+    await audit_log(
+        db, current_user.id, "alert_rule", rule_id, "unmute",
+        {"name": rule.name},
+        get_client_ip_from_request(request)
+    )
+
     return {"code": 0, "message": "已取消静默"}
 
 
@@ -329,6 +446,16 @@ async def get_alert_summary(
 ):
     """获取告警统计概览"""
     summary = await alert_service.get_alert_summary(db)
+    return {"code": 0, "message": "ok", "data": summary}
+
+
+@router.get("/summary/full")
+async def get_alert_full_summary(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)
+):
+    """完整统计口径：状态维度（总数/未认领/已认领/已处理）× 级别维度交叉计数"""
+    summary = await AlertService.get_full_summary(db)
     return {"code": 0, "message": "ok", "data": summary}
 
 

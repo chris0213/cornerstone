@@ -60,28 +60,38 @@ class CircuitExpireService:
     
     @staticmethod
     async def _create_expire_alert(db: AsyncSession, circuit: Circuit, severity: str, message: str):
-        """创建专线到期告警记录"""
+        """创建专线到期告警记录
+
+        去重策略（按 对象+规则 即 circuit_expire + circuit.id）：
+        - 已有未处理（active/acknowledged）告警 → 原地更新内容，不新增；
+          created_at 保留首次触发时间，last_checked_at 记录最新检测时间。
+        - 已处理（resolved）→ 默认不再重建（处理有效语义）；仅当阈值恶化
+          （剩余天数比上次处理时更小，如 19 天 → 10 天）才视为新问题重建。
+        """
+        now = datetime.now()
+        days_remaining = (circuit.contract_end - now).days
+
         existing_query = select(AlertRecord).where(
             AlertRecord.alert_type == "circuit_expire",
             AlertRecord.device_id == circuit.id,
-            AlertRecord.status == "active"
-        )
+            AlertRecord.status.in_(("active", "acknowledged"))
+        ).order_by(AlertRecord.created_at.desc()).limit(1)
         existing_result = await db.execute(existing_query)
         existing_alert = existing_result.scalar_one_or_none()
-        
+
         if existing_alert:
             # 检查是否需要重新发送通知
             old_severity = existing_alert.severity
             existing_alert.message = message
             existing_alert.severity = severity
-            existing_alert.current_value = (circuit.contract_end - datetime.now()).days
+            existing_alert.current_value = days_remaining
             await db.flush()
-            
+
             # 如果严重度升级，需要重新发送通知
             severity_order = {"info": 0, "warning": 1, "critical": 2}
             old_level = severity_order.get(old_severity, 0)
             new_level = severity_order.get(severity, 0)
-            
+
             if new_level > old_level:
                 print(f"专线 [{circuit.name}] 告警严重度升级: {old_severity} -> {severity}, 重新发送通知")
                 await CircuitExpireService._send_expire_notifications(db, existing_alert)
@@ -93,9 +103,9 @@ class CircuitExpireService:
                 ).order_by(AlertNotification.sent_at.desc()).limit(1)
                 last_notification_result = await db.execute(last_notification_query)
                 last_notification = last_notification_result.scalar_one_or_none()
-                
+
                 if last_notification and last_notification.sent_at:
-                    hours_since_last_notification = (datetime.now() - last_notification.sent_at).total_seconds() / 3600
+                    hours_since_last_notification = (now - last_notification.sent_at).total_seconds() / 3600
                     if hours_since_last_notification >= 24:
                         print(f"专线 [{circuit.name}] 告警已超过24小时，重新发送通知")
                         await CircuitExpireService._send_expire_notifications(db, existing_alert)
@@ -103,40 +113,45 @@ class CircuitExpireService:
                     # 从未发送过通知，立即发送
                     print(f"专线 [{circuit.name}] 告警从未发送过通知，立即发送")
                     await CircuitExpireService._send_expire_notifications(db, existing_alert)
-        else:
-            acknowledged_query = select(AlertRecord).where(
-                AlertRecord.alert_type == "circuit_expire",
-                AlertRecord.device_id == circuit.id,
-                AlertRecord.status == "acknowledged",
-                AlertRecord.acknowledged_at.isnot(None)
-            ).order_by(AlertRecord.acknowledged_at.desc()).limit(1)
-            acknowledged_result = await db.execute(acknowledged_query)
-            acknowledged_alert = acknowledged_result.scalar_one_or_none()
-            
-            if acknowledged_alert:
-                acknowledge_time = acknowledged_alert.acknowledged_at
-                if acknowledge_time and (datetime.now() - acknowledge_time).days < 7:
-                    print(f"专线 [{circuit.name}] 的到期告警已在 {acknowledge_time} 被确认，7天内不再重复通知")
-                    return
-            
-            alert_record = AlertRecord(
-                rule_id=None,
-                device_id=circuit.id,
-                target_ip=circuit.public_ip or "",
-                alert_type="circuit_expire",
-                severity=severity,
-                message=message,
-                current_value=(circuit.contract_end - datetime.now()).days,
-                threshold=0
-            )
-            db.add(alert_record)
-            await db.flush()
-            
-            await CircuitExpireService._send_expire_notifications(db, alert_record)
+            return
 
-            # 实时推送给在线前端（失败不影响告警落库）
-            await broadcast_new_alert(alert_record)
-    
+        # 无未处理告警：检查是否处理过同类告警（resolved）
+        # 处理有效语义：处理后不再因同一问题反复重建；仅阈值恶化才重建
+        resolved_query = select(AlertRecord).where(
+            AlertRecord.alert_type == "circuit_expire",
+            AlertRecord.device_id == circuit.id,
+            AlertRecord.status == "resolved"
+        ).order_by(AlertRecord.resolved_at.desc()).limit(1)
+        resolved_result = await db.execute(resolved_query)
+        resolved_alert = resolved_result.scalar_one_or_none()
+
+        if resolved_alert and resolved_alert.current_value is not None \
+                and days_remaining >= resolved_alert.current_value:
+            # 剩余天数未比上次处理时更小（问题未恶化），不重建
+            print(f"专线 [{circuit.name}] 到期告警已于 {resolved_alert.resolved_at} 处理"
+                  f"（当时剩余 {resolved_alert.current_value:.0f} 天，现 {days_remaining} 天，未恶化），不重建")
+            return
+
+        # 全新告警（或处理后又恶化）：新建记录，object_type 标记真实对象类型
+        alert_record = AlertRecord(
+            rule_id=None,
+            device_id=circuit.id,
+            target_ip=circuit.public_ip or "",
+            alert_type="circuit_expire",
+            severity=severity,
+            message=message,
+            current_value=days_remaining,
+            threshold=0,
+            object_type="circuit"
+        )
+        db.add(alert_record)
+        await db.flush()
+
+        await CircuitExpireService._send_expire_notifications(db, alert_record)
+
+        # 实时推送给在线前端（失败不影响告警落库）
+        await broadcast_new_alert(alert_record)
+
     @staticmethod
     async def _send_expire_notifications(db: AsyncSession, alert_record: AlertRecord):
         """发送专线到期通知"""

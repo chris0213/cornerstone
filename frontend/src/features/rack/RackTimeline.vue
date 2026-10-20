@@ -34,8 +34,8 @@ async function loadAlerts() {
   try {
     const deviceIds = new Set(props.devices.map(d => d.id))
     // 拉取最近 100 条告警，前端过滤出当前机柜内设备的
-    const records = await getAlertRecords({ limit: 100 })
-    alertRecords.value = records.filter(r => deviceIds.has(r.device_id))
+    const page = await getAlertRecords({ page: 1, page_size: 100 })
+    alertRecords.value = page.items.filter((r: AlertRecord) => deviceIds.has(r.device_id))
   } catch (error) {
     console.error('Failed to load rack alerts:', error)
     alertRecords.value = []

@@ -80,16 +80,41 @@ class AlertService:
             if matched:
                 logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} name={rule.name} "
                             f"condition_type={rule.condition_type} severity={rule.severity} condition matched")
-                # 检查是否已有相同类型的活动告警
+                # 检查是否已有相同类型的未处理告警（active/acknowledged 均视为未处理）
                 existing_query = select(AlertRecord).where(
                     AlertRecord.device_id == device_id,
                     AlertRecord.rule_id == rule.id,
-                    AlertRecord.status == "active"
-                )
+                    AlertRecord.status.in_(("active", "acknowledged"))
+                ).order_by(AlertRecord.created_at.desc()).limit(1)
                 existing_result = await db.execute(existing_query)
                 existing_alert = existing_result.scalar_one_or_none()
                 
                 if not existing_alert:
+                    # 处理有效语义：已处理（resolved）的同对象+同规则告警，
+                    # 仅当阈值再次恶化（对 gt 操作符当前值更高 / lt 更低）才重建，避免反复复发
+                    previous_query = select(AlertRecord).where(
+                        AlertRecord.device_id == device_id,
+                        AlertRecord.rule_id == rule.id,
+                        AlertRecord.status == "resolved"
+                    ).order_by(AlertRecord.resolved_at.desc()).limit(1)
+                    previous_result = await db.execute(previous_query)
+                    previous_alert = previous_result.scalar_one_or_none()
+
+                    current_value = AlertService._get_current_value(rule, latency, packet_loss, status)
+                    if previous_alert and previous_alert.current_value is not None and current_value is not None:
+                        # 与上次触发时对比：恶化判定随操作符方向（gt 越大越坏 / lt 越小越坏）；
+                        # status 类规则无连续数值（current_value 为 None），视为恶化需重建
+                        worsened = (
+                            current_value > previous_alert.current_value
+                            if rule.operator in ("gt", "eq")
+                            else current_value < previous_alert.current_value
+                        )
+                        if not worsened:
+                            logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} "
+                                        f"已处理告警阈值未恶化（上次 {previous_alert.current_value}，"
+                                        f"当前 {current_value}），不重建")
+                            continue
+
                     logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} no existing active alert, creating new")
                     # 创建新告警
                     alert_record = AlertRecord(
@@ -99,8 +124,9 @@ class AlertService:
                         alert_type=rule.condition_type,
                         severity=rule.severity,
                         message=AlertService._generate_message(rule, latency, packet_loss, status, baseline_info),
-                        current_value=AlertService._get_current_value(rule, latency, packet_loss, status),
-                        threshold=rule.threshold
+                        current_value=current_value,
+                        threshold=rule.threshold,
+                        object_type="device"
                     )
                     db.add(alert_record)
                     await db.flush()
@@ -770,16 +796,87 @@ class AlertService:
             AlertRecord.severity,
             func.count(AlertRecord.id).label("count")
         ).where(AlertRecord.status == "active").group_by(AlertRecord.severity)
-        
+
         result = await db.execute(query)
         status_counts = result.all()
-        
+
         summary = {"info": 0, "warning": 0, "critical": 0}
         for severity, count in status_counts:
             if severity in summary:
                 summary[severity] = count
-        
+
         return summary
+
+    @staticmethod
+    async def get_full_summary(db: AsyncSession) -> dict:
+        """完整统计口径：状态维度（总数/未认领/已认领/已处理）× 级别维度交叉计数
+
+        前端顶部卡片与列表统一消费此接口，保证口径一致。
+        """
+        result = await db.execute(
+            select(AlertRecord.status, AlertRecord.severity, func.count(AlertRecord.id))
+            .group_by(AlertRecord.status, AlertRecord.severity)
+        )
+        rows = result.all()
+
+        by_status = {"total": 0, "active": 0, "acknowledged": 0, "resolved": 0}
+        by_severity = {"info": 0, "warning": 0, "critical": 0}
+        # 未处理（active+acknowledged）按级别计数，供「严重/警告」卡片联动筛选
+        open_by_severity = {"info": 0, "warning": 0, "critical": 0}
+
+        for status, severity, count in rows:
+            by_status["total"] += count
+            if status in by_status:
+                by_status[status] = count
+            if severity in by_severity:
+                by_severity[severity] += count
+            if status in ("active", "acknowledged") and severity in open_by_severity:
+                open_by_severity[severity] += count
+
+        return {
+            "by_status": by_status,
+            "by_severity": by_severity,
+            "open_by_severity": open_by_severity,
+        }
+
+    # 严重告警升级提醒：critical 未认领超过该小时数后，检查任务中重复发通知
+    CRITICAL_ESCALATION_HOURS = 24
+
+    @staticmethod
+    async def escalate_stale_critical_alerts(db: AsyncSession) -> int:
+        """严重告警升级：critical 且长时间未认领 → 重复发通知并标记 escalated_at
+
+        幂等：每条告警两次提醒间隔不小于 CRITICAL_ESCALATION_HOURS。
+        返回本次触发升级提醒的告警数。
+        """
+        threshold = datetime.now() - timedelta(hours=AlertService.CRITICAL_ESCALATION_HOURS)
+        result = await db.execute(
+            select(AlertRecord).where(
+                AlertRecord.severity == "critical",
+                AlertRecord.status == "active",
+                AlertRecord.created_at < threshold,
+            )
+        )
+        stale_alerts = result.scalars().all()
+
+        escalated = 0
+        for alert in stale_alerts:
+            # 已提醒过且距上次提醒不足间隔 → 跳过（幂等）
+            if alert.escalated_at and (datetime.now() - alert.escalated_at).total_seconds() / 3600 \
+                    < AlertService.CRITICAL_ESCALATION_HOURS:
+                continue
+            logger.warning(f"[告警升级] critical 告警 id={alert.id} 已超过 "
+                           f"{AlertService.CRITICAL_ESCALATION_HOURS}h 未认领，重复发送提醒")
+            try:
+                await AlertService._send_notifications(db, alert)
+            except Exception as e:
+                logger.warning(f"[告警升级] id={alert.id} 提醒发送失败（不影响主流程）: {e}")
+            alert.escalated_at = datetime.now()
+            escalated += 1
+
+        if escalated:
+            await db.commit()
+        return escalated
 
 
 alert_service = AlertService()

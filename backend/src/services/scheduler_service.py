@@ -35,6 +35,18 @@ async def scheduled_circuit_expire_task():
         await db.commit()
 
 
+async def scheduled_alert_escalation_task():
+    """严重告警升级提醒：critical 长时间未认领时重复通知（幂等，内部按 escalated_at 限频24h）"""
+    from src.services.alert_service import AlertService
+    async with async_session() as db:
+        try:
+            escalated = await AlertService.escalate_stale_critical_alerts(db)
+            if escalated:
+                print(f"[{datetime.now()}] Escalated {escalated} stale critical alerts")
+        except Exception as e:
+            print(f"[{datetime.now()}] Alert escalation error: {e}")
+
+
 async def scheduled_monthly_report_task():
     """月报定时生成与推送：每分钟检查一次配置时间（配置保存即生效）"""
     from src.services.report_schedule_service import run_scheduled_report
@@ -79,6 +91,14 @@ def start_scheduler(interval_minutes: int = 5):
         scheduled_monthly_report_task,
         trigger=CronTrigger(minute="*"),
         id="monthly_report_task",
+        replace_existing=True
+    )
+
+    # 严重告警升级提醒：每小时检查一次（升级限频24h由 escalated_at 保证）
+    scheduler.add_job(
+        scheduled_alert_escalation_task,
+        trigger=CronTrigger(minute=0),
+        id="alert_escalation_task",
         replace_existing=True
     )
     

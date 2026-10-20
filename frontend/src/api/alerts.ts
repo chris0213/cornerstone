@@ -28,7 +28,11 @@ export interface AlertRecord {
   status: 'active' | 'acknowledged' | 'resolved'
   acknowledged_by?: number
   acknowledged_at?: string
+  resolved_by?: number
   resolved_at?: string
+  resolve_note?: string
+  object_type?: 'device' | 'circuit' | 'prefix' | 'ip' | 'system' | string
+  escalated_at?: string
   created_at: string
 }
 
@@ -36,6 +40,19 @@ export interface AlertSummary {
   info: number
   warning: number
   critical: number
+}
+
+export interface AlertFullSummary {
+  by_status: { total: number; active: number; acknowledged: number; resolved: number }
+  by_severity: { info: number; warning: number; critical: number }
+  open_by_severity: { info: number; warning: number; critical: number }
+}
+
+export interface AlertRecordsPage {
+  items: AlertRecord[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface TestResult {
@@ -91,14 +108,20 @@ export const deleteAlertRule = async (ruleId: number) => {
   return response.data
 }
 
-export const getAlertRecords = async (params?: {
+export interface AlertRecordQuery {
   device_id?: number
   severity?: 'info' | 'warning' | 'critical'
   status?: 'active' | 'acknowledged' | 'resolved'
-  limit?: number
-}) => {
+  alert_type?: string
+  start_time?: string
+  end_time?: string
+  page?: number
+  page_size?: number
+}
+
+export const getAlertRecords = async (params?: AlertRecordQuery) => {
   const response = await request.get('/alerts/records', { params })
-  return response.data.data as AlertRecord[]
+  return response.data.data as AlertRecordsPage
 }
 
 export const getAlertRecord = async (recordId: number) => {
@@ -111,8 +134,13 @@ export const acknowledgeAlert = async (recordId: number) => {
   return response.data
 }
 
-export const resolveAlert = async (recordId: number) => {
-  const response = await request.post(`/alerts/records/${recordId}/resolve`)
+export const batchAcknowledgeAlerts = async (recordIds: number[]) => {
+  const response = await request.post('/alerts/records/batch-acknowledge', { record_ids: recordIds })
+  return response.data.data as { acknowledged: number; skipped: number }
+}
+
+export const resolveAlert = async (recordId: number, note: string) => {
+  const response = await request.post(`/alerts/records/${recordId}/resolve`, { note })
   return response.data
 }
 
@@ -129,6 +157,11 @@ export const unmuteAlertRule = async (ruleId: number) => {
 export const getAlertSummary = async () => {
   const response = await request.get('/alerts/summary')
   return response.data.data as AlertSummary
+}
+
+export const getAlertFullSummary = async () => {
+  const response = await request.get('/alerts/summary/full')
+  return response.data.data as AlertFullSummary
 }
 
 export const testAlertRule = async (ruleId: number) => {
