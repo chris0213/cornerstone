@@ -9,10 +9,10 @@ BJT = timezone(timedelta(hours=8))  # 北京时间
 from ..database import get_db
 from ..models import BackupTask, Backup, Credential, Device, Site
 from ..tasks.backup_scheduler import add_task_to_scheduler, remove_task_from_scheduler, \
-    run_backup_task, reload_tasks
+    run_backup_task, reload_tasks, running_tasks, scheduler
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user
+from .dependencies import get_current_active_user, require_permission
 
 router = APIRouter()
 
@@ -20,11 +20,29 @@ router = APIRouter()
 @router.get("/")
 async def get_backup_tasks(
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result = await db.execute(select(BackupTask))
     tasks = result.scalars().all()
-    
+
+    # next_run_at：来自进程内调度器（仅单进程部署准确；多进程/重启后由 reload_tasks 重建）
+    # 注：pending 状态的 job（如测试环境调度器未启动）没有 next_run_time 属性，用 getattr 防御
+    next_run_map: dict[int, object] = {}
+    for job in scheduler.get_jobs():
+        if job.id.startswith("backup_task_"):
+            next_run = getattr(job, "next_run_time", None)
+            if next_run is not None:
+                try:
+                    next_run_map[int(job.id.replace("backup_task_", ""))] = next_run
+                except ValueError:
+                    pass
+
+    # 一次查询取全部现存设备/凭证 ID，用于缺失标识（避免每行一查）
+    all_device_ids_result = await db.execute(select(Device.id))
+    existing_device_ids = set(all_device_ids_result.scalars().all())
+    all_credential_ids_result = await db.execute(select(Credential.id, Credential.protocol))
+    credential_protocol_map = {row[0]: row[1] for row in all_credential_ids_result.all()}
+
     # 添加关联信息
     tasks_list = []
     for task in tasks:
@@ -44,32 +62,56 @@ async def get_backup_tasks(
                     dt = dt.astimezone(BJT)
                 task_dict['created_at'] = dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        # 获取凭证名称
+        # 获取凭证名称/协议/缺失标识
         if task.credential_id:
             cred_result = await db.execute(select(Credential).where(Credential.id == task.credential_id))
             cred = cred_result.scalar_one_or_none()
             task_dict["credential_name"] = cred.name if cred else ""
-        
+            task_dict["credential_protocol"] = cred.protocol if cred else None
+            task_dict["credential_missing"] = cred is None
+        else:
+            task_dict["credential_name"] = ""
+            task_dict["credential_protocol"] = None
+            task_dict["credential_missing"] = True
+
         # 获取站点名称
         if task.site_id:
             site_result = await db.execute(select(Site).where(Site.id == task.site_id))
             site = site_result.scalar_one_or_none()
             task_dict["site_name"] = site.name if site else ""
-        
-        # 解析设备列表
+
+        # 解析范围与设备计数
         if task.device_ids:
             try:
                 device_id_list = json.loads(task.device_ids)
-                task_dict["device_count"] = len(device_id_list)
-            except:
-                task_dict["device_count"] = 0
+            except Exception:
+                device_id_list = []
+            task_dict["scope_type"] = "devices"
+            task_dict["device_count"] = len(device_id_list)
+            task_dict["device_missing_ids"] = [d for d in device_id_list if d not in existing_device_ids]
         elif task.site_id:
+            task_dict["scope_type"] = "site"
             dev_result = await db.execute(select(func.count(Device.id)).where(Device.site_id == task.site_id))
             task_dict["device_count"] = dev_result.scalar_one()
+            task_dict["device_missing_ids"] = []
         else:
+            # 存量数据兼容：未指定范围 = 全部设备（执行语义不变，前端显示「未指定范围」提示）
+            task_dict["scope_type"] = "all"
             dev_result = await db.execute(select(func.count(Device.id)))
             task_dict["device_count"] = dev_result.scalar_one()
-        
+            task_dict["device_missing_ids"] = []
+
+        # 下次执行时间（北京时间，与其他接口时间口径一致）；未启用或未注册为 null
+        next_run = next_run_map.get(task.id) if task.is_enabled else None
+        if next_run is not None:
+            if next_run.tzinfo is not None:
+                next_run = next_run.astimezone(BJT)
+            task_dict["next_run_at"] = next_run.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            task_dict["next_run_at"] = None
+
+        task_dict["is_running"] = bool(running_tasks.get(task.id))
+
         tasks_list.append(task_dict)
     
     return tasks_list
@@ -79,7 +121,7 @@ async def get_backup_tasks(
 async def get_backup_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
     task = result.scalar_one_or_none()
@@ -113,23 +155,33 @@ async def create_backup_task(
     notify_on_fail: bool = Body(True, embed=True),
     is_enabled: bool = Body(True, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     # 验证名称唯一性
     result = await db.execute(select(BackupTask).where(BackupTask.name == name))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="任务名称已存在")
-    
+
     # 验证凭证存在
     result = await db.execute(select(Credential).where(Credential.id == credential_id))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Credential not found")
-    
+
     # 验证站点存在
     if site_id:
         result = await db.execute(select(Site).where(Site.id == site_id))
         if not result.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Site not found")
+
+    # scope 必须明确指定：设备列表或站点二选一，禁止隐式「全部设备」
+    if not device_ids and not site_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "backup_task.scope_required",
+                "message": "必须指定备份设备或备份站点，不允许隐式备份全部设备",
+            },
+        )
     
     # 转换设备列表为JSON
     device_ids_json = json.dumps(device_ids) if device_ids else None
@@ -178,13 +230,27 @@ async def update_backup_task(
     notify_on_fail: bool = Body(None, embed=True),
     is_enabled: bool = Body(None, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
     task = result.scalar_one_or_none()
-    
+
     if not task:
         raise HTTPException(status_code=404, detail="Backup task not found")
+
+    # scope 校验：以「本次请求最终生效的范围」判断（未传字段沿用库中现值）
+    final_device_ids = device_ids if device_ids is not None else (
+        json.loads(task.device_ids) if task.device_ids else None
+    )
+    final_site_id = site_id if site_id is not None else task.site_id
+    if not final_device_ids and not final_site_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "backup_task.scope_required",
+                "message": "必须指定备份设备或备份站点，不允许隐式备份全部设备",
+            },
+        )
     
     # 构建更新数据
     update_data = {}
@@ -235,7 +301,7 @@ async def delete_backup_task(
     request: Request,
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:delete"))
 ):
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
     task = result.scalar_one_or_none()
@@ -258,7 +324,7 @@ async def toggle_backup_task(
     request: Request,
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
     task = result.scalar_one_or_none()
@@ -286,14 +352,24 @@ async def run_backup_task_now(
     request: Request,
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:backup_exec"))
 ):
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
     task = result.scalar_one_or_none()
-    
+
     if not task:
         raise HTTPException(status_code=404, detail="Backup task not found")
-    
+
+    # 防重复执行：与定时触发共用 running_tasks 状态（run_backup_task 内部置位/复位）
+    if running_tasks.get(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "backup_task.already_running",
+                "message": "任务正在执行中，请稍后再试",
+            },
+        )
+
     import asyncio
     asyncio.create_task(run_backup_task(task_id, "manual"))
     
@@ -308,7 +384,7 @@ async def get_task_history(
     task_id: int,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     # 先获取任务信息
     result = await db.execute(select(BackupTask).where(BackupTask.id == task_id))
