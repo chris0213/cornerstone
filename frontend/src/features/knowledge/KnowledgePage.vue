@@ -33,8 +33,6 @@
             :placeholder="t('knowledge.searchPlaceholder')"
             clearable
             style="width: 260px"
-            @keyup.enter="loadArticles"
-            @clear="loadArticles"
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
@@ -89,11 +87,25 @@
               <el-tag size="small" effect="plain" class="kb-cat">{{ categoryLabel(article.category) }}</el-tag>
               <span v-for="tag in tagList(article.tags)" :key="tag" class="kb-tag">#{{ tag }}</span>
               <span class="kb-meta-right">
-                {{ article.author }} · {{ formatDateTime(article.updated_at || '') }}
+                {{ authorName(article.author) }} · {{ formatDateTime(article.updated_at || '') }}
                 · {{ t('knowledge.views', { count: article.view_count }) }}
               </span>
             </div>
           </div>
+        </div>
+
+        <div class="kb-pagination">
+          <span class="kb-total">{{ t('knowledge.totalArticles', { count: total }) }}</span>
+          <el-pagination
+            v-model:current-page="page"
+            v-model:page-size="pageSize"
+            :total="total"
+            :page-sizes="[10, 20, 50]"
+            layout="sizes, prev, pager, next, jumper"
+            background
+            @size-change="onPageChange"
+            @current-change="onPageChange"
+          />
         </div>
       </main>
     </div>
@@ -110,7 +122,7 @@
         <el-tag size="small" effect="plain">{{ categoryLabel(reading?.category || '') }}</el-tag>
         <span v-for="tag in tagList(reading?.tags)" :key="tag" class="kb-tag">#{{ tag }}</span>
         <span class="reader-meta-right">
-          {{ reading?.author }} · {{ formatDateTime(reading?.updated_at || '') }}
+          {{ authorName(reading?.author || '') }} · {{ formatDateTime(reading?.updated_at || '') }}
           · {{ t('knowledge.views', { count: reading?.view_count || 0 }) }}
         </span>
       </div>
@@ -230,7 +242,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Search, Plus, Files, Upload } from '@element-plus/icons-vue'
@@ -238,6 +250,7 @@ import {
   listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle, importArticle,
   type KnowledgeArticle, type KnowledgeCategory,
 } from '@/api/knowledge'
+import { getUsers } from '@/api/users'
 import { formatDateTime } from '@/lib/utils'
 import { confirmAndRun } from '@/lib/confirm'
 import { parseAllMdTables, parseFirstMdTable, replaceMdTable } from '@/lib/md-table'
@@ -250,6 +263,27 @@ const articles = ref<KnowledgeArticle[]>([])
 const categories = ref<KnowledgeCategory[]>([])
 const activeCategory = ref('')
 const keyword = ref('')
+const page = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
+// 作者 username → 显示名（优先 full_name）
+const authorNameMap = ref<Record<string, string>>({})
+
+async function loadAuthorNames() {
+  try {
+    const users = await getUsers()
+    const map: Record<string, string> = {}
+    for (const u of users) map[u.username] = u.full_name || u.username
+    authorNameMap.value = map
+  } catch {
+    /* 映射失败时回退显示用户名 */
+  }
+}
+
+function authorName(username: string): string {
+  return authorNameMap.value[username] || username
+}
 
 const showReader = ref(false)
 const reading = ref<KnowledgeArticle | null>(null)
@@ -367,15 +401,34 @@ function tagList(tags: string | undefined): string[] {
 async function loadArticles() {
   loading.value = true
   try {
-    const params: Record<string, unknown> = { limit: 100 }
+    const params: Record<string, unknown> = {
+      skip: (page.value - 1) * pageSize.value,
+      limit: pageSize.value,
+    }
     if (activeCategory.value) params.category = activeCategory.value
     if (keyword.value) params.keyword = keyword.value
-    articles.value = await listArticles(params)
+    const res = await listArticles(params)
+    articles.value = res.items
+    total.value = res.total
   } catch (error) {
     console.error('Failed to load articles:', error)
   } finally {
     loading.value = false
   }
+}
+
+// 关键词 300ms 防抖即时搜索（clearable 清空时同样触发）
+let keywordTimer: ReturnType<typeof setTimeout> | null = null
+watch(keyword, () => {
+  if (keywordTimer) clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => {
+    page.value = 1
+    loadArticles()
+  }, 300)
+})
+
+function onPageChange() {
+  loadArticles()
 }
 
 async function loadCategories() {
@@ -388,6 +441,7 @@ async function loadCategories() {
 
 function selectCategory(cat: string) {
   activeCategory.value = cat
+  page.value = 1
   loadArticles()
 }
 
@@ -589,6 +643,7 @@ async function handleDelete(article: KnowledgeArticle) {
 onMounted(() => {
   loadArticles()
   loadCategories()
+  loadAuthorNames()
 })
 </script>
 
@@ -657,6 +712,20 @@ onMounted(() => {
 
 .kb-list {
   min-height: 200px;
+}
+
+.kb-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.kb-total {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .empty-state {

@@ -26,7 +26,12 @@ export interface KnowledgeQuery {
   limit?: number
 }
 
-export async function listArticles(params: KnowledgeQuery = {}): Promise<KnowledgeArticle[]> {
+export interface KnowledgeArticleList {
+  items: KnowledgeArticle[]
+  total: number
+}
+
+export async function listArticles(params: KnowledgeQuery = {}): Promise<KnowledgeArticleList> {
   const response = await request.get('/knowledge', { params })
   return response.data
 }

@@ -205,9 +205,8 @@ async function handleDelete(item: ReportItem) {
 }
 
 function formatTime(time: string): string {
-  if (!time) return ''
-  const d = new Date(time)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  // 后端已输出 "YYYY-MM-DD HH:MM" 北京时间文本，直接展示，避免二次时区解析偏移
+  return time || ''
 }
 
 onMounted(() => {

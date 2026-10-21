@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from typing import List, Optional
@@ -20,7 +20,9 @@ from src.schemas.inspection import (
     DeviceFingerprintResponse,
     AlertCountResponse
 )
-from .dependencies import get_current_active_user
+from src.utils.ip_whitelist import get_client_ip_from_request
+from src.utils.logger import audit_log
+from .dependencies import get_current_active_user, require_permission
 from src.tasks.inspection_scheduler import (
     add_inspection_task,
     remove_inspection_task,
@@ -67,8 +69,9 @@ async def get_inspection_task(
 @router.post("/tasks", response_model=InspectionTaskResponse)
 async def create_inspection_task(
     task: InspectionTaskCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:write"))
 ):
     """创建任务"""
     new_task = InspectionTask(**task.model_dump())
@@ -76,6 +79,11 @@ async def create_inspection_task(
     await db.commit()
     await db.refresh(new_task)
     await _sync_scheduler(add_inspection_task(new_task.id, db))
+    await audit_log(
+        db, current_user.id, "inspection_task", new_task.id, "create",
+        {"name": new_task.name, "scan_type": new_task.scan_type},
+        get_client_ip_from_request(request)
+    )
     return new_task
 
 
@@ -83,15 +91,16 @@ async def create_inspection_task(
 async def update_inspection_task(
     task_id: int,
     task: InspectionTaskUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:write"))
 ):
     """编辑任务"""
     result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
     existing = result.scalar_one_or_none()
     if not existing:
         raise HTTPException(status_code=404, detail="巡检任务不存在")
-    
+
     update_data = task.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(existing, key, value)
@@ -99,39 +108,52 @@ async def update_inspection_task(
     await db.commit()
     await db.refresh(existing)
     await _sync_scheduler(refresh_scheduled_task(task_id, db))
+    await audit_log(
+        db, current_user.id, "inspection_task", task_id, "update",
+        {"name": existing.name, "fields": list(update_data.keys())},
+        get_client_ip_from_request(request)
+    )
     return existing
 
 
 @router.delete("/tasks/{task_id}")
 async def delete_inspection_task(
     task_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:write"))
 ):
     """删除任务"""
     result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="巡检任务不存在")
-    
+
+    task_name = task.name
     await db.delete(task)
     await db.commit()
     await _sync_scheduler(remove_inspection_task(task_id))
+    await audit_log(
+        db, current_user.id, "inspection_task", task_id, "delete",
+        {"name": task_name},
+        get_client_ip_from_request(request)
+    )
     return {"message": "删除成功"}
 
 
 @router.patch("/tasks/{task_id}/toggle")
 async def toggle_inspection_task(
     task_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:write"))
 ):
     """启用/停用任务"""
     result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="巡检任务不存在")
-    
+
     task.is_enabled = not task.is_enabled
     await db.commit()
     await db.refresh(task)
@@ -139,6 +161,11 @@ async def toggle_inspection_task(
         await _sync_scheduler(add_inspection_task(task_id, db))
     else:
         await _sync_scheduler(remove_inspection_task(task_id))
+    await audit_log(
+        db, current_user.id, "inspection_task", task_id, "toggle",
+        {"name": task.name, "is_enabled": task.is_enabled},
+        get_client_ip_from_request(request)
+    )
     return {"message": "已启用" if task.is_enabled else "已停用", "is_enabled": task.is_enabled}
 
 
@@ -146,9 +173,10 @@ async def toggle_inspection_task(
 @router.post("/tasks/{task_id}/run")
 async def run_inspection(
     task_id: int,
+    request: Request,
     scan_type: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:write"))
 ):
     """立即触发执行，返回 result_id"""
     result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
@@ -182,7 +210,14 @@ async def run_inspection(
         task.last_run_at = datetime.now()
         task.last_run_status = inspection_result.status
         await db.commit()
-        
+
+        await audit_log(
+            db, current_user.id, "inspection_task", task_id, "run",
+            {"name": task.name, "scan_type": scan_type or original_scan_type,
+             "result_id": inspection_result.id, "status": inspection_result.status},
+            get_client_ip_from_request(request)
+        )
+
         return {"result_id": inspection_result.id}
     finally:
         # 恢复原始扫描类型

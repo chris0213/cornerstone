@@ -26,6 +26,7 @@
     "no": "No",
     "ok": "OK",
     "noData": "No data",
+    "noPermission": "No permission to view this content",
     "clear": "Clear",
     "total": "Total {total} items",
     "page": "Page {page}",
@@ -1523,7 +1524,8 @@
     "catSop": "SOP",
     "catFaq": "FAQ",
     "catOther": "Other",
-    "articles": "articles"
+    "articles": "articles",
+    "totalArticles": "{count} articles in total"
   },
   "inspection": {
     "title": "Inspection",

@@ -26,6 +26,7 @@
     "no": "否",
     "ok": "确定",
     "noData": "暂无数据",
+    "noPermission": "暂无权限查看该内容",
     "clear": "清空",
     "total": "共 {total} 条",
     "page": "第 {page} 页",
@@ -1807,7 +1808,8 @@
     "catSop": "操作SOP",
     "catFaq": "常见问题",
     "catOther": "其他",
-    "articles": "篇"
+    "articles": "篇",
+    "totalArticles": "共 {count} 篇"
   },
   "inspection": {
     "title": "智能巡检",

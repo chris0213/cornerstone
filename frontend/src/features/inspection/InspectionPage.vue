@@ -4,8 +4,12 @@ import { confirmAndRun } from '@/lib/confirm';
 import { Warning, Clock, Cpu, TrendCharts, Promotion } from '@element-plus/icons-vue';
 import { getTasks, getRecords, getFingerprints, getAlertCount, createTask, updateTask, deleteTask, executeTask, toggleTask, getInspectionCategories, getDevicesByCategory, type InspectionTask, type InspectionTaskCreate, type InspectionRecord, type DeviceFingerprint, type AlertCount, type ExecuteResponse, type InspectionCategory, type InspectionDeviceResult } from '@/api/inspection';
 import { getSites, type SiteResponse } from '@/api/sites';
+import { useAuthStore } from '@/store/auth';
 import { useI18n } from 'vue-i18n'
 const { locale, t } = useI18n();
+const authStore = useAuthStore();
+// 写操作（新建/编辑/删除/启停/执行）需要 inspection:write 权限
+const canWrite = computed(() => authStore.hasPermission('inspection', 'write'));
 // 状态管理
 const activeTab = ref('tasks');
 const loading = ref(false);
@@ -517,16 +521,16 @@ onMounted(() => {
         <el-tab-pane :label="t('inspection.tasks')" name="tasks">
           <div class="tab-content">
             <div class="content-header">
-              <el-button type="primary" icon="Plus" @click="openTaskForm">
+              <el-button v-if="canWrite" type="primary" icon="Plus" @click="openTaskForm">
                 {{ t('inspection.createTask') }}
               </el-button>
-              <el-button type="danger" style="margin-left:8px" @click="handleBatchDelete" :disabled="selectedTaskIds.length===0">
+              <el-button v-if="canWrite" type="danger" style="margin-left:8px" @click="handleBatchDelete" :disabled="selectedTaskIds.length===0">
                 {{ t('inspection.batchDelete') }}
               </el-button>
             </div>
-            
+
             <el-table class="inspection-task-table" :data="tasks" v-loading="loading" @selection-change="handleSelectionChange">
-              <el-table-column type="selection" width="55" />
+              <el-table-column v-if="canWrite" type="selection" width="55" />
               <el-table-column prop="name" :label="t('inspection.taskName')" min-width="200" />
               <el-table-column prop="scan_type" :label="t('inspection.scanType')" min-width="100">
                 <template #default="{ row }">{{ getScanTypeName(row.scan_type) }}</template>
@@ -553,11 +557,15 @@ onMounted(() => {
               <el-table-column prop="cron_expr" :label="t('inspection.cronExpression')" min-width="120" />
               <el-table-column prop="is_enabled" :label="t('common.status')" min-width="80">
                 <template #default="{ row }">
-                  <el-switch 
-                    v-model="row.is_enabled" 
+                  <el-switch
+                    v-if="canWrite"
+                    v-model="row.is_enabled"
                     @change="handleToggle(row)"
                     :disabled="loading"
                   />
+                  <el-tag v-else size="small" :type="row.is_enabled ? 'success' : 'info'" effect="plain">
+                    {{ row.is_enabled ? t('common.enabled') : t('common.disabled') }}
+                  </el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="last_run_at" :label="t('inspection.lastExecution')" min-width="140">
@@ -568,35 +576,39 @@ onMounted(() => {
               <el-table-column :label="t('common.actions')" min-width="320">
                 <template #default="{ row }">
                   <div style="display: flex; gap: 8px; flex-wrap: nowrap;">
-                    <el-button 
-                      type="primary" 
-                      size="small" 
-                      icon="VideoPlay" 
+                    <el-button
+                      v-if="canWrite"
+                      type="primary"
+                      size="small"
+                      icon="VideoPlay"
                       :loading="executingTaskId === row.id"
                       @click="handleExecute(row.id)"
                     >
                       {{ t('inspection.execute') }}
                     </el-button>
-                    <el-button 
-                      type="default" 
-                      size="small" 
-                      icon="Edit" 
+                    <el-button
+                      v-if="canWrite"
+                      type="default"
+                      size="small"
+                      icon="Edit"
                       @click="openTaskForm(row)"
                     >
                       {{ t('common.edit') }}
                     </el-button>
-                    <el-button 
-                      type="info" 
-                      size="small" 
-                      icon="DocumentCopy" 
+                    <el-button
+                      v-if="canWrite"
+                      type="info"
+                      size="small"
+                      icon="DocumentCopy"
                       @click="duplicateTask(row)"
                     >
                       {{ t('inspection.duplicate') }}
                     </el-button>
-                    <el-button 
-                      type="danger" 
-                      size="small" 
-                      icon="Delete" 
+                    <el-button
+                      v-if="canWrite"
+                      type="danger"
+                      size="small"
+                      icon="Delete"
                       @click="handleDelete(row.id)"
                     >
                       {{ t('common.delete') }}

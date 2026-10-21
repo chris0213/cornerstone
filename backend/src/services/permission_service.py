@@ -57,6 +57,7 @@ PERMISSIONS = [
 
     # 智能巡检
     {"module": "inspection", "action": "read", "display_name": "智能巡检-查看", "description": "查看智能巡检任务与结果"},
+    {"module": "inspection", "action": "write", "display_name": "智能巡检-管理", "description": "创建、编辑、删除、启停、执行巡检任务"},
 
     # 系统管理
     {"module": "system", "action": "read", "display_name": "系统管理-查看", "description": "查看系统设置"},
@@ -98,7 +99,7 @@ ROLES = [
             "backups:read", "backups:write", "backups:delete", "backups:export", "backups:backup_exec",
             "topology:read", "topology:write", "topology:delete",
             "alerts:read", "alerts:write",
-            "inspection:read",
+            "inspection:read", "inspection:write",
             "logs:read"
         ]
     },

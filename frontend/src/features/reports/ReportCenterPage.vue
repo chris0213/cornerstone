@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Document, TrendCharts } from '@element-plus/icons-vue'
 import InspectionPage from '../inspection/InspectionPage.vue'
 import ReportsPage from './ReportsPage.vue'
+import { useAuthStore } from '@/store/auth'
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+
+// 两个 tab 分别按权限显隐；两个都无权限时显示空态
+const showInspectionTab = computed(() => authStore.hasPermission('inspection', 'read'))
+const showMonthlyTab = computed(() => authStore.hasPermission('reports', 'read'))
 const activeTab = ref('inspection')
+const defaultTab = computed(() => showInspectionTab.value ? 'inspection' : (showMonthlyTab.value ? 'monthly' : ''))
 
 onMounted(() => {
-  // 页面加载时默认显示巡检标签
+  if (defaultTab.value) activeTab.value = defaultTab.value
 })
 </script>
 
@@ -20,8 +27,13 @@ onMounted(() => {
       <p class="page-desc">{{ t('reports.centerDescription') }}</p>
     </div>
 
-    <el-tabs v-model="activeTab" type="border-card" class="report-tabs">
-      <el-tab-pane name="inspection">
+    <div v-if="!showInspectionTab && !showMonthlyTab" class="empty-state">
+      <el-icon :size="48" color="var(--el-text-color-placeholder)"><Document /></el-icon>
+      <p>{{ t('common.noPermission') }}</p>
+    </div>
+
+    <el-tabs v-else v-model="activeTab" type="border-card" class="report-tabs">
+      <el-tab-pane v-if="showInspectionTab" name="inspection">
         <template #label>
           <div class="tab-label">
             <el-icon><TrendCharts /></el-icon>
@@ -31,7 +43,7 @@ onMounted(() => {
         <InspectionPage />
       </el-tab-pane>
 
-      <el-tab-pane name="monthly">
+      <el-tab-pane v-if="showMonthlyTab" name="monthly">
         <template #label>
           <div class="tab-label">
             <el-icon><Document /></el-icon>
@@ -56,25 +68,38 @@ onMounted(() => {
 .page-title {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
   margin: 0 0 8px 0;
 }
 
 .page-desc {
   font-size: 14px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin: 0;
 }
 
-.report-tabs {
-  background: #fff;
+.empty-state {
+  text-align: center;
+  padding: 60px 0;
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+.empty-state p {
+  margin: 12px 0 0;
+}
+
+.report-tabs {
+  background: var(--el-bg-color);
+  border-radius: 8px;
+  box-shadow: var(--el-box-shadow-light);
 }
 
 .report-tabs :deep(.el-tabs__header) {
-  background: #f5f7fa;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--el-fill-color-light);
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .report-tabs :deep(.el-tabs__item) {
@@ -84,7 +109,7 @@ onMounted(() => {
 }
 
 .report-tabs :deep(.el-tabs__item.is-active) {
-  background: #fff;
+  background: var(--el-bg-color);
   font-weight: 600;
 }
 

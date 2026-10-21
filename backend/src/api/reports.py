@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from fastapi.responses import FileResponse
@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from src.database import get_db
 from src.models.report import MonthlyReport
 from src.models.user import User
-from src.api.auth import get_current_active_user
-from src.api.dependencies import require_super_admin
+from src.utils.ip_whitelist import get_client_ip_from_request
+from src.utils.logger import audit_log
 from src.services.report_schedule_service import (
     ReportError,
     generate_report,
@@ -21,6 +21,7 @@ from src.services.report_schedule_service import (
     save_schedule,
     verify_shared_link,
 )
+from .dependencies import require_permission, require_super_admin
 
 router = APIRouter(tags=["reports"])
 
@@ -40,24 +41,24 @@ class ScheduleConfig(BaseModel):
     link_base_url: str = ""                  # 系统访问地址（生成下载链接）
 
 
-def _require_manager_or_admin(current_user: User):
-    """验证用户角色为 viewer 或 super_admin"""
-    if current_user.role.name not in ['viewer', 'super_admin']:
-        raise HTTPException(status_code=403, detail="需要IT负责人或管理员权限")
+def _validate_year_month(year: int, month: int):
+    """年月范围校验"""
+    if not (2000 <= year <= 2100):
+        raise HTTPException(status_code=400, detail="年份超出允许范围（2000-2100）")
+    if not (1 <= month <= 12):
+        raise HTTPException(status_code=400, detail="月份须为 1-12")
 
 
 @router.get("/monthly/list")
 async def list_monthly_reports(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("reports:read"))
 ):
     """获取已生成的月报列表"""
-    _require_manager_or_admin(current_user)
-
     result = await db.execute(
         select(MonthlyReport)
         .order_by(desc(MonthlyReport.year), desc(MonthlyReport.month))
-        .limit(12)
+        .limit(36)
     )
     reports = result.scalars().all()
 
@@ -78,25 +79,31 @@ async def list_monthly_reports(
 
 @router.post("/monthly/generate")
 async def generate_monthly_report(
+    request: Request,
     year: int | None = None,
     month: int | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("reports:read"))
 ):
     """生成指定月份的月报 PDF"""
-    _require_manager_or_admin(current_user)
-
     # 用北京时间确定年月
     bj_now = datetime.now(BEIJING_TZ)
     if not year:
         year = bj_now.year
     if not month:
         month = bj_now.month
+    _validate_year_month(year, month)
 
     try:
         result = await generate_report(db, year, month, current_user.username)
     except ReportError as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    await audit_log(
+        db, current_user.id, "report", 0, "generate",
+        {"year": year, "month": month, "filename": result["filename"]},
+        get_client_ip_from_request(request)
+    )
 
     return {
         "message": "月报生成成功",
@@ -108,25 +115,31 @@ async def generate_monthly_report(
 @router.get("/schedule")
 async def get_report_schedule(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("reports:read"))
 ):
     """获取月报定时推送配置"""
-    _require_manager_or_admin(current_user)
     return await get_schedule(db)
 
 
 @router.put("/schedule")
 async def update_report_schedule(
     config: ScheduleConfig,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("reports:read"))
 ):
     """更新月报定时推送配置（保存后下一分钟内生效）"""
-    _require_manager_or_admin(current_user)
     try:
-        return await save_schedule(db, config.model_dump())
+        result = await save_schedule(db, config.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(
+        db, current_user.id, "report", 0, "schedule_update",
+        {"enabled": config.enabled, "day": config.day, "hour": config.hour,
+         "minute": config.minute, "channels": config.channels},
+        get_client_ip_from_request(request)
+    )
+    return result
 
 
 @router.get("/monthly/download/{year}/{month}")
@@ -134,10 +147,10 @@ async def download_monthly_report(
     year: int,
     month: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(require_permission("reports:read"))
 ):
     """下载指定月份的月报 PDF"""
-    _require_manager_or_admin(current_user)
+    _validate_year_month(year, month)
 
     result = await db.execute(
         select(MonthlyReport).where(
@@ -200,10 +213,12 @@ async def shared_download_monthly_report(
 async def delete_monthly_report(
     year: int,
     month: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_super_admin)
 ):
     """删除指定月份月报"""
+    _validate_year_month(year, month)
 
     result = await db.execute(
         select(MonthlyReport).where(
@@ -222,5 +237,11 @@ async def delete_monthly_report(
 
     await db.delete(report)
     await db.commit()
+
+    await audit_log(
+        db, current_user.id, "report", 0, "delete",
+        {"year": year, "month": month},
+        get_client_ip_from_request(request)
+    )
 
     return {"message": "月报已删除"}
