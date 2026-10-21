@@ -8,6 +8,7 @@ export interface KnowledgeArticle {
   summary: string
   content?: string
   author: string
+  updated_by?: string
   is_published: boolean
   view_count: number
   created_at?: string
@@ -15,7 +16,10 @@ export interface KnowledgeArticle {
 }
 
 export interface KnowledgeCategory {
-  category: string
+  id: number
+  name: string
+  description: string
+  sort_order: number
   count: number
 }
 
@@ -41,8 +45,8 @@ export async function listCategories(): Promise<KnowledgeCategory[]> {
   return response.data
 }
 
-export async function getArticle(id: number): Promise<KnowledgeArticle> {
-  const response = await request.get(`/knowledge/${id}`)
+export async function getArticle(id: number, countView = true): Promise<KnowledgeArticle> {
+  const response = await request.get(`/knowledge/${id}`, { params: { count_view: countView } })
   return response.data
 }
 
@@ -77,4 +81,24 @@ export async function importArticle(file: File, category?: string): Promise<Know
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return response.data
+}
+
+export interface CategoryPayload {
+  name: string
+  description?: string
+  sort_order?: number
+}
+
+export async function createCategory(payload: CategoryPayload): Promise<KnowledgeCategory> {
+  const response = await request.post('/knowledge/categories', payload)
+  return response.data
+}
+
+export async function updateCategory(id: number, payload: Partial<CategoryPayload>): Promise<KnowledgeCategory> {
+  const response = await request.put(`/knowledge/categories/${id}`, payload)
+  return response.data
+}
+
+export async function deleteCategory(id: number): Promise<void> {
+  await request.delete(`/knowledge/categories/${id}`)
 }

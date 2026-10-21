@@ -1,6 +1,29 @@
 <template>
   <div class="knowledge-page">
-    <div class="page-desc">{{ t('knowledge.description') }}</div>
+    <div class="page-head">
+      <div class="page-desc">{{ t('knowledge.description') }}</div>
+      <div class="page-actions">
+        <el-button :disabled="total === 0" :loading="exporting" @click="handleExport">
+          <el-icon><Download /></el-icon>
+          {{ t('knowledge.export') }}
+        </el-button>
+        <el-button :loading="importing" @click="triggerImport">
+          <el-icon><Upload /></el-icon>
+          {{ t('knowledge.import') }}
+        </el-button>
+        <el-button type="primary" @click="openCreate">
+          <el-icon><Plus /></el-icon>
+          {{ t('knowledge.newArticle') }}
+        </el-button>
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept=".md,.markdown,.txt,.docx,.xlsx,.xlsm"
+          style="display: none"
+          @change="handleImport"
+        >
+      </div>
+    </div>
 
     <div class="kb-layout">
       <!-- 分类侧栏 -->
@@ -15,12 +38,12 @@
         </div>
         <div
           v-for="c in categories"
-          :key="c.category"
+          :key="c.id"
           class="cat-item"
-          :class="{ active: activeCategory === c.category }"
-          @click="selectCategory(c.category)"
+          :class="{ active: activeCategory === c.name }"
+          @click="selectCategory(c.name)"
         >
-          <span>{{ categoryLabel(c.category) }}</span>
+          <span>{{ categoryLabel(c.name) }}</span>
           <span class="cat-count">{{ c.count }}</span>
         </div>
       </aside>
@@ -36,27 +59,22 @@
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
-          <el-button type="primary" @click="openCreate">
-            <el-icon><Plus /></el-icon>
-            {{ t('knowledge.newArticle') }}
-          </el-button>
-          <el-button @click="triggerImport" :loading="importing">
-            <el-icon><Upload /></el-icon>
-            {{ t('knowledge.import') }}
-          </el-button>
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept=".md,.markdown,.txt,.docx,.xlsx,.xlsm"
-            style="display: none"
-            @change="handleImport"
-          >
         </div>
 
         <div v-loading="loading" class="kb-list">
           <div v-if="!loading && articles.length === 0" class="empty-state">
             <el-icon :size="48" color="#ccc"><Files /></el-icon>
             <p>{{ activeCategory ? t('knowledge.emptyCategory') : t('knowledge.empty') }}</p>
+            <div class="empty-actions">
+              <el-button type="primary" @click="openCreate">
+                <el-icon><Plus /></el-icon>
+                {{ t('knowledge.newArticle') }}
+              </el-button>
+              <el-button :loading="importing" @click="triggerImport">
+                <el-icon><Upload /></el-icon>
+                {{ t('knowledge.import') }}
+              </el-button>
+            </div>
           </div>
 
           <div
@@ -94,7 +112,7 @@
           </div>
         </div>
 
-        <div class="kb-pagination">
+        <div v-if="total > 0" class="kb-pagination">
           <span class="kb-total">{{ t('knowledge.totalArticles', { count: total }) }}</span>
           <el-pagination
             v-model:current-page="page"
@@ -148,11 +166,7 @@
         <div class="editor-row">
           <el-form-item :label="t('knowledge.category')" class="editor-row-item">
             <el-select v-model="form.category" style="width: 100%">
-              <el-option :label="t('knowledge.catTroubleshoot')" value="故障处理" />
-              <el-option :label="t('knowledge.catConfig')" value="配置手册" />
-              <el-option :label="t('knowledge.catSop')" value="操作SOP" />
-              <el-option :label="t('knowledge.catFaq')" value="常见问题" />
-              <el-option :label="t('knowledge.catOther')" value="其他" />
+              <el-option v-for="c in categories" :key="c.id" :label="categoryLabel(c.name)" :value="c.name" />
             </el-select>
           </el-form-item>
           <el-form-item :label="t('knowledge.tags')" class="editor-row-item">
@@ -163,6 +177,13 @@
           <el-input v-model="form.summary" type="textarea" :rows="2" :placeholder="t('knowledge.summaryPlaceholder')" maxlength="500" show-word-limit />
         </el-form-item>
         <el-form-item :label="t('knowledge.content')">
+          <el-alert
+            :title="t('knowledge.sensitiveHint')"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="editor-hint"
+          />
           <div class="editor-split">
             <!-- 左侧：根据内容类型自动切换 -->
             <div class="editor-pane">
@@ -245,7 +266,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { Search, Plus, Files, Upload } from '@element-plus/icons-vue'
+import { Search, Plus, Files, Upload, Download } from '@element-plus/icons-vue'
+import DOMPurify from 'dompurify'
 import {
   listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle, importArticle,
   type KnowledgeArticle, type KnowledgeCategory,
@@ -531,10 +553,11 @@ function renderMarkdown(raw: string): string {
   }
   flushTable()
 
-  // 相邻列表项合并包裹（先有序后无序，避免吞掉 class）
-  return out.join('\n')
+  // 相邻列表项合并包裹（先有序后无序，避免吞掉 class），DOMPurify 兜底防 XSS
+  const merged = out.join('\n')
     .replace(/(<li class="ordered">[\s\S]*?<\/li>\n?)+/g, m => `<ol>${m.replace(/ class="ordered"/g, '')}</ol>`)
     .replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+  return DOMPurify.sanitize(merged, { USE_PROFILES: { html: true } })
 }
 
 const renderedContent = computed(() => renderMarkdown(reading.value?.content || ''))
@@ -548,8 +571,8 @@ function openCreate() {
 
 async function openEdit(article: KnowledgeArticle) {
   try {
-    // 列表接口不含正文，必须拉详情，否则保存会清空 content
-    const detail = await getArticle(article.id)
+    // 列表接口不含正文，必须拉详情，否则保存会清空 content；编辑回读不累加阅读量
+    const detail = await getArticle(article.id, false)
     editingId.value = detail.id
     form.value = {
       title: detail.title,
@@ -585,6 +608,54 @@ async function handleSave() {
     ElMessage.error(error.response?.data?.detail || t('common.error'))
   } finally {
     saving.value = false
+  }
+}
+
+// ===== 导出 =====
+const exporting = ref(false)
+
+/** 导出当前筛选结果为 Markdown（文章之间用 --- 分隔） */
+function articleToMarkdown(a: KnowledgeArticle): string {
+  const tags = tagList(a.tags).map(tag => `#${tag}`).join(' ')
+  const head = `# ${a.title}\n\n- ${t('knowledge.category')}: ${categoryLabel(a.category)}${tags ? `\n- ${tags}` : ''}\n- ${t('knowledge.author')}: ${authorName(a.author)} · ${t('knowledge.updatedAt')}: ${formatDateTime(a.updated_at || '')}`
+  const body = `---\n\n${a.content || a.summary || ''}`
+  return `${head}\n\n${body}`
+}
+
+async function handleExport() {
+  exporting.value = true
+  try {
+    // 拉全量（上限放宽），按当前分类/关键词筛选
+    const res = await listArticles({
+      category: activeCategory.value || undefined,
+      keyword: keyword.value || undefined,
+      skip: 0,
+      limit: 1000,
+    })
+    if (!res.items.length) return
+    // 逐篇补正文
+    const parts: string[] = []
+    for (const item of res.items) {
+      try {
+        const detail = await getArticle(item.id, false)
+        parts.push(articleToMarkdown(detail))
+      } catch {
+        parts.push(articleToMarkdown(item))
+      }
+    }
+    const banner = `> ${t('knowledge.exportBanner', { count: res.items.length })} · ${formatDateTime(new Date().toISOString())}\n\n`
+    const blob = new Blob([banner + parts.join('\n\n---\n\n')], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `knowledge-${new Date().toISOString().slice(0, 10)}.md`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (error: any) {
+    console.error('Failed to export articles:', error)
+    ElMessage.error(error.response?.data?.detail || t('common.error'))
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -652,10 +723,23 @@ onMounted(() => {
   padding: 0;
 }
 
-.page-desc {
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
+}
+
+.page-desc {
   color: var(--el-text-color-secondary);
   font-size: 14px;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .kb-layout {
@@ -732,6 +816,12 @@ onMounted(() => {
   text-align: center;
   padding: 60px 0;
   color: var(--el-text-color-secondary);
+}
+
+.empty-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
 }
 
 .kb-card {
@@ -966,6 +1056,12 @@ onMounted(() => {
   flex: 1;
 }
 
+.editor-hint {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+}
+
 /* 移动端 */
 @media (max-width: 768px) {
   .kb-layout {
@@ -989,6 +1085,17 @@ onMounted(() => {
 
   .kb-toolbar .el-input {
     width: 100% !important;
+  }
+
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .page-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .editor-row {

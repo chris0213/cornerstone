@@ -12,7 +12,7 @@ export interface UserResponse {
 }
 
 export async function getUsers(): Promise<UserResponse[]> {
-  const response = await api.get('/users')
+  const response = await api.get('/users/')
   return response.data
 }
 
