@@ -1519,6 +1519,7 @@
     "tableDelCol": "Del Col",
     "tableSwitchSource": "Source",
     "tableSwitchBack": "Back to Table",
+    "tableMixedHint": "Edit text outside the table in Source mode",
     "importUnsupported": "Only .md / .txt / .docx / .xlsx files are supported",
     "export": "Export",
     "exportBanner": "Knowledge base export, {count} article(s) (current filters applied, drafts included)",

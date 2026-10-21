@@ -376,14 +376,16 @@ async def import_article(
         raise HTTPException(status_code=400, detail="文件不能超过 5MB")
 
     stem = stem_of(filename, ALLOWED_IMPORT_EXT)
-    from src.services.knowledge_import import import_text_to_markdown, derive_article_fields, xlsx_sheets_to_markdown
+    from src.services.knowledge_import import (
+        import_text_to_markdown, derive_article_fields, xlsx_sheets_to_markdown, dedupe_sheet_title,
+    )
     try:
         if filename.lower().endswith((".xlsx", ".xlsm")):
             # 每个工作表独立成篇，避免多表拼一篇文章排版混乱
             sheets = xlsx_sheets_to_markdown(raw)
             multi = len(sheets) > 1
-            # 单表直接用文件名（Sheet1 等默认表名无意义）；多表标题加表名后缀便于区分
-            contents = [(f"{stem}（{sheet_name}）" if multi else stem, md) for sheet_name, md in sheets]
+            # 单表直接用文件名；多表标题加表名后缀，文件名与表名重复/包含时去重
+            contents = [(dedupe_sheet_title(stem, sheet_name, multi), md) for sheet_name, md in sheets]
         else:
             contents = [(stem, import_text_to_markdown(filename, raw))]
     except Exception as e:

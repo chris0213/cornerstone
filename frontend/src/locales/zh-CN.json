@@ -1803,6 +1803,7 @@
     "tableDelCol": "删列",
     "tableSwitchSource": "切源码",
     "tableSwitchBack": "切回表格",
+    "tableMixedHint": "表格外的文字请在「切源码」中编辑",
     "importUnsupported": "仅支持 .md / .txt / .docx / .xlsx 文件",
     "export": "导出",
     "exportBanner": "知识库导出，共 {count} 篇（按当前筛选，含草稿）",

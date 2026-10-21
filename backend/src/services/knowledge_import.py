@@ -227,16 +227,21 @@ def docx_to_markdown(raw: bytes) -> str:
 
 
 def _cell_to_text(value) -> str:
-    """xlsx 单元格值 → 文本（日期只显示到日；None/公式缓存缺失给空串）"""
+    """xlsx 单元格值 → 文本（日期只显示到日；None/公式缓存缺失给空串）
+
+    单元格内换行统一替换为 <br>，保证每个单元格在 Markdown 中占一行。
+    """
     if value is None:
         return ""
     if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M") if (value.hour or value.minute or value.second) else value.strftime("%Y-%m-%d")
-    if isinstance(value, date):
-        return value.strftime("%Y-%m-%d")
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+        text = value.strftime("%Y-%m-%d %H:%M") if (value.hour or value.minute or value.second) else value.strftime("%Y-%m-%d")
+    elif isinstance(value, date):
+        text = value.strftime("%Y-%m-%d")
+    elif isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    else:
+        text = str(value)
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 
 
 # 公式解析用正则：字符串常量 / 单元格引用（可带表名前缀与范围）
@@ -372,7 +377,12 @@ class _XlsxResolver:
 
 
 def _sheet_to_markdown(rows: list[list]) -> str:
-    """工作表二维数据 → Markdown 表格（剔除全空行列，首个非空行作表头）"""
+    """工作表二维数据 → Markdown 表格
+
+    - 剔除全空行/全空列，首个非空行作表头
+    - 每行列数统一为表头列数：不足补空、行尾多余空列裁掉（行中间多列保留并放宽表头）
+    - 单元格内 | 转义为 \\|，换行已在 _cell_to_text 转为 <br>
+    """
     grid = [[_cell_to_text(v) for v in row] for row in rows]
     # 剔除全空行
     grid = [r for r in grid if any(c.strip() for c in r)]
@@ -388,12 +398,52 @@ def _sheet_to_markdown(rows: list[list]) -> str:
     width = len(grid[0])
 
     header, body = grid[0], grid[1:]
+    # 行尾多余空列裁掉；不足补空，统一到表头列数
+    norm_body = []
+    for r in body:
+        r = list(r[:width])
+        while r and not r[-1].strip():
+            r.pop()
+        r += [""] * (width - len(r))
+        norm_body.append(r)
+
     lines = [
         "| " + " | ".join(c.replace("|", "\\|") for c in header) + " |",
         "| " + " | ".join(["---"] * width) + " |",
     ]
-    lines += ["| " + " | ".join(c.replace("|", "\\|") for c in r) + " |" for r in body]
+    lines += ["| " + " | ".join(c.replace("|", "\\|") for c in r) + " |" for r in norm_body]
     return "\n".join(lines)
+
+
+def _load_merged_fills(raw: bytes) -> dict[str, dict[tuple[int, int], object]]:
+    """读取各工作表的合并单元格区域，返回 {表名: {(row, col): 首格值}}。
+
+    read_only 模式取不到 merged_cells，因此单独用非 read_only 加载一次
+    （仍仅用于合并区域首格值，内存受行列上限与 zip 炸弹校验保护）。
+    """
+    from openpyxl import load_workbook
+
+    fills: dict[str, dict[tuple[int, int], object]] = {}
+    try:
+        wb_m = load_workbook(io.BytesIO(raw), data_only=True, read_only=False)
+    except Exception:
+        return fills
+    try:
+        for ws in wb_m.worksheets:
+            sheet_fills: dict[tuple[int, int], object] = {}
+            for rng in ws.merged_cells.ranges:
+                top_left = ws.cell(rng.min_row, rng.min_col).value
+                if top_left is None:
+                    continue
+                for r in range(rng.min_row, min(rng.max_row, MAX_XLSX_ROWS) + 1):
+                    for c in range(rng.min_col, min(rng.max_col, MAX_XLSX_COLS) + 1):
+                        if (r, c) != (rng.min_row, rng.min_col):
+                            sheet_fills[(r, c)] = top_left
+            if sheet_fills:
+                fills[ws.title] = sheet_fills
+    finally:
+        wb_m.close()
+    return fills
 
 
 def xlsx_sheets_to_markdown(raw: bytes) -> list[tuple[str, str]]:
@@ -434,15 +484,20 @@ def xlsx_sheets_to_markdown(raw: bytes) -> list[tuple[str, str]]:
             ]
 
         resolver = _XlsxResolver(val_grids, frm_grids)
+        merged_fills = _load_merged_fills(raw)
 
         out: list[tuple[str, str]] = []  # (表名, markdown)
         for title, vals in val_grids.items():
             frm = frm_grids.get(title) or []
+            fills = merged_fills.get(title) or {}
             resolved = []
             for r, row in enumerate(vals):
                 frow = frm[r] if r < len(frm) else ()
                 new_row = []
                 for c, v in enumerate(row):
+                    # 合并单元格非首格：填充首格值（向下/向右均覆盖）
+                    if v is None and (r + 1, c + 1) in fills:
+                        v = fills[(r + 1, c + 1)]
                     if v is None and c < len(frow) and isinstance(frow[c], str) and frow[c].startswith("="):
                         new_row.append(resolver.resolve_formula(frow[c], title, cur_row=r + 1))
                     else:
@@ -474,7 +529,10 @@ def xlsx_to_markdown(raw: bytes) -> str:
 
 
 def derive_article_fields(title: str, content: str) -> tuple[str, str]:
-    """从正文推导标题/摘要（导入时未显式提供时使用）"""
+    """从正文推导标题/摘要（导入时未显式提供时使用）
+
+    正文以表格开头时摘要给「表格：N 行 × M 列」，不截取表格原文。
+    """
     final_title = (title or "").strip()
     body = content or ""
     if not final_title:
@@ -484,5 +542,39 @@ def derive_article_fields(title: str, content: str) -> tuple[str, str]:
                 final_title = line[2:].strip()
                 body = "\n".join(body.splitlines()[1:]).strip()
                 break
-    summary = re.sub(r"[#*`>\[\]|-]", "", body)[:200].strip().replace("\n", " ")
+    if body.lstrip().startswith("|"):
+        # 表格开头：统计表头列数与数据行数，摘要不用表格原文
+        lines = [l for l in body.splitlines() if l.strip().startswith("|")]
+        cols = 0
+        if lines:
+            cols = len(lines[0].strip().strip("|").split("|"))
+        rows = max(len(lines) - 2, 0)  # 去掉表头与分隔行
+        summary = f"表格：{rows} 行 × {cols} 列"
+    else:
+        summary = re.sub(r"[#*`>\[\]|-]", "", body)[:200].strip().replace("\n", " ")
     return final_title, summary
+
+
+def dedupe_sheet_title(stem: str, sheet_name: str, multi: bool) -> str:
+    """文件名 + sheet 名生成标题，避免重复。
+
+    单表或 sheet 名是默认名/与文件名相同或互为包含时不拼接；
+    拼接后去掉相邻重复的括号年份片段（如「2026（2026）」）。
+    """
+    DEFAULT_SHEETS = {"sheet1", "sheet", "worksheet", "工作表1", "sheet_1"}
+    stem = (stem or "").strip()
+    sheet = (sheet_name or "").strip()
+    if not multi or not sheet or sheet.lower() in DEFAULT_SHEETS:
+        return stem
+    if sheet in stem or stem in sheet:
+        # 互为包含：取更长者，不再拼接
+        base = stem if len(stem) >= len(sheet) else sheet
+    else:
+        base = f"{stem}（{sheet}）"
+    # 去掉相邻重复片段：xxx（2026）（2026）→ xxx（2026）
+    prev = None
+    while prev != base:
+        prev = base
+        base = re.sub(r"（([^（）]{1,20})）\1", r"（\1）", base)
+        base = re.sub(r"\(([^()]{1,20})\)\1", r"(\1)", base)
+    return base

@@ -214,6 +214,7 @@
               <!-- 表格编辑模式：正文仅含单个表格 -->
               <div v-if="tableEditMode" class="table-editor">
                 <div class="table-editor-toolbar">
+                  <span v-if="contentHasTextOutsideTable" class="table-mixed-hint">{{ t('knowledge.tableMixedHint') }}</span>
                   <el-button size="small" @click="addTableRow">{{ t('knowledge.tableAddRow') }}</el-button>
                   <el-button size="small" @click="addTableCol">{{ t('knowledge.tableAddCol') }}</el-button>
                   <el-button size="small" :disabled="tableSelectedRow === null" @click="delTableRow">{{ t('knowledge.tableDelRow') }}</el-button>
@@ -340,7 +341,7 @@ import { getUsers } from '@/api/users'
 import { useAuthStore } from '../../store/auth'
 import { formatDateTime } from '@/lib/utils'
 import { confirmAndRun } from '@/lib/confirm'
-import { parseAllMdTables, parseFirstMdTable, replaceMdTable } from '@/lib/md-table'
+import { parseAllMdTables, parseFirstMdTable, replaceMdTable, isMdTableRow } from '@/lib/md-table'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
@@ -387,15 +388,16 @@ const tableForceSource = ref(false)  // 用户手动切到源码
 const tableSelectedRow = ref<number | null>(null)
 const tableSelectedCol = ref<number | null>(null)
 
-/** 正文是否够格进表格编辑（与 tableEditMode 无关，供源码模式判断能否切回） */
+/** 正文是否够格进表格编辑：恰好含 1 个 Markdown 表格（表格外文字原样保留） */
 const contentQualifiesForTable = computed(() => {
-  const content = form.value.content
-  const stripped = content.replace(/^\s*\n|\n\s*$/g, '')
-  const tables = parseAllMdTables(stripped)
-  if (tables.length !== 1) return false
-  const t = tables[0]
-  const lines = stripped.split('\n')
-  return t.startLine <= 2 && lines.length - t.endLine - 1 <= 2
+  const stripped = form.value.content.replace(/^\s*\n|\n\s*$/g, '')
+  return parseAllMdTables(stripped).length === 1
+})
+
+/** 表格之外是否还有正文文字（混合内容提示用） */
+const contentHasTextOutsideTable = computed(() => {
+  const lines = form.value.content.replace(/^\s*\n|\n\s*$/g, '').split('\n')
+  return lines.some(l => l.trim() && !isMdTableRow(l))
 })
 
 /** 正文是否可切换到表格编辑：仅含一个 Markdown 表格块（前后允许空行） */
@@ -687,6 +689,8 @@ function escapeHtml(s: string): string {
 
 function inlineMd(s: string): string {
   return s
+    // &lt;br&gt; 是源码里合法的 <br>（escapeHtml 转义产物），还原为真标签换行（DOMPurify 白名单保留）
+    .replace(/&lt;br&gt;/gi, '<br>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 }
@@ -701,17 +705,24 @@ function renderMarkdown(raw: string): string {
 
   const flushTable = () => {
     if (!tableBuffer.length) return
+    // \| 是转义竖线（还原为 |），避免把单元格内竖线误切成新列
     const rows = tableBuffer
       .filter(l => !/^\s*\|[\s\-:|]+\|\s*$/.test(l))  // 去掉 --- 分隔行
-      .map(l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()))
+      .map(l => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|')))
     if (rows.length) {
       const head = rows[0]
-      const body = rows.slice(1)
-      out.push('<table><thead><tr>' + head.map(c => `<th>${inlineMd(c)}</th>`).join('') + '</tr></thead><tbody>')
+      // 列数归一到表头：缺列补空、多列裁掉
+      const norm = (r: string[]) => {
+        const cells = r.slice(0, head.length)
+        while (cells.length < head.length) cells.push('')
+        return cells
+      }
+      const body = rows.slice(1).map(norm)
+      out.push('<div class="kb-table-wrap"><table><thead><tr>' + head.map(c => `<th>${inlineMd(c)}</th>`).join('') + '</tr></thead><tbody>')
       for (const r of body) {
         out.push('<tr>' + r.map(c => `<td>${inlineMd(c)}</td>`).join('') + '</tr>')
       }
-      out.push('</tbody></table>')
+      out.push('</tbody></table></div>')
     }
     tableBuffer = []
   }
@@ -1285,8 +1296,15 @@ onMounted(() => {
 .table-editor-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   margin-bottom: 6px;
+}
+
+.table-mixed-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-right: 4px;
 }
 
 .editor-table :deep(th),
@@ -1315,6 +1333,27 @@ onMounted(() => {
   border-radius: 6px;
   background: var(--el-fill-color-blank);
   overflow-y: auto;
+}
+
+/* 预览区表格（与阅读端同规则：横向滚动容器防列压缩） */
+.editor-preview :deep(table) {
+  border-collapse: collapse;
+  margin: 10px 0;
+  min-width: 100%;
+}
+
+.editor-preview :deep(th),
+.editor-preview :deep(td) {
+  border: 1px solid var(--el-border-color-lighter);
+  padding: 6px 10px;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.editor-preview :deep(th) {
+  background: var(--el-fill-color-light);
+  font-weight: 500;
 }
 
 .reader-body {
@@ -1365,6 +1404,19 @@ onMounted(() => {
   padding: 0;
 }
 
+/* 表格横向滚动容器：宽表不被列压缩成竖排（阅读端与预览区通用） */
+.reader-body :deep(.kb-table-wrap),
+.editor-preview :deep(.kb-table-wrap) {
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.reader-body :deep(.kb-table-wrap table),
+.editor-preview :deep(.kb-table-wrap table) {
+  margin: 0;
+  min-width: max-content;
+}
+
 .reader-body :deep(table) {
   border-collapse: collapse;
   margin: 10px 0;
@@ -1377,6 +1429,7 @@ onMounted(() => {
   padding: 6px 10px;
   font-size: 13px;
   text-align: left;
+  white-space: nowrap;
 }
 
 .reader-body :deep(th) {
