@@ -3,15 +3,17 @@
     <div class="page-head">
       <div class="page-desc">{{ t('knowledge.description') }}</div>
       <div class="page-actions">
-        <el-button :disabled="total === 0" :loading="exporting" @click="handleExport">
-          <el-icon><Download /></el-icon>
-          {{ t('knowledge.export') }}
-        </el-button>
-        <el-button :loading="importing" @click="triggerImport">
+        <el-tooltip :content="t('knowledge.exportTip')" placement="top">
+          <el-button :disabled="total === 0" :loading="exporting" @click="handleExport">
+            <el-icon><Download /></el-icon>
+            {{ t('knowledge.export') }}
+          </el-button>
+        </el-tooltip>
+        <el-button v-if="canWrite" :loading="importing" @click="triggerImport">
           <el-icon><Upload /></el-icon>
           {{ t('knowledge.import') }}
         </el-button>
-        <el-button type="primary" @click="openCreate">
+        <el-button v-if="canWrite" type="primary" @click="openCreate">
           <el-icon><Plus /></el-icon>
           {{ t('knowledge.newArticle') }}
         </el-button>
@@ -28,6 +30,10 @@
     <div class="kb-layout">
       <!-- 分类侧栏 -->
       <aside class="kb-sidebar">
+        <div class="cat-head">
+          <span>{{ t('knowledge.catGroup') }}</span>
+          <el-icon v-if="canWrite" class="cat-add" :title="t('knowledge.catNew')" @click="openCatDialog()"><Plus /></el-icon>
+        </div>
         <div
           class="cat-item"
           :class="{ active: !activeCategory }"
@@ -43,8 +49,14 @@
           :class="{ active: activeCategory === c.name }"
           @click="selectCategory(c.name)"
         >
-          <span>{{ categoryLabel(c.name) }}</span>
-          <span class="cat-count">{{ c.count }}</span>
+          <span class="cat-name">{{ categoryLabel(c.name) }}</span>
+          <span class="cat-item-right">
+            <span v-if="canWrite && c.name !== '其他'" class="cat-ops">
+              <el-icon class="cat-op" :title="t('knowledge.catRename')" @click.stop="openCatDialog(c)"><Edit /></el-icon>
+              <el-icon class="cat-op cat-op-danger" :title="t('common.delete')" @click.stop="handleDeleteCategory(c)"><Delete /></el-icon>
+            </span>
+            <span class="cat-count">{{ c.count }}</span>
+          </span>
         </div>
       </aside>
 
@@ -65,7 +77,7 @@
           <div v-if="!loading && articles.length === 0" class="empty-state">
             <el-icon :size="48" color="#ccc"><Files /></el-icon>
             <p>{{ activeCategory ? t('knowledge.emptyCategory') : t('knowledge.empty') }}</p>
-            <div class="empty-actions">
+            <div v-if="canWrite" class="empty-actions">
               <el-button type="primary" @click="openCreate">
                 <el-icon><Plus /></el-icon>
                 {{ t('knowledge.newArticle') }}
@@ -88,7 +100,7 @@
               <el-tag v-if="!article.is_published" size="small" type="info" effect="plain">
                 {{ t('knowledge.draft') }}
               </el-tag>
-              <div class="kb-card-actions" @click.stop>
+              <div v-if="canWrite" class="kb-card-actions" @click.stop>
                 <el-button link type="primary" size="small" @click="openEdit(article)">
                   {{ t('knowledge.editArticle') }}
                 </el-button>
@@ -147,7 +159,7 @@
       <div class="reader-body" v-html="renderedContent"></div>
       <template #footer>
         <el-button @click="showReader = false">{{ t('common.close') }}</el-button>
-        <el-button type="primary" @click="editFromReader">{{ t('knowledge.editArticle') }}</el-button>
+        <el-button v-if="canWrite" type="primary" @click="editFromReader">{{ t('knowledge.editArticle') }}</el-button>
       </template>
     </el-dialog>
 
@@ -178,11 +190,13 @@
         </el-form-item>
         <el-form-item :label="t('knowledge.content')">
           <el-alert
-            :title="t('knowledge.sensitiveHint')"
+            v-if="sensitiveHits.length"
             type="warning"
             :closable="false"
             show-icon
             class="editor-hint"
+            :title="t('knowledge.sensitiveHitTitle')"
+            :description="t('knowledge.sensitiveHitDesc', { types: sensitiveHits.map(h => h.label).join('、') })"
           />
           <div class="editor-split">
             <!-- 左侧：根据内容类型自动切换 -->
@@ -259,6 +273,32 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 分类新增/改名弹窗 -->
+    <el-dialog
+      v-model="showCatDialog"
+      :title="catEditing ? t('knowledge.catRename') : t('knowledge.catNew')"
+      width="420px"
+      destroy-on-close
+    >
+      <el-form label-position="top" @submit.prevent="handleCatSubmit">
+        <el-form-item :label="t('knowledge.catName')" required>
+          <el-input
+            v-model="catForm.name"
+            :placeholder="t('knowledge.catNamePlaceholder')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleCatSubmit"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showCatDialog = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="catSaving" @click="handleCatSubmit">
+          {{ t('common.confirm') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -266,18 +306,23 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { Search, Plus, Files, Upload, Download } from '@element-plus/icons-vue'
+import { Search, Plus, Files, Upload, Download, Edit, Delete } from '@element-plus/icons-vue'
 import DOMPurify from 'dompurify'
 import {
   listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle, importArticle,
+  createCategory, updateCategory, deleteCategory,
   type KnowledgeArticle, type KnowledgeCategory,
 } from '@/api/knowledge'
 import { getUsers } from '@/api/users'
+import { useAuthStore } from '../../store/auth'
 import { formatDateTime } from '@/lib/utils'
 import { confirmAndRun } from '@/lib/confirm'
 import { parseAllMdTables, parseFirstMdTable, replaceMdTable } from '@/lib/md-table'
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+// 与后端对齐：POST/PUT/DELETE 文章与分类管理均需 knowledge:write（读/导出仅登录即可）
+const canWrite = computed(() => authStore.hasPermission('knowledge', 'write'))
 
 const loading = ref(false)
 const saving = ref(false)
@@ -401,6 +446,29 @@ const form = ref({
   is_published: true,
 })
 
+// ===== 敏感信息命中检测（键值形式，只提示不阻止保存，不回显命中内容）=====
+const SENSITIVE_PATTERNS: Array<{ key: string; re: RegExp }> = [
+  { key: 'password', re: /\b(?:password|passwd)\s*[=:]\s*\S+/i },
+  { key: 'secret', re: /\bsecret\s*[=:]\s*\S+/i },
+  { key: 'apiKey', re: /\bapi[_-]?key\s*[=:]\s*\S+/i },
+  { key: 'token', re: /\btoken\s*[:=]\s*\S+/i },
+  { key: 'privateKey', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+]
+
+const sensitiveHits = computed(() => {
+  const content = form.value.content
+  if (!content) return []
+  return SENSITIVE_PATTERNS
+    .filter(p => p.re.test(content))
+    .map(p => ({ key: p.key, label: t(`knowledge.sensitiveType_${p.key}`) }))
+})
+
+/** 后端 403 统一映射为 i18n 文案，不显示后端原文 */
+function errorMessageOf(error: any): string {
+  if (error?.response?.status === 403) return t('knowledge.noPermission')
+  return error?.response?.data?.detail || t('common.error')
+}
+
 const totalCount = computed(() => categories.value.reduce((sum, c) => sum + c.count, 0))
 
 // 预设分类的标签名（数据库存中文，显示映射）
@@ -465,6 +533,85 @@ function selectCategory(cat: string) {
   activeCategory.value = cat
   page.value = 1
   loadArticles()
+}
+
+// ===== 分类管理（新增/改名/删除，需 knowledge:write）=====
+const showCatDialog = ref(false)
+const catSaving = ref(false)
+const catEditing = ref<KnowledgeCategory | null>(null)  // null=新增
+const catForm = ref({ name: '' })
+
+function openCatDialog(cat?: KnowledgeCategory) {
+  catEditing.value = cat || null
+  catForm.value.name = cat?.name || ''
+  showCatDialog.value = true
+}
+
+async function handleCatSubmit() {
+  const name = catForm.value.name.trim()
+  if (!name) {
+    ElMessage.error(t('knowledge.catNameRequired'))
+    return
+  }
+  if (name.length > 50) {
+    ElMessage.error(t('knowledge.catNameTooLong'))
+    return
+  }
+  // 提交前本地判重（后端 409 兜底）
+  const dup = categories.value.some(c => c.name === name && c.id !== catEditing.value?.id)
+  if (dup) {
+    ElMessage.error(t('knowledge.catDuplicate'))
+    return
+  }
+  catSaving.value = true
+  try {
+    if (catEditing.value) {
+      await updateCategory(catEditing.value.id, { name })
+      // 改名后同步当前选中分类名，保持筛选连续
+      if (activeCategory.value === catEditing.value.name) activeCategory.value = name
+      ElMessage.success(t('knowledge.catRenameSuccess'))
+    } else {
+      await createCategory({ name })
+      ElMessage.success(t('knowledge.catNewSuccess'))
+    }
+    showCatDialog.value = false
+    await Promise.all([loadCategories(), loadArticles()])
+  } catch (error: any) {
+    console.error('Failed to save category:', error)
+    ElMessage.error(errorMessageOf(error))
+  } finally {
+    catSaving.value = false
+  }
+}
+
+async function handleDeleteCategory(cat: KnowledgeCategory) {
+  // 删除前预检文章数，409 仅作兜底
+  if (cat.count > 0) {
+    ElMessage.warning(t('knowledge.catInUse', { count: cat.count }))
+    return
+  }
+  await confirmAndRun({
+    message: t('knowledge.catDeleteConfirm', { name: categoryLabel(cat.name) }),
+    title: t('common.confirm'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+    danger: true,
+    action: async () => {
+      await deleteCategory(cat.id)
+      // 删除的是当前选中分类时切回「全部」；侧栏与列表始终刷新，避免残留已删分类
+      if (activeCategory.value === cat.name) {
+        activeCategory.value = ''
+        page.value = 1
+      }
+      await Promise.all([loadCategories(), loadArticles()])
+    },
+    successMessage: t('knowledge.catDeleteSuccess'),
+    errorMessage: (error: any) => {
+      // 兜底：预检后被使用/默认分类保护等 409
+      if (error?.response?.status === 409) return t('knowledge.catDeleteConflict')
+      return errorMessageOf(error)
+    },
+  })
 }
 
 // ===== 阅读 =====
@@ -605,7 +752,7 @@ async function handleSave() {
     await Promise.all([loadArticles(), loadCategories()])
   } catch (error: any) {
     console.error('Failed to save article:', error)
-    ElMessage.error(error.response?.data?.detail || t('common.error'))
+    ElMessage.error(errorMessageOf(error))
   } finally {
     saving.value = false
   }
@@ -625,17 +772,28 @@ function articleToMarkdown(a: KnowledgeArticle): string {
 async function handleExport() {
   exporting.value = true
   try {
-    // 拉全量（上限放宽），按当前分类/关键词筛选
-    const res = await listArticles({
+    // 分页拉全量（单页上限 1000，硬上限 5000 篇），按当前分类/关键词筛选，含草稿
+    const base = {
       category: activeCategory.value || undefined,
       keyword: keyword.value || undefined,
-      skip: 0,
-      limit: 1000,
-    })
-    if (!res.items.length) return
+    }
+    const PAGE = 1000
+    const HARD_LIMIT = 5000
+    const items: KnowledgeArticle[] = []
+    let totalAll = 0
+    for (let skip = 0; ; skip += PAGE) {
+      const res = await listArticles({ ...base, skip, limit: PAGE })
+      totalAll = res.total
+      items.push(...res.items)
+      if (items.length >= totalAll || items.length >= HARD_LIMIT || res.items.length < PAGE) break
+    }
+    if (!items.length) {
+      ElMessage.info(t('knowledge.exportEmpty'))
+      return
+    }
     // 逐篇补正文
     const parts: string[] = []
-    for (const item of res.items) {
+    for (const item of items) {
       try {
         const detail = await getArticle(item.id, false)
         parts.push(articleToMarkdown(detail))
@@ -643,7 +801,7 @@ async function handleExport() {
         parts.push(articleToMarkdown(item))
       }
     }
-    const banner = `> ${t('knowledge.exportBanner', { count: res.items.length })} · ${formatDateTime(new Date().toISOString())}\n\n`
+    const banner = `> ${t('knowledge.exportBanner', { count: items.length })} · ${formatDateTime(new Date().toISOString())}\n\n`
     const blob = new Blob([banner + parts.join('\n\n---\n\n')], { type: 'text/markdown;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -651,9 +809,15 @@ async function handleExport() {
     link.download = `knowledge-${new Date().toISOString().slice(0, 10)}.md`
     link.click()
     URL.revokeObjectURL(url)
+    // 超过硬上限时明确告知仅导出前 N 篇
+    if (totalAll > items.length) {
+      ElMessage.warning(t('knowledge.exportTruncated', { count: items.length, total: totalAll }))
+    } else {
+      ElMessage.success(t('knowledge.exportSuccess', { count: items.length }))
+    }
   } catch (error: any) {
     console.error('Failed to export articles:', error)
-    ElMessage.error(error.response?.data?.detail || t('common.error'))
+    ElMessage.error(errorMessageOf(error))
   } finally {
     exporting.value = false
   }
@@ -690,7 +854,7 @@ async function handleImport(e: Event) {
     }
   } catch (error: any) {
     console.error('Failed to import article:', error)
-    ElMessage.error(error.response?.data?.detail || t('common.error'))
+    ElMessage.error(errorMessageOf(error))
   } finally {
     importing.value = false
   }
@@ -757,6 +921,30 @@ onMounted(() => {
   padding: 8px;
 }
 
+.cat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin-bottom: 6px;
+}
+
+.cat-add {
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  border-radius: 4px;
+  padding: 2px;
+  transition: all 0.15s;
+}
+
+.cat-add:hover {
+  color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
+}
+
 .cat-item {
   display: flex;
   align-items: center;
@@ -766,6 +954,46 @@ onMounted(() => {
   cursor: pointer;
   font-size: 14px;
   color: var(--el-text-color-regular);
+}
+
+.cat-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cat-item-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cat-ops {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.cat-item:hover .cat-ops {
+  display: inline-flex;
+}
+
+.cat-op {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  border-radius: 3px;
+  padding: 2px;
+  transition: all 0.15s;
+}
+
+.cat-op:hover {
+  color: var(--el-color-primary);
+  background: var(--el-fill-color);
+}
+
+.cat-op-danger:hover {
+  color: var(--el-color-danger);
 }
 
 .cat-item:hover {
