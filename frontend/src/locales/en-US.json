@@ -1518,6 +1518,7 @@
     "tableDelRow": "Del Row",
     "tableDelCol": "Del Col",
     "tableSwitchSource": "Source",
+    "tableSwitchBack": "Back to Table",
     "importUnsupported": "Only .md / .txt / .docx / .xlsx files are supported",
     "export": "Export",
     "exportBanner": "Knowledge base export, {count} article(s) (current filters applied, drafts included)",

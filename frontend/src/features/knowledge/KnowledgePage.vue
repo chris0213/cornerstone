@@ -256,13 +256,17 @@
                 </el-table>
               </div>
               <!-- 源码模式 -->
-              <el-input
-                v-else
-                v-model="form.content"
-                type="textarea"
-                class="editor-textarea"
-                :placeholder="t('knowledge.contentPlaceholder')"
-              />
+              <template v-else>
+                <div v-if="contentQualifiesForTable" class="table-editor-toolbar">
+                  <el-button size="small" @click="tableForceSource = false">{{ t('knowledge.tableSwitchBack') }}</el-button>
+                </div>
+                <el-input
+                  v-model="form.content"
+                  type="textarea"
+                  class="editor-textarea"
+                  :placeholder="t('knowledge.contentPlaceholder')"
+                />
+              </template>
             </div>
             <!-- 右侧：渲染预览 -->
             <div class="editor-pane">
@@ -383,18 +387,21 @@ const tableForceSource = ref(false)  // 用户手动切到源码
 const tableSelectedRow = ref<number | null>(null)
 const tableSelectedCol = ref<number | null>(null)
 
-/** 正文是否可切换到表格编辑：仅含一个 Markdown 表格块（前后允许空行） */
-const tableEditMode = computed(() => {
-  if (tableForceSource.value) return false
+/** 正文是否够格进表格编辑（与 tableEditMode 无关，供源码模式判断能否切回） */
+const contentQualifiesForTable = computed(() => {
   const content = form.value.content
   const stripped = content.replace(/^\s*\n|\n\s*$/g, '')
   const tables = parseAllMdTables(stripped)
   if (tables.length !== 1) return false
   const t = tables[0]
-  // 表格块占据正文绝大部分（允许前后少量空行/单行说明）
   const lines = stripped.split('\n')
-  if (t.startLine > 2 || lines.length - t.endLine - 1 > 2) return false
-  return true
+  return t.startLine <= 2 && lines.length - t.endLine - 1 <= 2
+})
+
+/** 正文是否可切换到表格编辑：仅含一个 Markdown 表格块（前后允许空行） */
+const tableEditMode = computed(() => {
+  if (tableForceSource.value) return false
+  return contentQualifiesForTable.value
 })
 
 const tableHeader = computed<string[]>(() => {
