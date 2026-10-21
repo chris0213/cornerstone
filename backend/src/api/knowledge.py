@@ -133,7 +133,11 @@ async def create_category(
     if len(name) > 50:
         raise HTTPException(status_code=400, detail="分类名最长 50 字")
     if await _category_name_taken(db, name):
-        raise HTTPException(status_code=409, detail="分类名已存在")
+        raise HTTPException(status_code=409, detail={
+            "code": "knowledge.category_name_exists",
+            "message": "分类名已存在",
+            "params": {},
+        })
     category = KnowledgeCategory(
         name=name,
         description=str(payload.get("description") or "").strip()[:200],
@@ -163,7 +167,11 @@ async def update_category(
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     if category.name == "其他":
-        raise HTTPException(status_code=409, detail="默认分类「其他」不可修改")
+        raise HTTPException(status_code=409, detail={
+            "code": "knowledge.category_default_readonly",
+            "message": "默认分类「其他」不可修改",
+            "params": {},
+        })
 
     new_name = str(payload.get("name") or "").strip()
     if not new_name:
@@ -171,7 +179,11 @@ async def update_category(
     if len(new_name) > 50:
         raise HTTPException(status_code=400, detail="分类名最长 50 字")
     if new_name != category.name and await _category_name_taken(db, new_name, exclude_id=category_id):
-        raise HTTPException(status_code=409, detail="分类名已存在")
+        raise HTTPException(status_code=409, detail={
+            "code": "knowledge.category_name_exists",
+            "message": "分类名已存在",
+            "params": {},
+        })
 
     old_name = category.name
     if "description" in payload:
@@ -206,7 +218,11 @@ async def delete_category(
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     if category.name == "其他":
-        raise HTTPException(status_code=409, detail="默认分类「其他」不可删除")
+        raise HTTPException(status_code=409, detail={
+            "code": "knowledge.category_default_readonly",
+            "message": "默认分类「其他」不可删除",
+            "params": {},
+        })
     in_use = (await db.execute(
         select(func.count(KnowledgeArticle.id)).where(
             KnowledgeArticle.category == category.name,
@@ -214,7 +230,11 @@ async def delete_category(
         )
     )).scalar() or 0
     if in_use:
-        raise HTTPException(status_code=409, detail=f"该分类下仍有 {in_use} 篇文章，无法删除")
+        raise HTTPException(status_code=409, detail={
+            "code": "knowledge.category_in_use",
+            "message": f"该分类下仍有 {in_use} 篇文章，无法删除",
+            "params": {"count": in_use},
+        })
     name = category.name
     await db.delete(category)
     await db.commit()

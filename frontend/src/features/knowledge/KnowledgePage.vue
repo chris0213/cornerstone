@@ -155,8 +155,17 @@
           {{ authorName(reading?.author || '') }} · {{ formatDateTime(reading?.updated_at || '') }}
           · {{ t('knowledge.views', { count: reading?.view_count || 0 }) }}
         </span>
+        <el-popover placement="bottom-end" :width="240" trigger="click">
+          <template #reference>
+            <el-button link size="small" class="reader-setting-btn">
+              <el-icon><Setting /></el-icon>
+              {{ t('knowledge.displaySettings') }}
+            </el-button>
+          </template>
+          <DisplaySettings />
+        </el-popover>
       </div>
-      <div class="reader-body" v-html="renderedContent"></div>
+      <div class="reader-body" :class="displayClass" :style="displayStyle" v-html="renderedContent"></div>
       <template #footer>
         <el-button @click="showReader = false">{{ t('common.close') }}</el-button>
         <el-button v-if="canWrite" type="primary" @click="editFromReader">{{ t('knowledge.editArticle') }}</el-button>
@@ -257,8 +266,16 @@
             </div>
             <!-- 右侧：渲染预览 -->
             <div class="editor-pane">
-              <div class="pane-label">{{ t('knowledge.modePreview') }}</div>
-              <div class="reader-body editor-preview" v-html="editorPreview"></div>
+              <div class="pane-label">
+                {{ t('knowledge.modePreview') }}
+                <el-popover placement="bottom-end" :width="240" trigger="click">
+                  <template #reference>
+                    <el-icon class="pane-setting" :title="t('knowledge.displaySettings')"><Setting /></el-icon>
+                  </template>
+                  <DisplaySettings />
+                </el-popover>
+              </div>
+              <div class="reader-body editor-preview" :class="displayClass" :style="displayStyle" v-html="editorPreview"></div>
             </div>
           </div>
         </el-form-item>
@@ -306,8 +323,10 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { Search, Plus, Files, Upload, Download, Edit, Delete } from '@element-plus/icons-vue'
+import { Search, Plus, Files, Upload, Download, Edit, Delete, Setting } from '@element-plus/icons-vue'
 import DOMPurify from 'dompurify'
+import DisplaySettings from './DisplaySettings.vue'
+import { kbDisplaySettings, type KbDisplaySettings } from './displaySettings'
 import {
   listArticles, listCategories, getArticle, createArticle, updateArticle, deleteArticle, importArticle,
   createCategory, updateCategory, deleteCategory,
@@ -463,10 +482,30 @@ const sensitiveHits = computed(() => {
     .map(p => ({ key: p.key, label: t(`knowledge.sensitiveType_${p.key}`) }))
 })
 
-/** 后端 403 统一映射为 i18n 文案，不显示后端原文 */
+/**
+ * 后端错误本地化：403 统一无权限文案；
+ * 409 按结构化 code 精确映射（含 count 参数）；
+ * 其余回退 detail 原文（旧格式纯字符串）或通用错误。
+ */
+const ERROR_CODE_KEYS: Record<string, string> = {
+  'knowledge.category_name_exists': 'knowledge.catDuplicate',
+  'knowledge.category_default_readonly': 'knowledge.catDefaultReadonly',
+  'knowledge.category_in_use': 'knowledge.catInUse',
+}
+
 function errorMessageOf(error: any): string {
   if (error?.response?.status === 403) return t('knowledge.noPermission')
-  return error?.response?.data?.detail || t('common.error')
+  const detail = error?.response?.data?.detail
+  if (detail && typeof detail === 'object' && detail.code) {
+    const key = ERROR_CODE_KEYS[detail.code]
+    if (key) {
+      const params: Record<string, unknown> = {}
+      if (detail.params && typeof detail.params === 'object') Object.assign(params, detail.params)
+      return t(key, params)
+    }
+    if (detail.message) return detail.message
+  }
+  return (typeof detail === 'string' && detail) || t('common.error')
 }
 
 const totalCount = computed(() => categories.value.reduce((sum, c) => sum + c.count, 0))
@@ -606,11 +645,8 @@ async function handleDeleteCategory(cat: KnowledgeCategory) {
       await Promise.all([loadCategories(), loadArticles()])
     },
     successMessage: t('knowledge.catDeleteSuccess'),
-    errorMessage: (error: any) => {
-      // 兜底：预检后被使用/默认分类保护等 409
-      if (error?.response?.status === 409) return t('knowledge.catDeleteConflict')
-      return errorMessageOf(error)
-    },
+    // 409（in_use / default_readonly）由 errorMessageOf 按结构化 code 精确映射
+    errorMessage: errorMessageOf,
   })
 }
 
@@ -708,6 +744,38 @@ function renderMarkdown(raw: string): string {
 }
 
 const renderedContent = computed(() => renderMarkdown(reading.value?.content || ''))
+
+// ===== 阅读显示设置（字号/字体族/配色/文字颜色；localStorage 本机生效）=====
+const FONT_SIZES: Record<KbDisplaySettings['fontSize'], string> = {
+  small: '13px', medium: '14px', large: '16px',
+}
+const FONT_FAMILIES: Record<KbDisplaySettings['fontFamily'], string> = {
+  default: '',
+  serif: "Georgia, 'Times New Roman', 'Songti SC', 'SimSun', serif",
+  mono: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace",
+}
+const THEMES: Record<KbDisplaySettings['theme'], { bg: string; border: string }> = {
+  light: { bg: '', border: '' },
+  sepia: { bg: '#f7f1e3', border: '#e8dcc0' },
+  dark: { bg: '#1e2430', border: '#2d3646' },
+}
+const displaySettings = computed<KbDisplaySettings>(() => kbDisplaySettings)
+
+const displayClass = computed(() => `kb-theme-${displaySettings.value.theme}`)
+
+const displayStyle = computed(() => {
+  const s = displaySettings.value
+  const style: Record<string, string> = {
+    fontSize: FONT_SIZES[s.fontSize],
+  }
+  const family = FONT_FAMILIES[s.fontFamily]
+  if (family) style.fontFamily = family
+  const theme = THEMES[s.theme]
+  if (theme.bg) style.background = theme.bg
+  if (theme.border) style.borderColor = theme.border
+  if (s.color) style.color = s.color
+  return style
+})
 
 // ===== 编辑 =====
 function openCreate() {
@@ -1147,6 +1215,50 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
   margin-bottom: 4px;
   padding-left: 2px;
+}
+
+/* 显示设置入口 */
+.pane-setting {
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.pane-setting:hover {
+  color: var(--el-color-primary);
+}
+
+/* 阅读配色主题适配 */
+.kb-theme-sepia :deep(table th),
+.kb-theme-dark :deep(table th) {
+  background: transparent;
+}
+
+.kb-theme-sepia :deep(table th),
+.kb-theme-sepia :deep(table td) {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.kb-theme-sepia :deep(code),
+.kb-theme-sepia :deep(pre) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.kb-theme-dark,
+.kb-theme-dark :deep(h2),
+.kb-theme-dark :deep(h3),
+.kb-theme-dark :deep(h4) {
+  color: #d8dee9;
+}
+
+.kb-theme-dark :deep(table th),
+.kb-theme-dark :deep(table td) {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.kb-theme-dark :deep(code),
+.kb-theme-dark :deep(pre) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
 }
 
 .editor-textarea :deep(.el-textarea__inner) {
