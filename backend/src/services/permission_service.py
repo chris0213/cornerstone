@@ -52,6 +52,9 @@ PERMISSIONS = [
     {"module": "alerts", "action": "read", "display_name": "预警管理-查看", "description": "查看预警信息"},
     {"module": "alerts", "action": "write", "display_name": "预警管理-处理", "description": "认领、处理、静默预警"},
 
+    # 知识库
+    {"module": "knowledge", "action": "write", "display_name": "知识库-撰写", "description": "新建、导入知识库文章及管理分类"},
+
     # 运营月报
     {"module": "reports", "action": "read", "display_name": "运营月报-查看", "description": "查看和下载运营月报"},
 
@@ -99,6 +102,7 @@ ROLES = [
             "backups:read", "backups:write", "backups:delete", "backups:export", "backups:backup_exec",
             "topology:read", "topology:write", "topology:delete",
             "alerts:read", "alerts:write",
+            "knowledge:write",
             "inspection:read", "inspection:write",
             "logs:read"
         ]

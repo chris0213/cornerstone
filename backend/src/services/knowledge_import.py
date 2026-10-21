@@ -19,10 +19,57 @@ xlsx 还原规则：
 """
 import io
 import re
+import zipfile
 from datetime import date, datetime
 from typing import Optional
 
 MONO_FONTS = {"courier new", "consolas", "menlo", "monaco", "sf mono", "source code pro", "lucida console"}
+
+# ---- xlsx 压缩炸弹防护阈值 ----
+MAX_XLSX_UNCOMPRESSED = 50 * 1024 * 1024   # 压缩包内所有条目解压后总大小上限 50MB
+MAX_XLSX_RATIO = 200                        # 单条目压缩比上限（解压/压缩），超限视为炸弹
+MAX_XLSX_STREAM_TOTAL = 100 * 1024 * 1024   # 校验性流式解压累计字节上限 100MB（超限中止）
+MAX_XLSX_ROWS = 5000                        # 单工作表最大行数
+MAX_XLSX_COLS = 100                         # 单工作表最大列数
+
+
+def _check_xlsx_zipbomb(raw: bytes) -> None:
+    """加载前防护：中心目录校验（总解压大小/压缩比）+ 流式解压累计字节校验。
+
+    任一超限抛 ValueError，由导入接口统一转为 400。
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            infos = zf.infolist()
+            total_declared = sum(i.file_size for i in infos)
+            if total_declared > MAX_XLSX_UNCOMPRESSED:
+                raise ValueError(
+                    f"解压后总大小 {total_declared} 字节超过上限 {MAX_XLSX_UNCOMPRESSED} 字节"
+                )
+            for info in infos:
+                if info.file_size > 0 and info.compress_size > 0:
+                    ratio = info.file_size / info.compress_size
+                    if ratio > MAX_XLSX_RATIO:
+                        raise ValueError(
+                            f"条目 {info.filename} 压缩比 {ratio:.0f} 超过上限 {MAX_XLSX_RATIO} 倍"
+                        )
+            # 中心目录声明可能伪造，流式解压复核真实字节数（读到即弃，只累计大小）
+            streamed = 0
+            for info in infos:
+                if info.is_dir():
+                    continue
+                with zf.open(info) as fp:
+                    while True:
+                        chunk = fp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        streamed += len(chunk)
+                        if streamed > MAX_XLSX_STREAM_TOTAL:
+                            raise ValueError(
+                                f"实际解压累计 {streamed} 字节超过上限 {MAX_XLSX_STREAM_TOTAL} 字节"
+                            )
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"不是有效的 xlsx 文件：{e}")
 
 
 def import_text_to_markdown(filename: str, raw: bytes) -> str:
@@ -357,13 +404,35 @@ def xlsx_sheets_to_markdown(raw: bytes) -> list[tuple[str, str]]:
     """
     from openpyxl import load_workbook
 
-    # 不用 read_only：其读取范围依赖文件内 <dimension> 声明，WPS/系统导出的文件
-    # 常把 dimension 写成 A1 导致整表只剩首格；普通模式按实际单元格解析（5MB 上限内存可控）
-    wb_v = load_workbook(io.BytesIO(raw), data_only=True)
-    wb_f = load_workbook(io.BytesIO(raw), data_only=False)
+    # 加载前防护：中心目录总解压大小/压缩比 + 流式解压累计字节三重校验
+    _check_xlsx_zipbomb(raw)
+
+    # read_only 流式低内存加载；reset_dimensions 忽略文件内 <dimension> 声明
+    # （WPS/系统导出常把 dimension 写成 A1，导致不 reset 时整表只剩首格），
+    # 并以 max_row/max_col 硬限制行列数，超限单元格不再读入。
+    wb_v = load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+    wb_f = load_workbook(io.BytesIO(raw), data_only=False, read_only=True)
     try:
-        val_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_v.worksheets}
-        frm_grids = {ws.title: list(ws.iter_rows(values_only=True)) for ws in wb_f.worksheets}
+        val_grids: dict[str, list[list]] = {}
+        frm_grids: dict[str, list[list]] = {}
+        for ws in wb_v.worksheets:
+            ws.reset_dimensions()
+            grid = [
+                list(row)
+                for row in ws.iter_rows(values_only=True, max_row=MAX_XLSX_ROWS, max_col=MAX_XLSX_COLS)
+            ]
+            if ws.max_row and ws.max_row > MAX_XLSX_ROWS or ws.max_column and ws.max_column > MAX_XLSX_COLS:
+                raise ValueError(
+                    f"工作表「{ws.title}」超出限制（行上限 {MAX_XLSX_ROWS}、列上限 {MAX_XLSX_COLS}）"
+                )
+            val_grids[ws.title] = grid
+        for ws in wb_f.worksheets:
+            ws.reset_dimensions()
+            frm_grids[ws.title] = [
+                list(row)
+                for row in ws.iter_rows(values_only=True, max_row=MAX_XLSX_ROWS, max_col=MAX_XLSX_COLS)
+            ]
+
         resolver = _XlsxResolver(val_grids, frm_grids)
 
         out: list[tuple[str, str]] = []  # (表名, markdown)
