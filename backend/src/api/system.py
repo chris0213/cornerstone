@@ -43,6 +43,49 @@ class SSOConfigModel(BaseModel):
     userinfo_url: Optional[str] = None
     redirect_url: Optional[str] = None
     login_methods: str = "local,oauth2,saml"
+    allowed_redirect_hosts: Optional[str] = None  # 可选：redirect_url 域名白名单（逗号分隔）
+
+
+# 登录方式白名单；local 必须保留，否则会把本地登录从登录页挤掉
+ALLOWED_LOGIN_METHODS = {"local", "oauth2", "saml"}
+
+
+def _validate_login_methods(login_methods: str) -> str:
+    """校验并规范化 login_methods（去空白、去重、保序、必含 local）。"""
+    methods = [m.strip().lower() for m in (login_methods or "").split(",") if m.strip()]
+    invalid = [m for m in methods if m not in ALLOWED_LOGIN_METHODS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的登录方式: {', '.join(invalid)}（可选: local, oauth2, saml）"
+        )
+    if "local" not in methods:
+        raise HTTPException(status_code=400, detail="登录方式必须包含 local（本地登录）")
+    # 去重保序
+    seen = []
+    for m in methods:
+        if m not in seen:
+            seen.append(m)
+    return ",".join(seen)
+
+
+def _validate_redirect_url(redirect_url: Optional[str], allowed_hosts: Optional[str]):
+    """redirect_url 强制 https；配置了域名白名单时域名必须在白名单内。"""
+    if not redirect_url or not redirect_url.strip():
+        return
+    url = redirect_url.strip()
+    if not url.lower().startswith("https://"):
+        raise HTTPException(status_code=400, detail="回调地址 redirect_url 必须以 https:// 开头")
+    if not allowed_hosts or not allowed_hosts.strip():
+        return  # 未配置白名单 → 仅要求 https，不拦截（避免打挂现有配置）
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    whitelist = [h.strip().lower().lstrip("*.") for h in allowed_hosts.split(",") if h.strip()]
+    if host not in whitelist:
+        raise HTTPException(
+            status_code=400,
+            detail=f"回调地址域名 {host} 不在白名单内（允许: {', '.join(whitelist)}）"
+        )
 
 
 async def _load_sso_raw(db: AsyncSession) -> dict:
@@ -95,6 +138,10 @@ async def save_sso_config(
     current_user: User = Depends(get_current_superuser),
 ):
     """保存SSO配置（仅super_admin；client_secret 留空则保留原值）"""
+    # login_methods 白名单校验（必含 local）；redirect_url 强制 https + 可选域名白名单
+    config.login_methods = _validate_login_methods(config.login_methods)
+    _validate_redirect_url(config.redirect_url, config.allowed_redirect_hosts)
+
     existing = await _load_sso_raw(db)
 
     # client_secret 处理：空 → 保留原值；非空 → 加密存储
@@ -138,6 +185,10 @@ async def test_sso_config(
 
     if not config.client_id or not config.authorize_url:
         raise HTTPException(status_code=400, detail="缺少必要的配置参数")
+
+    # 与保存同规则校验，避免测完再存才发现非法
+    _validate_login_methods(config.login_methods)
+    _validate_redirect_url(config.redirect_url, config.allowed_redirect_hosts)
 
     # 留空时用库中已存 secret（解密），避免前端回传明文
     secret = (config.client_secret or "").strip()

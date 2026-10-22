@@ -309,14 +309,9 @@ async function handleEditUser() {
 }
 async function handleToggleActive(user: UserItem) {
  try {
- const response = await fetch(`/api/v1/users/${user.id}/toggle-active`, {
- method: 'POST',
- headers: {
- Authorization: `Bearer ${authStore.token}`
- }
- });
- if (response.ok) {
- user.is_active = !user.is_active;
+ // 后端 PATCH toggle：含自身/最后超管保护，返回更新后的用户
+ const response = await api.patch(`/api/v1/users/${user.id}/toggle`);
+ user.is_active = response.data.is_active;
  // 添加审计日志
  appStore.addAuditLog({
  user: authStore.user?.username || 'system',
@@ -329,14 +324,10 @@ async function handleToggleActive(user: UserItem) {
  });
  ElMessage.success(user.is_active ? t('system.userEnabled') : t('system.userDisabled'));
  }
- else {
- const error = await response.json();
- ElMessage.error(error.detail || t('system.operationFailed'));
- }
- }
- catch (error) {
+ catch (error: any) {
  console.error('Toggle active failed:', error);
- ElMessage.error(t('system.operationFailed'));
+ const errorMsg = error.response?.data?.detail || error.message || t('system.operationFailed');
+ ElMessage.error(errorMsg);
  }
 }
 function openResetPwdModal(userId: number) {
@@ -426,8 +417,10 @@ async function revokeSession(sessionId: string) {
     title: t('system.confirmRevoke'),
     confirmText: t('system.revoke'),
     cancelText: t('common.cancel'),
-    action: () => {
-      sessions.value = sessions.value.filter(s => s.id !== sessionId);
+    action: async () => {
+      // 调后端真实吊销接口（is_revoked=True，token 立即失效）
+      await api.delete(`/api/v1/users/${selectedUser.value?.id}/sessions/${sessionId}`);
+      await openSessionsModal(selectedUser.value!);
     },
     successMessage: t('system.sessionRevoked'),
     errorMessage: t('system.operationFailed'),
@@ -439,8 +432,10 @@ async function revokeAllSessions() {
     title: t('system.confirmRevoke'),
     confirmText: t('system.revoke'),
     cancelText: t('common.cancel'),
-    action: () => {
-      sessions.value = sessions.value.filter(s => s.is_current);
+    action: async () => {
+      // 调后端批量强制下线接口（含审计）
+      await api.post(`/api/v1/users/${selectedUser.value?.id}/revoke-sessions`);
+      await openSessionsModal(selectedUser.value!);
     },
     successMessage: t('system.otherSessionsRevoked'),
     errorMessage: t('system.operationFailed'),

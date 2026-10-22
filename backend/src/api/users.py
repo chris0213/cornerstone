@@ -492,6 +492,50 @@ async def revoke_user_sessions(
     
     return {"message": "已强制用户所有会话下线"}
 
+@router.delete("/{user_id}/sessions/{session_id}")
+async def revoke_user_session(
+    request: Request,
+    user_id: int,
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_superuser)
+):
+    """吊销用户单个会话"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    stmt = select(UserSession).where(
+        UserSession.id == session_id,
+        UserSession.user_id == user_id
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session.is_revoked:
+        raise HTTPException(status_code=400, detail="该会话已吊销")
+    
+    await db.execute(
+        update(UserSession).where(UserSession.id == session_id).values(is_revoked=True)
+    )
+    
+    client_ip = get_client_ip_from_request(request)
+    stmt = insert(AuditLog).values(
+        user=current_user.username,
+        action="强制下线",
+        resource="用户",
+        detail=f"吊销用户 {user.username} 的单个会话 (jti={session.jti})",
+        ip_address=client_ip,
+        success="true"
+    )
+    await db.execute(stmt)
+    
+    await db.commit()
+    
+    return {"message": "会话已吊销"}
+
 @router.get("/roles/", response_model=list[RoleResponse])
 async def get_roles(
     db: AsyncSession = Depends(get_db),

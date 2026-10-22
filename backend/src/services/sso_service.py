@@ -162,6 +162,10 @@ class SSOService:
         if not username:
             raise SSOException("无法获取用户名")
         
+        # email 为非空约束字段，IdP 未返回时用占位域兜底
+        if not email:
+            email = f"{username}@sso.placeholder"
+        
         # 查询现有用户
         from sqlalchemy import select
         stmt = select(User).where(User.username == username)
@@ -185,22 +189,13 @@ class SSOService:
             result = await db.execute(stmt)
             user = result.scalar_one()
         else:
-            # 创建新用户
-            # 获取默认角色（普通用户）
-            stmt = select(Role).where(Role.name == "user")
+            # 创建新用户：默认角色使用内置 viewer（勿创建孤立角色）
+            stmt = select(Role).where(Role.name == "viewer")
             result = await db.execute(stmt)
             role = result.scalar_one_or_none()
             
             if not role:
-                # 如果没有用户角色，创建一个
-                role = Role(
-                    name="user",
-                    display_name="普通用户",
-                    permissions="[]"
-                )
-                db.add(role)
-                await db.commit()
-                await db.refresh(role)
+                raise SSOException("系统内置角色 viewer 不存在，请重新初始化系统")
             
             # 创建用户（密码设置为随机值，SSO用户不需要密码登录）
             random_password = str(uuid.uuid4())
