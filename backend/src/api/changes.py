@@ -242,6 +242,50 @@ def _row_conditions(sub, source, object_id, operator, keyword, start, end):
     return conditions
 
 
+@router.get("/objects")
+async def changes_objects(
+    source: Optional[str] = Query(None, description="来源：circuit=专线变更 / config=配置变更"),
+    change_type: Optional[str] = Query(None, description="变更类型：create/update/delete"),
+    operator: Optional[str] = Query(None, description="操作人（模糊）"),
+    keyword: Optional[str] = Query(None, description="关键词（对象名/字段/新旧值）"),
+    start: Optional[datetime] = Query(None, description="起始时间（含）"),
+    end: Optional[datetime] = Query(None, description="结束时间（不含）"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("logs:read")),
+):
+    """受影响对象清单：当前筛选范围内去重后的对象（设备/专线），含变更次数与最近变更时间"""
+    sub = _union_subquery()
+    # change_type 是批次级筛选，此处退化为行级命中即可（目的只是「哪些对象受影响」）
+    conditions = _row_conditions(sub, source, None, operator, keyword, start, end)
+    if change_type:
+        conditions.append(sub.c.change_type == change_type)
+    stmt = select(
+        sub.c.source,
+        sub.c.object_id,
+        sub.c.object_name,
+        func.count().label("change_count"),
+        func.max(sub.c.created_at).label("last_change_at"),
+    )
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
+    stmt = stmt.group_by(sub.c.source, sub.c.object_id, sub.c.object_name)
+    stmt = stmt.order_by(func.max(sub.c.created_at).desc())
+    rows = (await db.execute(stmt)).all()
+    return {
+        "items": [
+            {
+                "source": r.source,
+                "object_id": r.object_id,
+                "object_name": r.object_name or "",
+                "change_count": r.change_count,
+                "last_change_at": r.last_change_at.isoformat() if r.last_change_at else None,
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
 @router.get("/operators")
 async def changes_operators(
     db: AsyncSession = Depends(get_db),

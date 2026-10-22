@@ -65,6 +65,21 @@ export async function getChangesSummary(params: { start?: string; end?: string }
   return response.data
 }
 
+/** 受影响对象（当前筛选范围内去重） */
+export interface ChangeObjectItem {
+  source: 'circuit' | 'config'
+  object_id: number | null
+  object_name: string
+  change_count: number
+  last_change_at: string | null
+}
+
+/** 受影响对象清单（与列表共用筛选参数） */
+export async function getChangeObjects(params: ChangeQuery = {}): Promise<{ items: ChangeObjectItem[]; total: number }> {
+  const response = await request.get('/changes/objects', { params })
+  return response.data
+}
+
 /** 操作人下拉选项（去重后的用户名列表） */
 export async function getChangesOperators(): Promise<string[]> {
   const response = await request.get('/changes/operators')

@@ -56,6 +56,7 @@
       />
       <el-button @click="resetFilters">{{ t('changes.reset') }}</el-button>
       <div class="filter-right">
+        <el-button :loading="objectsLoading" @click="openObjects">{{ t('changes.affectedObjects') }}</el-button>
         <el-button :loading="exporting" @click="handleExport">{{ t('changes.export') }}</el-button>
         <el-radio-group v-model="viewMode" size="small">
           <el-radio-button value="timeline">{{ t('changes.viewTimeline') }}</el-radio-button>
@@ -170,6 +171,35 @@
         @current-change="loadChanges"
       />
     </div>
+    <!-- 受影响对象弹窗：当前筛选范围内去重对象清单，点击跳转 -->
+    <el-dialog v-model="objectsVisible" :title="t('changes.affectedObjects')" width="560px">
+      <div v-loading="objectsLoading">
+        <div v-if="!objectsLoading && objects.length === 0" class="empty-state" style="padding: 24px 0">
+          <p>{{ t('changes.empty') }}</p>
+        </div>
+        <el-table v-else :data="objects" size="small" max-height="480" @row-click="goObjectFromRow">
+          <el-table-column :label="t('changes.colObject')" min-width="160">
+            <template #default="{ row }">
+              <span class="change-object">{{ row.object_name || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('changes.filterBySource')" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.source === 'circuit' ? 'primary' : 'warning'" effect="plain">
+                {{ row.source === 'circuit' ? t('changes.sourceCircuit') : t('changes.sourceConfig') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('changes.objectChangeCount')" width="90" align="center">
+            <template #default="{ row }">{{ row.change_count }}</template>
+          </el-table-column>
+          <el-table-column :label="t('changes.objectLastChange')" min-width="140">
+            <template #default="{ row }">{{ row.last_change_at ? formatDateTime(row.last_change_at) : '-' }}</template>
+          </el-table-column>
+        </el-table>
+        <div class="objects-total">{{ t('changes.objectTotal', { total: objects.length }) }}</div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -180,8 +210,8 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Files, Right, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
 import {
-  listChanges, getChangesSummary, getChangesOperators, exportChanges,
-  type ChangeItem, type ChangeSummary,
+  listChanges, getChangesSummary, getChangesOperators, exportChanges, getChangeObjects,
+  type ChangeItem, type ChangeSummary, type ChangeObjectItem,
 } from '@/api/changes'
 import { getUsers } from '@/api/users'
 import { formatDateTime, formatDate } from '@/lib/utils'
@@ -388,6 +418,36 @@ function goObject(item: { source: string; object_id: number | null }) {
   } else {
     router.push('/backups')
   }
+}
+
+// 受影响对象弹窗：按当前筛选拉取去重对象清单
+const objectsVisible = ref(false)
+const objectsLoading = ref(false)
+const objects = ref<ChangeObjectItem[]>([])
+
+async function openObjects() {
+  objectsVisible.value = true
+  objectsLoading.value = true
+  try {
+    const params: Record<string, unknown> = {}
+    if (query.value.source) params.source = query.value.source
+    if (query.value.change_type) params.change_type = query.value.change_type
+    if (query.value.operator) params.operator = query.value.operator
+    if (query.value.keyword) params.keyword = query.value.keyword
+    if (dateRange.value?.[0]) params.start = `${dateRange.value[0]}T00:00:00`
+    if (dateRange.value?.[1]) params.end = `${dateRange.value[1]}T23:59:59`
+    const res = await getChangeObjects(params)
+    objects.value = res.items
+  } catch {
+    objects.value = []
+  } finally {
+    objectsLoading.value = false
+  }
+}
+
+function goObjectFromRow(row: ChangeObjectItem) {
+  objectsVisible.value = false
+  goObject(row)
 }
 
 async function handleExport() {
@@ -686,6 +746,13 @@ onMounted(() => {
 .total-text {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.objects-total {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  text-align: right;
 }
 
 /* 移动端：统计 2 列、筛选纵向、卡片内容自动换行 */
