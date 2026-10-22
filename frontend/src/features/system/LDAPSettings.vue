@@ -239,9 +239,10 @@ watch(() => config.value.use_starttls, (newVal) => {
         </ElFormItem>
 
         <ElFormItem :label="t('system.ldapBindPassword')" prop="bind_password">
-          <ElInput 
-            v-model="config.bind_password" 
+          <ElInput
+            v-model="config.bind_password"
             type="password"
+            autocomplete="new-password"
             :placeholder="t('system.ldapBindPasswordPlaceholder')"
           />
         </ElFormItem>

@@ -78,10 +78,10 @@
             </template>
             <el-form :model="passwordForm" label-width="120px">
               <el-form-item :label="t('profile.currentPassword')" prop="oldPassword">
-                <el-input type="password" v-model="passwordForm.oldPassword" />
+                <el-input type="password" v-model="passwordForm.oldPassword" autocomplete="current-password" />
               </el-form-item>
               <el-form-item :label="t('profile.newPassword')" prop="newPassword">
-                <el-input type="password" v-model="passwordForm.newPassword" />
+                <el-input type="password" v-model="passwordForm.newPassword" autocomplete="new-password" />
                 <div v-if="passwordForm.newPassword" class="password-strength">
                   <div class="strength-label">{{ t('profile.passwordStrength') }}:</div>
                   <div class="strength-bar">
@@ -95,7 +95,7 @@
                 </div>
               </el-form-item>
               <el-form-item :label="t('profile.confirmPassword')" prop="confirmPassword">
-                <el-input type="password" v-model="passwordForm.confirmPassword" />
+                <el-input type="password" v-model="passwordForm.confirmPassword" autocomplete="new-password" />
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" @click="changePassword">{{ t('common.save') }}</el-button>

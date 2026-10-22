@@ -51,41 +51,39 @@ const rolePermissions = computed(() => ({
   }
 }))
 
-const availablePermissions = [
-  { key: 'sites:read', name: t('system.perm.sitesRead'), description: t('system.perm.sitesReadDesc') },
-  { key: 'sites:write', name: t('system.perm.sitesWrite'), description: t('system.perm.sitesWriteDesc') },
-  { key: 'sites:delete', name: t('system.perm.sitesDelete'), description: t('system.perm.sitesDeleteDesc') },
-  { key: 'sites:export', name: t('system.perm.sitesExport'), description: t('system.perm.sitesExportDesc') },
-  { key: 'circuits:read', name: t('system.perm.circuitsRead'), description: t('system.perm.circuitsReadDesc') },
-  { key: 'circuits:write', name: t('system.perm.circuitsWrite'), description: t('system.perm.circuitsWriteDesc') },
-  { key: 'circuits:delete', name: t('system.perm.circuitsDelete'), description: t('system.perm.circuitsDeleteDesc') },
-  { key: 'circuits:export', name: t('system.perm.circuitsExport'), description: t('system.perm.circuitsExportDesc') },
-  { key: 'ipam:read', name: t('system.perm.ipamRead'), description: t('system.perm.ipamReadDesc') },
-  { key: 'ipam:write', name: t('system.perm.ipamWrite'), description: t('system.perm.ipamWriteDesc') },
-  { key: 'ipam:delete', name: t('system.perm.ipamDelete'), description: t('system.perm.ipamDeleteDesc') },
-  { key: 'ipam:export', name: t('system.perm.ipamExport'), description: t('system.perm.ipamExportDesc') },
-  { key: 'ipam:scan_exec', name: t('system.perm.ipamScan'), description: t('system.perm.ipamScanDesc') },
-  { key: 'devices:read', name: t('system.perm.devicesRead'), description: t('system.perm.devicesReadDesc') },
-  { key: 'devices:write', name: t('system.perm.devicesWrite'), description: t('system.perm.devicesWriteDesc') },
-  { key: 'devices:delete', name: t('system.perm.devicesDelete'), description: t('system.perm.devicesDeleteDesc') },
-  { key: 'devices:export', name: t('system.perm.devicesExport'), description: t('system.perm.devicesExportDesc') },
-  { key: 'backups:read', name: t('system.perm.backupsRead'), description: t('system.perm.backupsReadDesc') },
-  { key: 'backups:write', name: t('system.perm.backupsWrite'), description: t('system.perm.backupsWriteDesc') },
-  { key: 'backups:delete', name: t('system.perm.backupsDelete'), description: t('system.perm.backupsDeleteDesc') },
-  { key: 'backups:export', name: t('system.perm.backupsExport'), description: t('system.perm.backupsExportDesc') },
-  { key: 'backups:backup_exec', name: t('system.perm.backupsExec'), description: t('system.perm.backupsExecDesc') },
-  { key: 'topology:read', name: t('system.perm.topologyRead'), description: t('system.perm.topologyReadDesc') },
-  { key: 'topology:write', name: t('system.perm.topologyWrite'), description: t('system.perm.topologyWriteDesc') },
-  { key: 'topology:delete', name: t('system.perm.topologyDelete'), description: t('system.perm.topologyDeleteDesc') },
-  { key: 'alerts:read', name: t('system.perm.alertView'), description: t('system.perm.alertViewDesc') },
-  { key: 'system:read', name: t('system.perm.sysView'), description: t('system.perm.sysViewDesc') },
-  { key: 'system:write', name: t('system.perm.sysMgmt'), description: t('system.perm.sysMgmtDesc') },
-  { key: 'system:delete', name: t('system.perm.systemDelete'), description: t('system.perm.systemDeleteDesc') },
-  { key: 'logs:read', name: t('system.perm.logsRead'), description: t('system.perm.logsReadDesc') },
-  { key: 'users:read', name: t('system.perm.userView'), description: t('system.perm.userViewDesc') },
-  { key: 'users:write', name: t('system.perm.userMgmt'), description: t('system.perm.userMgmtDesc') },
-  { key: 'users:delete', name: t('system.perm.usersDelete'), description: t('system.perm.usersDeleteDesc') }
-]
+// 可配置的权限列表（权威源为后端 Permission 表，40 项，含 display_name/description）
+const availablePermissions = ref<{ key: string; name: string; description: string }[]>([])
+async function loadPermissions() {
+  if (!authStore.token) return
+  try {
+    const response = await api.get('/api/v1/permissions/permissions')
+    availablePermissions.value = (response.data || []).map((p: any) => ({
+      key: `${p.module}:${p.action}`,
+      name: p.display_name || `${p.module}:${p.action}`,
+      description: p.description || ''
+    }))
+  } catch (error) {
+    console.error('Load permissions failed:', error)
+  }
+}
+
+// 搜索与分页
+const searchKeyword = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+const filteredRoles = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (!kw) return displayRoles.value
+  return displayRoles.value.filter(r =>
+    r.name.toLowerCase().includes(kw)
+    || (r.display_name || '').toLowerCase().includes(kw)
+    || (r.description || '').toLowerCase().includes(kw)
+  )
+})
+const pagedRoles = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredRoles.value.slice(start, start + pageSize.value)
+})
 
 const addRoleForm = reactive({
   name: '',
@@ -245,6 +243,7 @@ function getRoleDisplayName(roleName: string): string {
 
 onMounted(() => {
   loadRoles()
+  loadPermissions()
 })
 </script>
 
@@ -252,13 +251,19 @@ onMounted(() => {
   <div class="role-management">
     <el-card shadow="never">
       <div class="toolbar">
+        <el-input
+          v-model="searchKeyword"
+          :placeholder="t('system.searchRolePlaceholder')"
+          clearable
+          class="toolbar-search"
+        />
         <el-button type="primary" @click="showAddRoleModal = true" v-permission="'system:write'">
           <Plus class="el-icon" />
           {{ t('system.addRole') }}
         </el-button>
       </div>
 
-      <el-table class="role-management-table" :data="displayRoles" :loading="loading" border stripe style="width: 100%;" highlight-current-row>
+      <el-table class="role-management-table" :data="pagedRoles" :loading="loading" border stripe style="width: 100%;" highlight-current-row>
         <el-table-column prop="display_name" :label="t('system.roleName')" min-width="140">
           <template #default="scope">
             {{ getRoleDisplayName(scope.row.name) }}
@@ -292,6 +297,16 @@ onMounted(() => {
       </el-table>
 
       <el-empty v-if="!loading && displayRoles.length === 0" :description="t('system.noRoles')" />
+
+      <el-pagination
+        v-if="filteredRoles.length > pageSize"
+        class="table-pagination"
+        layout="total, prev, pager, next"
+        :total="filteredRoles.length"
+        :current-page="currentPage"
+        :page-size="pageSize"
+        @current-change="(page: number) => currentPage = page"
+      />
     </el-card>
 
     <!-- 权限边界说明 -->
@@ -392,7 +407,20 @@ onMounted(() => {
 }
 
 .toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 16px;
+}
+
+.toolbar-search {
+  width: 260px;
+}
+
+.table-pagination {
+  margin-top: 16px;
+  justify-content: flex-end;
 }
 
 .permission-matrix-card {

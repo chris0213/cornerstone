@@ -6,6 +6,7 @@ import { confirmAndRun } from '../../lib/confirm';
 import { User, Plus, Edit, Delete, Lock, Key, Refresh, CopyDocument } from '@element-plus/icons-vue';
 import api from '../../api/axios';
 import { useI18n } from 'vue-i18n';
+import { formatDateTime } from '../../lib/utils';
 
 const { t } = useI18n();
 interface UserItem {
@@ -90,17 +91,46 @@ const displayRoles = computed(() => {
   });
 });
 
-// 可配置的权限列表
-const availablePermissions = [
- { key: 'system:read', name: t('system.perm.sysView'), description: t('system.perm.sysViewDesc') },
- { key: 'system:write', name: t('system.perm.sysMgmt'), description: t('system.perm.sysMgmtDesc') },
- { key: 'users:read', name: t('system.perm.userView'), description: t('system.perm.userViewDesc') },
- { key: 'users:write', name: t('system.perm.userMgmt'), description: t('system.perm.userMgmtDesc') },
- { key: 'alerts:read', name: t('system.perm.alertView'), description: t('system.perm.alertViewDesc') },
- { key: 'alerts:write', name: t('system.perm.alertMgmt'), description: t('system.perm.alertMgmtDesc') },
- { key: 'ai:use', name: t('system.perm.aiUse'), description: t('system.perm.aiUseDesc') },
- { key: 'ai:config', name: t('system.perm.aiConfig'), description: t('system.perm.aiConfigDesc') }
-];
+// 可配置的权限列表（权威源为后端 Permission 表，40 项，含 display_name/description）
+const availablePermissions = ref<{ key: string; name: string; description: string }[]>([]);
+async function loadPermissions() {
+  if (!authStore.token) return;
+  try {
+    const response = await api.get('/api/v1/permissions/permissions');
+    availablePermissions.value = (response.data || []).map((p: any) => ({
+      key: `${p.module}:${p.action}`,
+      name: p.display_name || `${p.module}:${p.action}`,
+      description: p.description || ''
+    }));
+  } catch (error) {
+    console.error('Load permissions failed:', error);
+  }
+}
+
+// 筛选与分页
+const searchKeyword = ref('');
+const roleFilter = ref<number | null>(null);
+const currentPage = ref(1);
+const pageSize = ref(10);
+const filteredUsers = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase();
+  return users.value.filter(u => {
+    const matchKw = !kw || u.username.toLowerCase().includes(kw)
+      || (u.display_name || '').toLowerCase().includes(kw)
+      || (u.email || '').toLowerCase().includes(kw);
+    const matchRole = !roleFilter.value || u.role
+      ? roles.value.find(r => r.name === u.role)?.id === roleFilter.value
+      : false;
+    return matchKw && (roleFilter.value ? matchRole : true);
+  });
+});
+const pagedUsers = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value;
+  return filteredUsers.value.slice(start, start + pageSize.value);
+});
+function handlePageChange(page: number) {
+  currentPage.value = page;
+}
 
 // 新增用户表单
 const addForm = reactive({
@@ -149,14 +179,22 @@ function handleSelectionChange(val: UserItem[]) {
 }
 async function handleBatchDelete() {
   if (selectedUsers.value.length === 0) return;
+  const deletable = selectedUsers.value.filter(u => u.id !== authStore.user?.id && !u.is_superuser);
+  const skippedCount = selectedUsers.value.length - deletable.length;
+  if (deletable.length === 0) {
+    ElMessage.warning(t('system.batchDeleteAllSkipped'));
+    return;
+  }
+  const names = deletable.slice(0, 5).map(u => u.username).join('、')
+    + (deletable.length > 5 ? t('system.batchDeleteMoreSuffix') : '');
   await confirmAndRun({
-    message: t('common.confirmDelete'),
+    message: t('system.batchDeleteConfirm', { count: deletable.length, names })
+      + (skippedCount > 0 ? t('system.batchDeleteSkippedSuffix', { count: skippedCount }) : ''),
     title: t('common.confirm'),
     confirmText: t('common.delete'),
     cancelText: t('common.cancel'),
     action: async () => {
-      for (const user of selectedUsers.value) {
-        if (user.id === authStore.user?.id || user.is_superuser) continue;
+      for (const user of deletable) {
         await api.delete(`/users/${user.id}`);
       }
       loadUsers();
@@ -497,6 +535,7 @@ function getRoleDisplayName(roleName: string): string {
 onMounted(() => {
  loadUsers();
  loadRoles();
+ loadPermissions();
 });
 </script>
 
@@ -525,15 +564,34 @@ onMounted(() => {
         </div>
       </template>
         <div class="toolbar">
-          <el-button 
-            type="primary" 
+          <el-input
+            v-model="searchKeyword"
+            :placeholder="t('system.searchUserPlaceholder')"
+            clearable
+            class="toolbar-search"
+          />
+          <el-select
+            v-model="roleFilter"
+            :placeholder="t('system.allRoles')"
+            clearable
+            class="toolbar-role-filter"
+          >
+            <el-option
+              v-for="role in displayRoles"
+              :key="role.id"
+              :value="role.id"
+              :label="role.display_name"
+            />
+          </el-select>
+          <el-button
+            type="primary"
             @click="showAddModal = true"
             v-permission="'system:write'"
           >
             <Plus class="el-icon" />
             {{ t('system.addUser') }}
           </el-button>
-          <el-button 
+          <el-button
             type="danger"
             @click="handleBatchDelete"
             v-permission="'system:write'"
@@ -545,9 +603,9 @@ onMounted(() => {
         </div>
 
     <!-- 用户列表表格 -->
-    <el-table 
+    <el-table
       class="user-management-table"
-      :data="users" 
+      :data="pagedUsers"
       :loading="loading"
       border
       stripe
@@ -598,7 +656,7 @@ onMounted(() => {
       <el-table-column :label="t('system.lastLogin')" min-width="180">
         <template #default="scope">
           <div v-if="scope.row.last_login_at" class="last-login">
-            <div>{{ scope.row.last_login_at }}</div>
+            <div>{{ formatDateTime(scope.row.last_login_at) }}</div>
             <div class="login-ip">{{ scope.row.last_login_ip }}</div>
           </div>
           <span v-else class="text-gray">{{ t('system.neverLoggedIn') }}</span>
@@ -640,6 +698,18 @@ onMounted(() => {
     </el-table>
 
     <el-empty v-if="!loading && users.length === 0" :description="t('system.noUsers')" />
+
+    <el-pagination
+      v-if="filteredUsers.length > pageSize"
+      class="table-pagination"
+      layout="total, sizes, prev, pager, next"
+      :total="filteredUsers.length"
+      :current-page="currentPage"
+      :page-size="pageSize"
+      :page-sizes="[10, 20, 50]"
+      @current-change="handlePageChange"
+      @size-change="(size: number) => { pageSize = size; currentPage = 1 }"
+    />
     </el-card>
 
     <!-- 新增用户弹窗 -->
@@ -809,8 +879,12 @@ onMounted(() => {
         <el-table class="user-sessions-table" :data="sessions" border style="width: 100%; margin-top: 16px;">
           <el-table-column prop="ip_address" :label="t('system.ipAddress')" min-width="120" />
           <el-table-column prop="user_agent" :label="t('system.device')" min-width="200" />
-          <el-table-column prop="created_at" :label="t('system.loginTime')" min-width="160" />
-          <el-table-column prop="expires_at" :label="t('system.expireTime')" min-width="160" />
+          <el-table-column prop="created_at" :label="t('system.loginTime')" min-width="160">
+            <template #default="scope">{{ formatDateTime(scope.row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="expires_at" :label="t('system.expireTime')" min-width="160">
+            <template #default="scope">{{ formatDateTime(scope.row.expires_at) }}</template>
+          </el-table-column>
           <el-table-column :label="t('system.userStatus')" min-width="80">
             <template #default="scope">
               <el-tag v-if="scope.row.is_revoked" type="danger" size="small">{{ t('system.revoked') }}</el-tag>
@@ -982,7 +1056,24 @@ onMounted(() => {
 .toolbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
   margin-bottom: 16px;
+}
+
+.toolbar-search {
+  width: 220px;
+  margin-right: 4px;
+}
+
+.toolbar-role-filter {
+  width: 160px;
+  margin-right: 4px;
+}
+
+.table-pagination {
+  margin-top: 16px;
+  justify-content: flex-end;
 }
 
 .user-cell {

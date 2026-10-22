@@ -192,9 +192,10 @@ onMounted(() => {
       </el-form-item>
 
       <el-form-item label="Client Secret" :required="!hasClientSecret">
-        <el-input 
-          v-model="config.client_secret" 
+        <el-input
+          v-model="config.client_secret"
           type="password"
+          autocomplete="new-password"
           :placeholder="hasClientSecret ? '已设置，留空表示不修改' : t('system.sso.clientSecretPlaceholder')"
           show-password
           :disabled="!config.enabled"
