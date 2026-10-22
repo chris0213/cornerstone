@@ -15,6 +15,7 @@ from ..schemas import UserCreate, UserUpdate, UserResponse, ResetPasswordRespons
 from ..utils.security import get_password_hash, validate_password
 from ..utils.ip_whitelist import get_client_ip_from_request
 from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
+from .permissions import role_conflict, _audit
 
 router = APIRouter()
 
@@ -230,25 +231,31 @@ async def update_user(
     if not current_user.is_superuser and current_user.id != user_id:
         raise HTTPException(status_code=403, detail="没有足够的权限")
     
-    # 获取用户
     result = await db.execute(select(User).where(User.id == user_id))
     target_user = result.scalar_one_or_none()
     if target_user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     
-    # 不允许普通用户修改自己的角色
-    if not current_user.is_superuser and user.role_id is not None:
-        raise HTTPException(status_code=403, detail="普通用户不能修改角色")
-    
-    # 不允许非超级管理员将用户设为超级管理员
-    if not current_user.is_superuser and user.role_id is not None:
-        role_stmt = select(Role).where(Role.id == user.role_id)
-        role_result = await db.execute(role_stmt)
-        role = role_result.scalar_one_or_none()
-        if role and role.name == "super_admin":
-            raise HTTPException(status_code=403, detail="只有超级管理员可以分配超级管理员角色")
-    
     update_data = user.model_dump(exclude_unset=True)
+    
+    # 普通用户静默忽略 is_active / role_id（仅超管可改）
+    if not current_user.is_superuser:
+        update_data.pop("is_active", None)
+        update_data.pop("role_id", None)
+    
+    # 超管也不允许把「最后一个启用超管」改成其他角色
+    if "role_id" in update_data and update_data["role_id"] != target_user.role_id and target_user.is_superuser and target_user.is_active:
+        count_result = await db.execute(
+            select(func.count(User.id)).where(
+                User.is_superuser == True,  # noqa: E712
+                User.is_active == True  # noqa: E712
+            )
+        )
+        if count_result.scalar_one() <= 1:
+            raise HTTPException(status_code=400, detail="系统必须保留至少一个启用状态的超级管理员")
+    
+    if not update_data:
+        return await build_user_response(db, target_user)
     
     stmt = update(User).where(User.id == user_id).values(**update_data).returning(User)
     result = await db.execute(stmt)
@@ -391,6 +398,17 @@ async def reset_password(
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     
+    # 重置密码同样会使当前会话失效，需保护最后一个启用超管
+    if user.is_superuser and user.is_active:
+        count_result = await db.execute(
+            select(func.count(User.id)).where(
+                User.is_superuser == True,  # noqa: E712
+                User.is_active == True  # noqa: E712
+            )
+        )
+        if count_result.scalar_one() <= 1:
+            raise HTTPException(status_code=400, detail="系统必须保留至少一个启用状态的超级管理员")
+    
     # 生成随机密码
     new_password = generate_random_password()
     hashed_password = get_password_hash(new_password)
@@ -508,6 +526,7 @@ async def get_roles(
 
 @router.post("/roles/", response_model=RoleResponse)
 async def create_role(
+    request: Request,
     role_create: RoleCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_superuser)
@@ -522,9 +541,9 @@ async def create_role(
     
     role = Role(
         name=role_create.name,
-        display_name=role_create.display_name,
+        display_name=role_create.display_name or role_create.name,
         description=role_create.description,
-        is_builtin=role_create.is_builtin
+        is_builtin=False  # API 创建的角色一律为非内置
     )
     db.add(role)
     await db.flush()
@@ -542,6 +561,7 @@ async def create_role(
             rp = RolePermission(role_id=role.id, permission_id=permission.id)
             db.add(rp)
     
+    await _audit(db, request, current_user.username, "创建角色", f"创建角色 {role.name}")
     await db.commit()
     await db.refresh(role)
     
@@ -565,6 +585,7 @@ async def create_role(
 
 @router.put("/roles/{role_id}", response_model=RoleResponse)
 async def update_role(
+    request: Request,
     role_id: int,
     role_update: dict,
     db: AsyncSession = Depends(get_db),
@@ -578,12 +599,24 @@ async def update_role(
     if not role:
         raise HTTPException(status_code=404, detail="角色不存在")
     
+    # 内置角色禁止任何修改（display_name / description / permissions）
+    if role.is_builtin:
+        raise role_conflict(
+            "system.roleBuiltin",
+            "内置角色不允许修改",
+            name=role.name,
+        )
+    
+    changed_fields = []
     if "display_name" in role_update:
         role.display_name = role_update["display_name"]
+        changed_fields.append("display_name")
     if "description" in role_update:
         role.description = role_update["description"]
+        changed_fields.append("description")
     
-    if "permissions" in role_update and not role.is_builtin:
+    if "permissions" in role_update:
+        changed_fields.append(f"permissions({len(role_update['permissions'])}项)")
         await db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
         
         for perm_str in role_update["permissions"]:
@@ -602,6 +635,8 @@ async def update_role(
                         permission_id=permission.id
                     ))
     
+    await _audit(db, request, current_user.username, "修改角色",
+                 f"修改角色 {role.name}，修改内容: {', '.join(changed_fields) if changed_fields else '无'}")
     await db.commit()
     await db.refresh(role)
     
@@ -621,6 +656,40 @@ async def update_role(
         "created_at": role.created_at,
         "updated_at": role.updated_at
     }
+
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_role(
+    request: Request,
+    role_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_superuser)
+):
+    """删除角色（内置角色与使用中的角色禁止删除）"""
+    stmt = select(Role).where(Role.id == role_id)
+    result = await db.execute(stmt)
+    role = result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    
+    if role.is_builtin:
+        raise role_conflict("system.roleBuiltin", "内置角色不允许删除", name=role.name)
+    
+    user_count_result = await db.execute(
+        select(func.count(User.id)).where(User.role_id == role_id)
+    )
+    user_count = user_count_result.scalar_one()
+    if user_count > 0:
+        raise role_conflict(
+            "system.roleInUse",
+            "角色仍有用户使用，不允许删除",
+            name=role.name,
+            count=user_count,
+        )
+    
+    await db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+    await _audit(db, request, current_user.username, "删除角色", f"删除角色 {role.name}")
+    await db.execute(delete(Role).where(Role.id == role_id))
+    await db.commit()
 
 @router.get("/permissions/", response_model=list[PermissionResponse])
 async def get_permissions(

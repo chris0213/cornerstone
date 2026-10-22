@@ -10,12 +10,26 @@ from ..config import settings
 from ..models import User, Role, SystemConfig
 from ..schemas.user import UserResponse
 from ..utils.security import create_access_token, create_refresh_token, generate_jti, get_password_hash
+from ..utils.crypto import decrypt_password
 from ..services.permission_service import get_user_permissions
 
 
 class SSOException(Exception):
     """SSO相关异常"""
     pass
+
+
+# 与 api/system.py 保持一致：带 enc: 前缀为密文，否则为存量明文
+SECRET_ENC_PREFIX = "enc:"
+
+
+def _decrypt_secret(stored: Optional[str]) -> Optional[str]:
+    """解密库中存储的 client_secret（兼容迁移前的明文）。"""
+    if not stored:
+        return stored
+    if stored.startswith(SECRET_ENC_PREFIX):
+        return decrypt_password(stored[len(SECRET_ENC_PREFIX):]) or None
+    return stored
 
 
 class SSOConfig:
@@ -48,7 +62,7 @@ class SSOConfig:
                 config_data = json.loads(db_config.value)
                 config.enabled = config_data.get('enabled', False)
                 config.client_id = config_data.get('client_id')
-                config.client_secret = config_data.get('client_secret')
+                config.client_secret = _decrypt_secret(config_data.get('client_secret'))
                 config.authorize_url = config_data.get('authorize_url')
                 config.token_url = config_data.get('token_url')
                 config.userinfo_url = config_data.get('userinfo_url')

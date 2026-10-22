@@ -9,7 +9,8 @@ import json
 from ..database import get_db
 from ..models import User, Role, AuditLog, SystemConfig
 from ..services.ldap_service import ldap_service, LDAPException as LDAPAuthException
-from .dependencies import get_current_active_user
+from .dependencies import get_current_superuser
+from ..api.system import encrypt_secret, decrypt_secret
 
 
 router = APIRouter()
@@ -28,9 +29,9 @@ class LDAPConfigRequest(BaseModel):
     use_ssl: bool = False
     use_starttls: bool = False
     verify_cert: bool = True
-    bind_dn: str
-    bind_password: str
-    base_dn: str
+    bind_dn: str = ""
+    bind_password: Optional[str] = None  # 留空表示不修改
+    base_dn: str = ""
     user_filter: str = "(objectClass=person)"
     username_attr: str = "sAMAccountName"
     display_attr: str = "displayName"
@@ -64,8 +65,11 @@ async def is_ldap_enabled(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/ldap/config")
-async def get_ldap_config(db: AsyncSession = Depends(get_db)):
-    """获取LDAP配置"""
+async def get_ldap_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_superuser)
+):
+    """获取LDAP配置（仅super_admin，不回显 bind_password 明文）"""
     config = await ldap_service.get_config(db)
     return config.to_dict()
 
@@ -74,24 +78,30 @@ async def get_ldap_config(db: AsyncSession = Depends(get_db)):
 async def update_ldap_config(
     request: LDAPConfigRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_superuser)
 ):
-    """更新LDAP配置"""
-    # 检查是否有权限
-    stmt = select(Role).where(Role.id == current_user.role_id)
-    result = await db.execute(stmt)
-    role = result.scalar_one_or_none()
-    
-    if not role or role.name != "super_admin":
-        raise HTTPException(status_code=403, detail="没有权限修改系统配置")
-    
-    # 保存配置到数据库
-    config_data = request.dict()
-    
+    """更新LDAP配置（仅super_admin；bind_password 留空则保留原值）"""
+    # 读取库中现有配置，用于「留空不修改」
     stmt = select(SystemConfig).where(SystemConfig.key == "ldap_config")
     result = await db.execute(stmt)
     db_config = result.scalar_one_or_none()
-    
+
+    existing_data = {}
+    if db_config and db_config.value:
+        try:
+            existing_data = json.loads(db_config.value)
+        except Exception:
+            existing_data = {}
+
+    config_data = request.model_dump()
+
+    # bind_password 处理：非空 → 加密存储；空/None → 保留原值
+    submitted_password = (request.bind_password or "").strip()
+    if submitted_password:
+        config_data["bind_password"] = encrypt_secret(submitted_password)
+    else:
+        config_data["bind_password"] = existing_data.get("bind_password", "")
+
     if db_config:
         stmt = update(SystemConfig).where(
             SystemConfig.key == "ldap_config"
@@ -104,20 +114,18 @@ async def update_ldap_config(
             description="LDAP认证配置"
         )
         db.add(db_config)
-    
-    await db.commit()
-    
-    # 记录审计日志
+
+    # 记录审计日志（只记字段名，不记字段值）
     stmt = insert(AuditLog).values(
         user=current_user.username,
         action="修改LDAP配置",
         resource="系统",
-        detail="更新LDAP认证配置",
+        detail="更新LDAP认证配置，修改字段: " + ", ".join(config_data.keys()),
         success="true"
     )
     await db.execute(stmt)
     await db.commit()
-    
+
     return {"message": "LDAP配置更新成功"}
 
 
@@ -125,19 +133,11 @@ async def update_ldap_config(
 async def test_ldap_connection(
     request: LDAPConfigRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_superuser)
 ):
-    """测试LDAP连接"""
-    # 检查是否有权限
-    stmt = select(Role).where(Role.id == current_user.role_id)
-    result = await db.execute(stmt)
-    role = result.scalar_one_or_none()
-    
-    if not role or role.name != "super_admin":
-        raise HTTPException(status_code=403, detail="没有权限测试LDAP配置")
-    
+    """测试LDAP连接（仅super_admin；bind_password 留空时自动取已存配置）"""
     from ..services.ldap_service import LDAPConfig
-    
+
     config = LDAPConfig()
     config.enabled = request.enabled
     config.server = request.server
@@ -146,17 +146,40 @@ async def test_ldap_connection(
     config.use_starttls = request.use_starttls
     config.verify_cert = request.verify_cert
     config.bind_dn = request.bind_dn
-    config.bind_password = request.bind_password
     config.base_dn = request.base_dn
-    
-    try:
-        success = await ldap_service.test_connection(config)
-        if success:
-            return {"success": True, "message": "LDAP连接测试成功"}
-        else:
-            return {"success": False, "message": "LDAP连接测试失败"}
-    except Exception as e:
-        return {"success": False, "message": f"LDAP连接测试失败: {str(e)}"}
+
+    # 留空时用库中已存的密码（解密），避免前端回传明文
+    submitted_password = (request.bind_password or "").strip()
+    if submitted_password:
+        config.bind_password = submitted_password
+    else:
+        stmt = select(SystemConfig).where(SystemConfig.key == "ldap_config")
+        result = await db.execute(stmt)
+        db_config = result.scalar_one_or_none()
+        if db_config and db_config.value:
+            try:
+                stored = json.loads(db_config.value).get("bind_password", "")
+                config.bind_password = decrypt_secret(stored)
+            except Exception:
+                config.bind_password = ""
+
+    success = await ldap_service.test_connection(config)
+
+    # 记录审计日志
+    stmt = insert(AuditLog).values(
+        user=current_user.username,
+        action="测试LDAP配置",
+        resource="系统",
+        detail="测试LDAP连接: " + ("成功" if success else "失败"),
+        success="true" if success else "false"
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+    if success:
+        return {"success": True, "message": "LDAP连接测试成功"}
+    else:
+        return {"success": False, "message": "LDAP连接测试失败"}
 
 
 @router.post("/ldap/login")
@@ -168,7 +191,7 @@ async def ldap_login(
     """LDAP用户登录"""
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("User-Agent", "")
-    
+
     try:
         result = await ldap_service.login(db, body.username, body.password, client_ip, user_agent)
         return result

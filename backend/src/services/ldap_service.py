@@ -10,12 +10,26 @@ from ldap3.core.exceptions import LDAPException, LDAPBindError
 from ..config import settings
 from ..models import User, Role, SystemConfig
 from ..utils.security import create_access_token, create_refresh_token, generate_jti, get_password_hash
+from ..utils.crypto import decrypt_password
 from ..services.permission_service import get_user_permissions
 
 
 class LDAPException(Exception):
     """LDAP相关异常"""
     pass
+
+
+# 与 api/system.py 保持一致：带 enc: 前缀为密文，否则为存量明文
+SECRET_ENC_PREFIX = "enc:"
+
+
+def _decrypt_secret(stored: Optional[str]) -> str:
+    """解密库中存储的 bind_password（兼容迁移前的明文）。"""
+    if not stored:
+        return ""
+    if stored.startswith(SECRET_ENC_PREFIX):
+        return decrypt_password(stored[len(SECRET_ENC_PREFIX):])
+    return stored
 
 
 class LDAPConfig:
@@ -62,7 +76,7 @@ class LDAPConfig:
                 config.use_starttls = config_data.get('use_starttls', False)
                 config.verify_cert = config_data.get('verify_cert', True)
                 config.bind_dn = config_data.get('bind_dn', '')
-                config.bind_password = config_data.get('bind_password', '')
+                config.bind_password = _decrypt_secret(config_data.get('bind_password', ''))
                 config.base_dn = config_data.get('base_dn', '')
                 config.user_filter = config_data.get('user_filter', '(objectClass=person)')
                 config.username_attr = config_data.get('username_attr', 'sAMAccountName')
@@ -78,9 +92,9 @@ class LDAPConfig:
         
         return config
     
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
+    def to_dict(self, include_password: bool = False) -> Dict[str, Any]:
+        """转换为字典（默认不回显 bind_password，仅返回是否已设置）"""
+        data = {
             'enabled': self.enabled,
             'server': self.server,
             'port': self.port,
@@ -88,7 +102,7 @@ class LDAPConfig:
             'use_starttls': self.use_starttls,
             'verify_cert': self.verify_cert,
             'bind_dn': self.bind_dn,
-            'bind_password': self.bind_password,
+            'has_bind_password': bool(self.bind_password),
             'base_dn': self.base_dn,
             'user_filter': self.user_filter,
             'username_attr': self.username_attr,
@@ -99,6 +113,9 @@ class LDAPConfig:
             'group_attr': self.group_attr,
             'default_role': self.default_role
         }
+        if include_password:
+            data['bind_password'] = self.bind_password
+        return data
 
 
 class LDAPConnectionManager:

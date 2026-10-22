@@ -3,8 +3,18 @@ import { ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElForm, ElFormItem, ElInput, ElSelect, ElSwitch, ElButton, ElRow, ElCol, ElDivider } from 'element-plus'
 import { Check, Refresh } from '@element-plus/icons-vue'
+import { useAuthStore } from '../../store/auth'
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+
+const authHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (authStore.token) {
+    headers['Authorization'] = `Bearer ${authStore.token}`
+  }
+  return headers
+}
 
 interface LDAPConfig {
   enabled: boolean
@@ -63,7 +73,9 @@ onMounted(async () => {
 
 const fetchConfig = async () => {
   try {
-    const response = await fetch('/api/v1/auth/ldap/config')
+    const response = await fetch('/api/v1/auth/ldap/config', {
+      headers: authHeaders()
+    })
     if (response.ok) {
       const data = await response.json()
       config.value = { ...config.value, ...data }
@@ -85,9 +97,7 @@ const handleSave = async () => {
   try {
     const response = await fetch('/api/v1/auth/ldap/config', {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: authHeaders(),
       body: JSON.stringify(config.value)
     })
 
@@ -116,9 +126,7 @@ const handleTest = async () => {
   try {
     const response = await fetch('/api/v1/auth/ldap/test', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: authHeaders(),
       body: JSON.stringify(config.value)
     })
 
