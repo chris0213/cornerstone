@@ -257,23 +257,38 @@ async def check_ip_allowed(request, db: AsyncSession) -> bool:
 async def check_ws_ip_allowed(websocket) -> bool:
     """WebSocket 白名单检查（HTTP middleware 不覆盖 WS，需在 WS 端点调用）。
 
-    与 HTTP 不同：仅用 TCP 直连 IP，不采信任何代理头（WS 握手头同样可伪造，
-    且 WS 场景通常无可信代理需求）；应急开关与回环放行语义与 HTTP 一致。
+    与 HTTP 语义一致：仅当 TCP 直连 IP 命中可信代理（TRUSTED_PROXIES）时，
+    才采信 X-Forwarded-For（取第一个）/ X-Real-IP；否则用直连 IP。
+    应急开关与回环放行语义与 HTTP 一致。
     """
     if is_whitelist_disabled():
         return True
 
-    client_ip = websocket.client.host if websocket.client else "127.0.0.1"
+    direct_ip = websocket.client.host if websocket.client else "127.0.0.1"
+    if direct_ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+
+    if is_trusted_proxy(direct_ip):
+        # 可信反代：采信转发头，与 HTTP 侧 get_client_ip_with_source 相同的优先级
+        xff = websocket.headers.get("x-forwarded-for")
+        if xff:
+            client_ip = xff.split(",")[0].strip()
+            if client_ip:
+                return _ws_ip_in_whitelist(client_ip)
+        x_real_ip = websocket.headers.get("x-real-ip")
+        if x_real_ip and x_real_ip.strip():
+            return _ws_ip_in_whitelist(x_real_ip.strip())
+
+    return _ws_ip_in_whitelist(direct_ip)
+
+
+def _ws_ip_in_whitelist(client_ip: str) -> bool:
+    """WS 白名单匹配（复用进程内缓存；无缓存时放行，首次 HTTP 请求会建立缓存）。"""
     if client_ip in ("127.0.0.1", "::1", "localhost"):
         return True
-
-    # 复用进程内缓存；拿不到 db 会话时读全局缓存即可（WS 无法便捷取 db）
-    if _whitelist_cache is not None:
-        networks = _whitelist_cache[2]
-    else:
-        return True  # 无缓存时放行，首次 HTTP 请求会建立缓存
-
+    if _whitelist_cache is None:
+        return True
+    networks = _whitelist_cache[2]
     if not networks:
         return True
-
     return is_ip_in_networks(client_ip, networks)

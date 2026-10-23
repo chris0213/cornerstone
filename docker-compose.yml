@@ -71,6 +71,9 @@ services:
       CREDENTIAL_SECRET_KEY: ${CREDENTIAL_SECRET_KEY:-}
       BACKUP_DIR: /opt/cornerstone/backups
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+      # 可信代理：compose 内 frontend(nginx) 反代到 backend，后端需采信其 X-Forwarded-For
+      # 才能按客户端真实 IP 判定白名单。默认放行 compose 默认网络的常见网段。
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,10.0.0.0/8}
       TZ: Asia/Shanghai
     volumes:
       - backend_backups:/opt/cornerstone/backups

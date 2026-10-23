@@ -126,6 +126,63 @@ def test_is_whitelist_disabled_env(monkeypatch):
     assert ip_whitelist.is_whitelist_disabled() is False
 
 
+# ============ WebSocket 可信代理 ============
+
+
+class _FakeWSHeaders(dict):
+    """模拟 Starlette Headers：大小写不敏感（内部 key 一律小写存储）。"""
+
+    def get(self, key, default=None):
+        return super().get(key.lower(), default)
+
+
+class _FakeWSClient:
+    def __init__(self, host):
+        self.host = host
+
+
+class _FakeWebSocket:
+    def __init__(self, host, headers=None):
+        self.client = _FakeWSClient(host)
+        # 与 Starlette 一致：headers key 统一小写
+        self.headers = _FakeWSHeaders({k.lower(): v for k, v in (headers or {}).items()})
+
+
+@pytest.mark.asyncio
+async def test_ws_trusted_proxy_honors_xff(clean_whitelist_cache, monkeypatch):
+    """WS：直连 IP 为可信代理时按 XFF 真实客户端 IP 判定白名单。"""
+    monkeypatch.setenv("TRUSTED_PROXIES", "172.16.0.0/12")
+    # 预置缓存：仅允许 198.51.100.0/24
+    ip_whitelist._whitelist_cache = (0.0, set(), ip_whitelist.parse_whitelist_value("198.51.100.0/24"))
+
+    # nginx 容器 172.21.0.4 转发的真实客户端在名单内 → 放行
+    ws = _FakeWebSocket("172.21.0.4", {"X-Forwarded-For": "198.51.100.7, 172.21.0.4"})
+    assert await ip_whitelist.check_ws_ip_allowed(ws) is True
+
+    # 真实客户端不在名单内 → 拒绝
+    ws = _FakeWebSocket("172.21.0.4", {"X-Forwarded-For": "8.8.8.8"})
+    assert await ip_whitelist.check_ws_ip_allowed(ws) is False
+
+    # X-Real-IP 回落
+    ws = _FakeWebSocket("172.21.0.4", {"X-Real-IP": "198.51.100.9"})
+    assert await ip_whitelist.check_ws_ip_allowed(ws) is True
+
+
+@pytest.mark.asyncio
+async def test_ws_untrusted_proxy_ignores_headers(clean_whitelist_cache, monkeypatch):
+    """WS：非可信代理时忽略转发头（防伪造），按直连 IP 判定。"""
+    monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
+    ip_whitelist._whitelist_cache = (0.0, set(), ip_whitelist.parse_whitelist_value("172.21.0.4/32"))
+
+    # 直连 172.21.0.4 在名单内，但伪造 XFF 指向名单外 IP → 仍按直连判定放行
+    ws = _FakeWebSocket("172.21.0.4", {"X-Forwarded-For": "8.8.8.8"})
+    assert await ip_whitelist.check_ws_ip_allowed(ws) is True
+
+    # 直连 IP 不在名单内（未配置其可信）→ 拒绝
+    ws = _FakeWebSocket("192.0.2.50", {"X-Forwarded-For": "198.51.100.7"})
+    assert await ip_whitelist.check_ws_ip_allowed(ws) is False
+
+
 # ============ 接口测试 ============
 
 
