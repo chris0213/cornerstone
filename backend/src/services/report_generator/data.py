@@ -325,8 +325,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
             "duration": f"{(i.duration_minutes or 0)/60.0:.1f}" if i.duration_minutes else "-",
             "status": "已恢复" if i.status == "resolved" else "处理中"
         } for i in incidents_list],
-        brand_name_zh=brand.get("brand_name_zh", "基石"),
-        brand_name_en=brand.get("brand_name_en", "Cornerstone"),
-        brand_slogan=brand.get("brand_slogan", "看得见，管得住"),
-        brand_subtitle=brand.get("brand_subtitle", "IT基础设施资源管理平台"),
+        brand_name_zh=brand.get("brand_name_zh", BRAND_SETTINGS_DEFAULTS["brand_name_zh"]),
+        brand_name_en=brand.get("brand_name_en", BRAND_SETTINGS_DEFAULTS["brand_name_en"]),
+        brand_slogan=brand.get("brand_slogan", BRAND_SETTINGS_DEFAULTS["brand_slogan"]),
+        brand_subtitle=brand.get("brand_subtitle", BRAND_SETTINGS_DEFAULTS["brand_subtitle"]),
     )
