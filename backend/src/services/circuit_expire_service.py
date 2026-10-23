@@ -154,18 +154,18 @@ class CircuitExpireService:
 
     @staticmethod
     async def _send_expire_notifications(db: AsyncSession, alert_record: AlertRecord):
-        """发送专线到期通知"""
-        config = await CircuitExpireService._get_notification_config(db)
+        """发送专线到期通知（渠道启用开关过滤）"""
+        from src.utils.notification_store import get_notification_config, is_channel_enabled, is_email_ready
+        config = await get_notification_config(db)
         
         enabled_channels = []
-        if config.get("dingtalk_webhook_url"):
+        if config.get("dingtalk_webhook_url") and is_channel_enabled(config, "dingtalk"):
             enabled_channels.append("dingtalk")
-        if config.get("wechat_webhook_url"):
+        if config.get("wechat_webhook_url") and is_channel_enabled(config, "wechat"):
             enabled_channels.append("wechat")
-        if config.get("feishu_webhook_url"):
+        if config.get("feishu_webhook_url") and is_channel_enabled(config, "feishu"):
             enabled_channels.append("feishu")
-        if all([config.get("smtp_host"), config.get("smtp_username"), 
-               config.get("smtp_password"), config.get("smtp_from_email")]):
+        if is_email_ready(config) and is_channel_enabled(config, "email"):
             enabled_channels.append("email")
         
         for channel in enabled_channels:
@@ -183,84 +183,37 @@ class CircuitExpireService:
                 notification.sent_at = datetime.now()
             except Exception as e:
                 notification.status = "failed"
-                notification.error_message = str(e)
+                notification.error_message = str(e)[:500]
+                await db.commit()
     
-    @staticmethod
-    async def _get_notification_config(db: AsyncSession) -> dict:
-        """获取通知配置"""
-        result = await db.execute(select(Setting).filter(Setting.key == NOTIFICATION_SETTINGS_KEY))
-        setting = result.scalars().first()
-        
-        config = {}
-        if setting:
-            try:
-                config = json.loads(setting.value)
-            except json.JSONDecodeError:
-                pass
-        
-        return {
-            "dingtalk_webhook_url": config.get("dingtalk_webhook_url") or settings.notification.dingtalk_webhook_url,
-            "wechat_webhook_url": config.get("wechat_webhook_url") or settings.notification.wechat_webhook_url,
-            "feishu_webhook_url": config.get("feishu_webhook_url") or settings.notification.feishu_webhook_url,
-            "smtp_host": config.get("smtp_host") or settings.notification.smtp_host,
-            "smtp_port": config.get("smtp_port") or settings.notification.smtp_port,
-            "smtp_username": config.get("smtp_username") or settings.notification.smtp_username,
-            "smtp_password": config.get("smtp_password") or settings.notification.smtp_password,
-            "smtp_from_email": config.get("smtp_from_email") or settings.notification.smtp_from_email
-        }
     
     @staticmethod
     async def _send_notification(db: AsyncSession, channel: str, alert_record: AlertRecord, config: dict):
-        """发送单个通知"""
-        import httpx
-        from email.mime.text import MIMEText
-        from email.utils import formataddr
-        import smtplib
+        """发送单个通知（webhook 复用 AlertService 统一实现；邮件走统一 SMTP helper）"""
+        from src.services.alert_service import AlertService
         
         message = f"【专线到期告警】[{alert_record.severity.upper()}] {alert_record.message}"
         
         if channel == "dingtalk":
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "msgtype": "text",
-                    "text": {
-                        "content": message
-                    }
-                }
-                response = await client.post(config["dingtalk_webhook_url"], json=payload, timeout=10)
-                response.raise_for_status()
-        
+            await AlertService._send_dingtalk_notification(config["dingtalk_webhook_url"], message)
         elif channel == "wechat":
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "msgtype": "text",
-                    "text": {
-                        "content": message
-                    }
-                }
-                response = await client.post(config["wechat_webhook_url"], json=payload, timeout=10)
-                response.raise_for_status()
-        
+            await AlertService._send_wechat_notification(config["wechat_webhook_url"], message)
         elif channel == "feishu":
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "msg_type": "text",
-                    "content": {
-                        "text": message
-                    }
-                }
-                response = await client.post(config["feishu_webhook_url"], json=payload, timeout=10)
-                response.raise_for_status()
-        
+            await AlertService._send_feishu_notification(config["feishu_webhook_url"], message)
         elif channel == "email":
+            from email.mime.text import MIMEText
+            from email.utils import formataddr
+            
             msg = MIMEText(message, 'plain', 'utf-8')
             msg['From'] = formataddr(('Cornerstone专线告警', config["smtp_from_email"]))
             msg['Subject'] = "【专线到期告警】"
             
-            with smtplib.SMTP(config["smtp_host"], config["smtp_port"]) as server:
-                server.starttls()
-                server.login(config["smtp_username"], config["smtp_password"])
-                server.sendmail(config["smtp_from_email"], [config["smtp_from_email"]], msg.as_string())
+            import asyncio as _asyncio
+            def _smtp_send():
+                with AlertService._smtp_connect(config) as server:
+                    server.login(config["smtp_username"], config["smtp_password"])
+                    server.sendmail(config["smtp_from_email"], [config["smtp_from_email"]], msg.as_string())
+            await _asyncio.to_thread(_smtp_send)
 
 
 circuit_expire_service = CircuitExpireService()

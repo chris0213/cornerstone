@@ -529,6 +529,11 @@ class AlertService:
         
         channels = rule.notification_channels or []
         logger.info(f"[_send_notifications] alert_id={alert_record.id} rule={rule.id} sending to channels={channels}")
+
+        # 渠道启用开关过滤（notification_settings.channel_enabled，未配置默认启用）
+        from src.utils.notification_store import get_notification_config, is_channel_enabled
+        notify_cfg = await get_notification_config(db)
+        channels = [c for c in channels if is_channel_enabled(notify_cfg, c)]
         
         for channel in channels:
             notification = AlertNotification(
@@ -553,27 +558,9 @@ class AlertService:
     
     @staticmethod
     async def _get_notification_config(db: AsyncSession) -> dict:
-        """获取通知配置"""
-        result = await db.execute(select(Setting).filter(Setting.key == NOTIFICATION_SETTINGS_KEY))
-        setting = result.scalars().first()
-        
-        config = {}
-        if setting:
-            try:
-                config = json.loads(setting.value)
-            except json.JSONDecodeError:
-                pass
-        
-        return {
-            "dingtalk_webhook_url": config.get("dingtalk_webhook_url") or settings.notification.dingtalk_webhook_url,
-            "wechat_webhook_url": config.get("wechat_webhook_url") or settings.notification.wechat_webhook_url,
-            "feishu_webhook_url": config.get("feishu_webhook_url") or settings.notification.feishu_webhook_url,
-            "smtp_host": config.get("smtp_host") or settings.notification.smtp_host,
-            "smtp_port": config.get("smtp_port") or settings.notification.smtp_port,
-            "smtp_username": config.get("smtp_username") or settings.notification.smtp_username,
-            "smtp_password": config.get("smtp_password") or settings.notification.smtp_password,
-            "smtp_from_email": config.get("smtp_from_email") or settings.notification.smtp_from_email
-        }
+        """获取通知配置（统一走 notification_store：解密 + 环境变量回落 + 渠道开关）"""
+        from src.utils.notification_store import get_notification_config
+        return await get_notification_config(db)
     
     @staticmethod
     async def _send_notification(db: AsyncSession, channel: str, alert_record: AlertRecord):
@@ -667,8 +654,22 @@ class AlertService:
                 raise
     
     @staticmethod
+    def _smtp_connect(config: dict):
+        """按 smtp_security 建立 SMTP 连接（none/starttls/ssl），三处发送统一走此 helper。"""
+        import smtplib
+        security = (config.get("smtp_security") or "starttls").lower()
+        if security == "ssl":
+            server = smtplib.SMTP_SSL(config["smtp_host"], config["smtp_port"], timeout=15)
+        else:
+            server = smtplib.SMTP(config["smtp_host"], config["smtp_port"], timeout=15)
+            if security == "starttls":
+                server.starttls()
+        return server
+
+    @staticmethod
     async def _send_email_notification(config: dict, message: str):
         """发送邮件通知"""
+        import asyncio as _asyncio
         smtp_host = config["smtp_host"]
         smtp_port = config["smtp_port"]
         smtp_username = config["smtp_username"]
@@ -684,10 +685,13 @@ class AlertService:
             msg['From'] = formataddr(('Cornerstone告警系统', smtp_from_email))
             msg['Subject'] = "【告警通知】"
 
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_username, smtp_password)
-                server.sendmail(smtp_from_email, [smtp_from_email], msg.as_string())
+            def _smtp_send():
+                with AlertService._smtp_connect(config) as server:
+                    server.login(smtp_username, smtp_password)
+                    server.sendmail(smtp_from_email, [smtp_from_email], msg.as_string())
+
+            # 同步 smtplib 放线程池，避免阻塞事件循环
+            await _asyncio.to_thread(_smtp_send)
             logger.info(f"邮件通知发送成功: {message}")
         except Exception as e:
             logger.error(f"邮件通知发送失败: {e}")
@@ -705,37 +709,44 @@ class AlertService:
         """备份任务失败时推送通知（钉钉/企业微信/飞书/邮件）
 
         逐渠道隔离异常，单渠道失败不影响其他渠道，且不向调用方抛出异常。
+        发送结果落 alert_notifications（record_id=None, channel='backup:<id>'）。
         """
+        from src.utils.notification_store import get_notification_config, is_channel_enabled, is_email_ready
+
         try:
-            config = await AlertService._get_notification_config(db)
+            config = await get_notification_config(db)
             message = f"【备份失败】任务 {task_id}（{task_name}）：{summary}"
             errors = []
             sent = False
 
-            if config["dingtalk_webhook_url"]:
+            plans = []
+            if config["dingtalk_webhook_url"] and is_channel_enabled(config, "dingtalk"):
+                plans.append(("dingtalk", AlertService._send_dingtalk_notification(config["dingtalk_webhook_url"], message)))
+            if config["wechat_webhook_url"] and is_channel_enabled(config, "wechat"):
+                plans.append(("wechat", AlertService._send_wechat_notification(config["wechat_webhook_url"], message)))
+            if config["feishu_webhook_url"] and is_channel_enabled(config, "feishu"):
+                plans.append(("feishu", AlertService._send_feishu_notification(config["feishu_webhook_url"], message)))
+            if is_email_ready(config) and is_channel_enabled(config, "email"):
+                plans.append(("email", AlertService._send_email_notification(config, message)))
+
+            for channel, coro in plans:
+                notification = AlertNotification(
+                    record_id=None,
+                    channel=f"backup:{task_id}:{channel}",
+                    target="",
+                    status="pending",
+                )
+                db.add(notification)
                 try:
-                    await AlertService._send_dingtalk_notification(config["dingtalk_webhook_url"], message)
+                    await coro
+                    notification.status = "sent"
+                    notification.sent_at = datetime.now()
                     sent = True
                 except Exception as e:
-                    errors.append(f"钉钉: {e}")
-            if config["wechat_webhook_url"]:
-                try:
-                    await AlertService._send_wechat_notification(config["wechat_webhook_url"], message)
-                    sent = True
-                except Exception as e:
-                    errors.append(f"企业微信: {e}")
-            if config["feishu_webhook_url"]:
-                try:
-                    await AlertService._send_feishu_notification(config["feishu_webhook_url"], message)
-                    sent = True
-                except Exception as e:
-                    errors.append(f"飞书: {e}")
-            if all([config["smtp_host"], config["smtp_username"], config["smtp_password"], config["smtp_from_email"]]):
-                try:
-                    await AlertService._send_email_notification(config, message)
-                    sent = True
-                except Exception as e:
-                    errors.append(f"邮件: {e}")
+                    notification.status = "failed"
+                    notification.error_message = str(e)[:500]
+                    errors.append(f"{channel}: {e}")
+            await db.commit()
 
             if sent:
                 logger.info(f"[备份通知] 任务 {task_id} 失败通知已发送: {summary}")

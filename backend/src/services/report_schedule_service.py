@@ -237,7 +237,9 @@ async def _has_report(db: AsyncSession, year: int, month: int) -> bool:
 
 
 def _send_report_email(smtp_cfg: dict, to_email: str, subject: str, pdf_path: str) -> None:
-    """发送带 PDF 附件的月报邮件（同步 SMTP，配置不全时抛 RuntimeError）"""
+    """发送带 PDF 附件的月报邮件（同步 SMTP，配置不全时抛 RuntimeError；加密方式走统一 helper）"""
+    from src.services.alert_service import AlertService
+
     needed = ["smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_from_email"]
     if not all(smtp_cfg.get(k) for k in needed):
         raise RuntimeError("SMTP 配置不完整")
@@ -255,8 +257,7 @@ def _send_report_email(smtp_cfg: dict, to_email: str, subject: str, pdf_path: st
         part.add_header("Content-Disposition", "attachment", filename=Path(pdf_path).name)
         msg.attach(part)
 
-    with smtplib.SMTP(smtp_cfg["smtp_host"], smtp_cfg["smtp_port"], timeout=15) as server:
-        server.starttls()
+    with AlertService._smtp_connect(smtp_cfg) as server:
         server.login(smtp_cfg["smtp_username"], smtp_cfg["smtp_password"])
         server.sendmail(smtp_cfg["smtp_from_email"], [to_email], msg.as_string())
 
@@ -349,9 +350,17 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
     outcome = {"action": "generated", "year": year, "month": month,
                "filename": result["filename"], "email_sent": False, "chat_sent": []}
 
-    # 邮件渠道（带 PDF 附件）
+    # 邮件渠道（带 PDF 附件）；结果落 alert_notifications（record_id=None, channel='report:<ym>'）
     if "email" in channels and config["email_to"]:
+        from src.models.alert import AlertNotification
         from src.services.alert_service import AlertService  # 局部导入避免循环依赖
+        notification = AlertNotification(
+            record_id=None,
+            channel=f"report:{year}-{month:02d}:email",
+            target=config["email_to"][:200],
+            status="pending",
+        )
+        db.add(notification)
         try:
             smtp_cfg = await AlertService._get_notification_config(db)
             _send_report_email(
@@ -360,8 +369,12 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
                 f"{year}年{month}月运营月报",
                 result["file_path"],
             )
+            notification.status = "sent"
+            notification.sent_at = datetime.now(BEIJING_TZ).replace(tzinfo=None)
             outcome["email_sent"] = True
         except Exception as e:
+            notification.status = "failed"
+            notification.error_message = str(e)[:500]
             logger.warning("定时月报邮件发送失败（报告已生成）: %s", e)
             outcome["email_error"] = str(e)
 
@@ -372,6 +385,20 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
     outcome["chat_sent"] = chat_result["sent"]
     if chat_result["failed"]:
         outcome["chat_failed"] = chat_result["failed"]
+
+    # 聊天渠道结果落库
+    from src.models.alert import AlertNotification
+    for ch in (chat_result["sent"] + list(chat_result["failed"].keys())):
+        notification = AlertNotification(
+            record_id=None,
+            channel=f"report:{year}-{month:02d}:{ch}",
+            target="",
+            status="sent" if ch in chat_result["sent"] else "failed",
+            error_message=chat_result["failed"].get(ch, None) and chat_result["failed"][ch][:500],
+            sent_at=datetime.now(BEIJING_TZ).replace(tzinfo=None) if ch in chat_result["sent"] else None,
+        )
+        db.add(notification)
+    await db.commit()
 
     logger.info("定时月报已生成: %s email_sent=%s chat_sent=%s",
                 result["filename"], outcome["email_sent"], outcome["chat_sent"])
