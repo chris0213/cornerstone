@@ -170,7 +170,17 @@ async def get_ws_user(
     websocket: WebSocket,
     db: AsyncSession
 ) -> User:
-    """WebSocket 鉴权：从 query 参数提取 token 并验证用户"""
+    """WebSocket 鉴权：从 query 参数提取 token 并验证用户
+
+    同时执行 IP 白名单检查（HTTP middleware 不覆盖 WebSocket，
+    故在统一的 WS 鉴权入口拦截；仅用直连 IP，不采信代理头）。
+    """
+    from .utils.ip_whitelist import check_ws_ip_allowed
+    if not await check_ws_ip_allowed(websocket):
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION, reason="IP 不在白名单中"
+        )
+
     token = websocket.query_params.get("token")
     if not token:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="缺少认证 token")

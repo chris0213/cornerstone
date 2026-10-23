@@ -153,7 +153,7 @@ loadLogo()
       </div>
 
       <div class="slogan">
-        <h2>{{ t('login.leftTitle') }}</h2>
+        <h2>{{ brandStore.brandSlogan || t('login.leftTitle') }}</h2>
         <p>{{ t('login.leftSubtitle') }}</p>
       </div>
     </div>

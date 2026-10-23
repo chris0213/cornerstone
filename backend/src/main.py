@@ -44,15 +44,18 @@ async def ip_whitelist_middleware(request: Request, call_next):
     public_paths = [
         "/", "/health",
         "/api/v1/settings/public/brand",
+        "/api/v1/settings/logo",
         "/api/v1/auth/captcha",
         "/api/v1/auth/token",
-        "/api/v1/auth/login-with-captcha"
+        "/api/v1/auth/login-with-captcha",
+        # 白名单自救：精确放行（仅 GET 读取与 PUT 保存两个端点，均有 JWT + 超管鉴权）
+        "/api/v1/settings/security/ip-whitelist",
     ]
     if (request.url.path in public_paths or
         request.url.path.startswith("/api/v1/auth/sso/") or
-        request.url.path.startswith("/api/v1/auth/ldap/") or
-        request.url.path.startswith("/api/v1/settings/security/") or
+        request.url.path in ("/api/v1/auth/ldap/enabled", "/api/v1/auth/ldap/login") or
         request.url.path.startswith("/api/v1/reports/monthly/shared-download/")):
+        # ldap 仅放行登录链路必需的两个端点（enabled/login），config/test 等管理接口不放行
         # shared-download 为 HMAC 签名直链（验签+7天过期），IP 层放行不降低安全性
         return await call_next(request)
 

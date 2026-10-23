@@ -12,7 +12,7 @@ const { t } = useI18n()
       <template #header>
         <div class="card-title">
           <el-icon><Lock /></el-icon>
-          {{ t('system.security') }}
+          {{ t('system.ipWhitelist') }}
         </div>
       </template>
       <SecuritySettings />
@@ -34,10 +34,10 @@ const { t } = useI18n()
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary, #303133);
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--accent-primary, #409eff);
 }
 </style>
