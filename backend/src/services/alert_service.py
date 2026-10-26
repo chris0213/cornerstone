@@ -465,6 +465,12 @@ class AlertService:
         """对 critical 告警执行 AI 根因分析，结果存入 ai_analysis 字段"""
         try:
             from src.services.ai_client import get_ai_config, call_ai
+            from src.services.ai_outbound_guard import is_external_blocked, mask_outbound_text
+
+            # 禁止外发开关开启时跳过（告警消息不外发）
+            if await is_external_blocked(db):
+                logger.debug("[AI根因分析] 禁止外发开关已开启，跳过根因分析")
+                return
 
             ai_config = await get_ai_config(db)
             if not ai_config:
@@ -490,7 +496,7 @@ class AlertService:
                 f"- 目标IP：{alert_record.target_ip or 'N/A'}\n"
                 f"- 告警类型：{alert_record.alert_type}\n"
                 f"- 严重级别：{alert_record.severity}\n"
-                f"- 告警消息：{alert_record.message}\n"
+                f"- 告警消息：{mask_outbound_text(alert_record.message or '')}\n"
                 f"- 当前值：{alert_record.current_value}\n"
                 f"- 阈值：{alert_record.threshold}\n\n"
                 f"请按以下格式输出：\n"

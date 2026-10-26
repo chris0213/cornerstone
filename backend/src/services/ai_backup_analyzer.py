@@ -47,21 +47,27 @@ async def analyze_config_change(
     """
     分析配置变更 diff，返回 AI 解读结果
     失败时返回 None
+    发送前剔除 diff 中含密码/community/私钥等敏感行；禁止外发开关开启时跳过
     """
+    from .ai_outbound_guard import is_external_blocked, strip_sensitive_lines
+
+    if await is_external_blocked(db):
+        logger.info(f"[配置AI解读] {device.name} 禁止外发开关已开启，跳过")
+        return None
+
     ai_config = await get_ai_config(db)
     if not ai_config or not ai_config.is_configured():
         return None
 
-    # 截取过长 diff
-    if len(diff_text) > 3000:
-        diff_text = diff_text[:3000] + "\n...(已截取)"
-        logger.warning(f"Diff for {device.name} truncated to 3000 chars")
+    # 先剔除敏感行，再截取过长 diff
+    diff_text = strip_sensitive_lines(diff_text, max_chars=3000)
+    logger.info(f"Diff for {device.name} sanitized (sensitive lines stripped) before AI call")
 
     prompt = (
         f"设备名称：{device.name}\n"
         f"设备类型：{device.type}\n"
         f"设备型号：{device.model}\n\n"
-        f"变更内容（diff）：\n```\n{diff_text}\n```\n"
+        f"变更内容（diff，已剔除敏感行）：\n```\n{diff_text}\n```\n"
     )
 
     try:

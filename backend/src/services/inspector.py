@@ -728,6 +728,7 @@ class InspectorService:
             import json
             from src.models.setting import Setting
             from src.services.ai_client import get_ai_config, call_ai
+            from src.services.ai_outbound_guard import is_external_blocked, mask_outbound_text
 
             # 1. 读取开关，默认关闭（缺记录/解析失败均视为关闭，不调用任何 AI）
             switch_result = await db.execute(
@@ -747,6 +748,11 @@ class InspectorService:
             # 2. AI 配置缺失或未就绪则直接返回（不报错）
             ai_config = await get_ai_config(db)
             if not ai_config or not ai_config.is_configured():
+                return
+
+            # 2.5 禁止外发开关开启时跳过二次研判（巡检明细不外发）
+            if await is_external_blocked(db):
+                logger.info("[巡检AI二次研判] 禁止外发开关已开启，跳过")
                 return
 
             # 3. 构造异常明细快照（对条数做上限截断，避免 prompt 过大）
@@ -779,8 +785,9 @@ class InspectorService:
                 f"新发现设备: {inspection_result.new_device_count} 台, "
                 f"指纹变更: {inspection_result.change_count} 台"
             )
+            # 明细发 LLM 前脱敏（IP 为巡检主体保留明文，其余值如邮箱/MAC/SN 脱敏）
             detail_text = "\n".join(
-                f"{i + 1}. {d}" for i, d in enumerate(anomaly_details)
+                f"{i + 1}. {mask_outbound_text(d)}" for i, d in enumerate(anomaly_details)
             ) or "无异常明细"
 
             prompt = (

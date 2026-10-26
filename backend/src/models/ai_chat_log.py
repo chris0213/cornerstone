@@ -20,6 +20,11 @@ class AIChatLog(Base):
     answer_text = Column(Text, nullable=False, default="")
     data_type = Column(String(50), nullable=True, index=True)
     client_ip = Column(String(50), nullable=True)
+    # 调用元数据（可空，兼容历史记录）：模型名、耗时毫秒、结果状态与失败原因
+    model = Column(String(100), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=True)  # success / failed
+    error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     user = relationship("User")

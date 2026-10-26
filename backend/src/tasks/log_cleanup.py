@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import async_session
 from ..models.setting import Setting
 from ..models.audit_log import AuditLog
+from ..models.ai_chat_log import AIChatLog
 import json
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ LOG_SETTINGS_KEY = "log_settings"
 async def cleanup_expired_logs():
     """
     读取 log_retention_days 和 login_log_retention_days 配置
-    删除 audit_logs 表中超出保留天数的记录
+    删除 audit_logs 表中超出保留天数的记录，并删除 30 天前的 AI 聊天日志
     log_auto_cleanup=False 时跳过执行
     执行结果写入系统日志（不写 audit_logs，避免循环）
     """
@@ -77,7 +78,15 @@ async def cleanup_expired_logs():
             )
             deleted_count += login_result.rowcount
             logger.info(f"删除了 {login_result.rowcount} 条过期登录日志")
-            
+
+            # 删除过期 AI 聊天日志（保留 30 天，与模型注释一致）
+            ai_log_cutoff = datetime.now() - timedelta(days=30)
+            ai_log_result = await db.execute(
+                delete(AIChatLog).where(AIChatLog.created_at < ai_log_cutoff)
+            )
+            deleted_count += ai_log_result.rowcount
+            logger.info(f"删除了 {ai_log_result.rowcount} 条过期 AI 聊天日志")
+
             await db.commit()
             
             logger.info(f"日志清理完成，共删除 {deleted_count} 条记录")

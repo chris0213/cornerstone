@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..models.setting import Setting
+from ..utils.crypto import encrypt_secret, decrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,38 @@ AI_CONFIG_KEY = "ai_config"
 
 # OpenAI 兼容接口的提供商列表
 OPENAI_COMPATIBLE = {"openai", "deepseek", "qwen", "zhipu", "custom"}
+
+
+# ==================== api_key 加密相关（迁移脚本与业务共用） ====================
+
+def encrypt_configs_api_keys(configs: list) -> tuple[list, int]:
+    """把配置列表中所有明文 api_key 加密（幂等）。返回 (新列表, 加密条数)。纯函数不落库。"""
+    changed = 0
+    out = []
+    for c in configs:
+        c = dict(c)
+        key = c.get("api_key") or ""
+        new_key = encrypt_secret(key) if key else key
+        if new_key != key:
+            changed += 1
+        c["api_key"] = new_key
+        out.append(c)
+    return out, changed
+
+
+def decrypt_configs_api_keys(configs: list) -> tuple[list, int]:
+    """把配置列表中所有 enc: 前缀 api_key 解密还原明文（迁移 downgrade 用）。纯函数不落库。"""
+    changed = 0
+    out = []
+    for c in configs:
+        c = dict(c)
+        key = c.get("api_key") or ""
+        new_key = decrypt_secret(key) if key else key
+        if new_key != key:
+            changed += 1
+        c["api_key"] = new_key
+        out.append(c)
+    return out, changed
 
 
 class AIConfig:
@@ -62,7 +95,7 @@ async def get_ai_config(db: AsyncSession) -> Optional[AIConfig]:
 
             if default_config:
                 provider = default_config.get("provider", "").lower()
-                api_key = default_config.get("api_key", "")
+                api_key = decrypt_secret(default_config.get("api_key", ""))
                 api_base = default_config.get("api_url", "")
                 model = default_config.get("model", "")
                 if api_key and api_base:
@@ -70,7 +103,7 @@ async def get_ai_config(db: AsyncSession) -> Optional[AIConfig]:
             return None
         
         provider = cfg.get("provider", "").lower()
-        api_key = cfg.get("api_key", "")
+        api_key = decrypt_secret(cfg.get("api_key", ""))
         api_base = cfg.get("api_base", cfg.get("api_url", ""))
         model = cfg.get("model", "")
         if not api_key or not api_base:
@@ -81,7 +114,7 @@ async def get_ai_config(db: AsyncSession) -> Optional[AIConfig]:
 
 
 async def get_ai_configs(db: AsyncSession) -> list:
-    """获取所有 AI 配置列表"""
+    """获取所有 AI 配置列表（api_key 解密为明文，仅供后端内部使用，禁止直接返回前端）"""
     result = await db.execute(select(Setting).filter(Setting.key == AI_CONFIG_KEY))
     setting = result.scalars().first()
     if not setting:
@@ -90,7 +123,8 @@ async def get_ai_configs(db: AsyncSession) -> list:
     try:
         cfg = json.loads(setting.value)
         if isinstance(cfg, list):
-            return cfg
+            configs, _ = decrypt_configs_api_keys(cfg)
+            return configs
         return [{
             "id": 1,
             "name": cfg.get("description", ""),
@@ -106,14 +140,17 @@ async def get_ai_configs(db: AsyncSession) -> list:
 
 
 async def save_ai_configs(db: AsyncSession, configs: list):
-    """保存 AI 配置列表"""
+    """保存 AI 配置列表（api_key 统一加密落库）"""
     result = await db.execute(select(Setting).filter(Setting.key == AI_CONFIG_KEY))
     setting = result.scalars().first()
 
+    encrypted, _ = encrypt_configs_api_keys(configs)
+    value = json.dumps(encrypted)
+
     if setting:
-        setting.value = json.dumps(configs)
+        setting.value = value
     else:
-        setting = Setting(key=AI_CONFIG_KEY, value=json.dumps(configs))
+        setting = Setting(key=AI_CONFIG_KEY, value=value)
         db.add(setting)
 
     await db.commit()

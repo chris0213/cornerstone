@@ -313,6 +313,18 @@ class AIInspectionSettingsResponse(BaseModel):
     enabled: bool = False
 
 
+class AIPrivacySettingsRequest(BaseModel):
+    """AI 外发隐私设置：开启后所有 LLM 调用链路跳过（走本地降级）"""
+    block_external: bool = False
+
+
+class AIPrivacySettingsResponse(BaseModel):
+    block_external: bool = False
+
+
+AI_PRIVACY_SETTINGS_KEY = "ai_privacy_settings"
+
+
 class LogSettingsRequest(BaseModel):
     log_retention_days: int = 90
     login_log_retention_days: int = 180
@@ -566,6 +578,57 @@ async def update_ai_inspection_settings(
     _log_setting_after(current_user.username, "更新巡检AI二次研判开关", AI_INSPECTION_SETTINGS_KEY, config_json, created)
 
     return AIInspectionSettingsResponse(**config_dict)
+
+
+@router.get("/ai-privacy", response_model=AIPrivacySettingsResponse)
+async def get_ai_privacy_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_super_admin)
+):
+    """获取 AI 外发隐私设置（禁止外发开关）"""
+    result = await db.execute(select(Setting).filter(Setting.key == AI_PRIVACY_SETTINGS_KEY))
+    setting = result.scalars().first()
+
+    if setting:
+        try:
+            config = json.loads(setting.value)
+            return AIPrivacySettingsResponse(block_external=bool(config.get("block_external", False)))
+        except json.JSONDecodeError:
+            pass
+
+    return AIPrivacySettingsResponse(block_external=False)
+
+
+@router.put("/ai-privacy", response_model=AIPrivacySettingsResponse)
+async def update_ai_privacy_settings(
+    request: AIPrivacySettingsRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_super_admin)
+):
+    """更新 AI 外发隐私设置（禁止外发开关）"""
+    config_dict = {"block_external": bool(request.block_external)}
+    config_json = json.dumps(config_dict)
+
+    result = await db.execute(select(Setting).filter(Setting.key == AI_PRIVACY_SETTINGS_KEY))
+    setting = result.scalars().first()
+
+    created = setting is None
+    if setting:
+        setting.value = config_json
+    else:
+        setting = Setting(key=AI_PRIVACY_SETTINGS_KEY, value=config_json)
+        db.add(setting)
+
+    await db.commit()
+    _log_setting_after(current_user.username, "更新AI外发隐私设置", AI_PRIVACY_SETTINGS_KEY, config_json, created)
+
+    await _audit_setting(
+        db, http_request, current_user, "ai_privacy_update",
+        f"更新AI外发隐私设置：禁止外发={'开启（所有LLM调用跳过）' if request.block_external else '关闭（允许外发）'}",
+    )
+
+    return AIPrivacySettingsResponse(**config_dict)
 
 
 # 测试发送进程内限频：每渠道 N 秒内只允许 1 次（沿 credential_test_rate_limit_seconds 模式）

@@ -88,3 +88,33 @@ def decrypt_password(cipher_text: str) -> str:
         logger = logging.getLogger("cornerstone")
         logger.warning(f"凭证解密失败，密钥可能不一致，请检查 .env 中的 CREDENTIAL_SECRET_KEY 设置")
         return ""
+
+
+# ==================== 通用敏感串加解密（AI api_key 等） ====================
+
+SECRET_ENC_PREFIX = "enc:"
+
+
+def encrypt_secret(plain_text: str) -> str:
+    """加密敏感字符串（如 AI api_key），带 enc: 前缀便于识别。幂等：已加密返回原值。"""
+    if not plain_text:
+        return ""
+    if plain_text.startswith(SECRET_ENC_PREFIX):
+        return plain_text
+    return SECRET_ENC_PREFIX + _fernet.encrypt(plain_text.encode()).decode()
+
+
+def decrypt_secret(value: str) -> str:
+    """解密 encrypt_secret 的结果。无前缀（存量明文）原样返回；解密失败返回空串。"""
+    if not value:
+        return ""
+    if not value.startswith(SECRET_ENC_PREFIX):
+        return value
+    try:
+        return _fernet.decrypt(value[len(SECRET_ENC_PREFIX):].encode()).decode()
+    except Exception:
+        import logging
+        logging.getLogger("cornerstone").warning(
+            "敏感串解密失败（enc: 前缀），密钥可能不一致，返回空串"
+        )
+        return ""

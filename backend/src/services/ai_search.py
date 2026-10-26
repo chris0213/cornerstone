@@ -60,23 +60,23 @@ SYSTEM_PROMPT = """
 """
 
 
-async def parse_user_query(question: str, last_data_type: str = "") -> dict:
+async def parse_user_query(question: str, db: AsyncSession, last_data_type: str = "") -> dict:
     """
-    调用大模型解析用户问题为结构化查询意图
-    失败时返回降级查询（full text search fallback）
+    调用大模型解析用户问题为结构化查询意图（复用请求级会话读取配置与隐私开关）
+    失败或禁止外发时返回降级查询（full text search fallback）
     """
+    from .ai_outbound_guard import is_external_blocked
+
     prompt = f"请解析以下查询：{question}"
 
-    ai_config = None  # 先尝试从全局获取，如果没有配置则返回降级
-    from ..database import async_session
-    from ..models.setting import Setting
-    from sqlalchemy import select
-
+    ai_config = None
     try:
-        async with async_session() as db:
-            ai_config = await get_ai_config(db)
+        ai_config = await get_ai_config(db)
+        if ai_config and await is_external_blocked(db):
+            # 禁止外发：问题文本也不发给 LLM 解析，走关键字降级
+            ai_config = None
     except Exception:
-        pass
+        ai_config = None
 
     if ai_config and ai_config.is_configured():
         try:
@@ -404,27 +404,30 @@ async def _query_audit_logs(db: AsyncSession, filters: dict, limit: int) -> list
 # ──────────────────────────────────────────────
 # 格式化回答
 # ──────────────────────────────────────────────
-async def format_answer(intent: dict, raw_data: list, question: str) -> dict:
+async def format_answer(intent: dict, raw_data: list, question: str, db: AsyncSession) -> dict:
     """
     将查询结果格式化为自然语言回答
-    返回 answer_text + 原始数据 + data_type + suggestions
+    返回 answer_text + 原始数据 + data_type + suggestions + model
+    发给 LLM 的数据先过字段白名单 + 值级脱敏；返回给前端的 data 仍为原始数据
     """
     data_type = intent.get("entities", {}).get("type", "devices")
 
-    # 尝试用 AI 生成自然语言回答
+    # 尝试用 AI 生成自然语言回答（复用请求级会话读取配置与隐私开关）
     ai_config = None
+    external_blocked = False
     try:
-        from ..database import async_session
-        async with async_session() as db:
-            ai_config = await get_ai_config(db)
+        from .ai_outbound_guard import is_external_blocked, filter_rows_for_llm
+        ai_config = await get_ai_config(db)
+        external_blocked = await is_external_blocked(db)
     except Exception:
         pass
 
-    if ai_config and ai_config.is_configured() and raw_data:
+    if ai_config and ai_config.is_configured() and raw_data and not external_blocked:
+        safe_rows = filter_rows_for_llm(data_type, raw_data)
         format_prompt = (
             f"用户问题：{question}\n"
             f"查询数据类型：{data_type}\n"
-            f"查询结果（JSON）：{json.dumps(raw_data, ensure_ascii=False)}\n\n"
+            f"查询结果（JSON，已脱敏）：{json.dumps(safe_rows, ensure_ascii=False)}\n\n"
             f"请用简洁的中文回答用户的问题，基于以上数据。"
             f"同时给出 2-3 个进一步追问的建议（JSON数组）。"
             f"返回严格 JSON：{{\"answer_text\": \"...\", \"suggestions\": [...]}}"
@@ -441,6 +444,7 @@ async def format_answer(intent: dict, raw_data: list, question: str) -> dict:
                 "data": raw_data,
                 "data_type": data_type,
                 "suggestions": result.get("suggestions", []),
+                "model": ai_config.model,
             }
         except Exception:
             pass
@@ -451,6 +455,7 @@ async def format_answer(intent: dict, raw_data: list, question: str) -> dict:
         "data": raw_data,
         "data_type": data_type,
         "suggestions": [],
+        "model": None,
     }
 
 
@@ -638,28 +643,38 @@ KB_SYSTEM_PROMPT = """你是基石（Cornerstone）企业级IT基础设施智能
 
 
 async def answer_from_knowledge(db: AsyncSession, question: str) -> Optional[dict]:
-    """知识库 RAG：命中文章时返回 {answer_text, data_type="knowledge"}，否则 None 走原查询链路"""
+    """知识库 RAG：命中文章时返回 {answer_text, data_type="knowledge", model}，否则 None 走原查询链路
+
+    禁止外发开关开启时直接走文章列表 fallback（不调 LLM）。
+    文章正文发 LLM 前做值级脱敏。
+    """
+    from .ai_outbound_guard import is_external_blocked, mask_outbound_text
+
     articles = await search_knowledge_articles(db, question)
     if not articles:
         return None
 
+    def _fallback_list() -> dict:
+        lines = [f"在知识库中找到 {len(articles)} 篇相关文章："]
+        for i, a in enumerate(articles, 1):
+            summary = (a["summary"] or a["content"])[:120]
+            lines.append(f"{i}. 《{a['title']}》（{a['category']}）— {summary}")
+        lines.append("打开知识库页面可查看全文。")
+        return {"answer_text": "\n".join(lines), "data_type": "knowledge", "model": None}
+
     ai_config = await get_ai_config(db)
-    if ai_config and ai_config.is_configured():
+    if ai_config and ai_config.is_configured() and not (await is_external_blocked(db)):
         kb_text = "\n\n".join(
-            f"《{a['title']}》（{a['category']}）\n{(a['content'] or a['summary'])[:1500]}"
+            f"《{a['title']}》（{a['category']}）\n"
+            f"{mask_outbound_text((a['content'] or a['summary'])[:1500])}"
             for a in articles
         )
         prompt = f"用户问题：{question}\n\n内部知识库相关文章：\n{kb_text}"
         try:
             answer = await call_ai(prompt, KB_SYSTEM_PROMPT, ai_config, max_tokens=1200, timeout=12)
-            return {"answer_text": answer.strip(), "data_type": "knowledge"}
+            return {"answer_text": answer.strip(), "data_type": "knowledge", "model": ai_config.model}
         except Exception as e:
             logger.warning(f"Knowledge RAG AI call failed, fallback to list: {e}")
 
-    # 未配置 AI 或调用失败：直接给出检索结果列表
-    lines = [f"在知识库中找到 {len(articles)} 篇相关文章："]
-    for i, a in enumerate(articles, 1):
-        summary = (a["summary"] or a["content"])[:120]
-        lines.append(f"{i}. 《{a['title']}》（{a['category']}）— {summary}")
-    lines.append("打开知识库页面可查看全文。")
-    return {"answer_text": "\n".join(lines), "data_type": "knowledge"}
+    # 未配置 AI / 调用失败 / 禁止外发：直接给出检索结果列表
+    return _fallback_list()

@@ -6,7 +6,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -15,14 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from ..database import get_db
-from ..api.dependencies import get_current_active_user, PageParams, pagination
+from ..api.dependencies import get_current_active_user, require_super_admin, PageParams, pagination
 from ..models import User, Device, Backup, Circuit, Prefix, IPAddress, AIChatLog
 from ..models.alert import AlertRecord
+from ..models.audit_log import AuditLog
 from ..models.inspection import InspectionResult
 from ..models.backup_analysis import BackupAnalysis
 from ..services.ai_client import get_ai_config, call_ai, OPENAI_COMPATIBLE
 from ..services.ai_search import parse_user_query, execute_query, format_answer
 from ..services.ai_backup_analyzer import analyze_config_change, save_change_analysis
+from ..services.ai_outbound_guard import (
+    mask_question,
+    filter_rows_for_llm,
+    mask_outbound_text,
+    validate_ai_api_url,
+    is_external_blocked,
+    strip_sensitive_lines,
+)
+from ..utils.ip_whitelist import get_client_ip_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +62,8 @@ class AIConfigRequest(BaseModel):
     provider: str
     model: str
     api_url: str
-    api_key: str
+    # 编辑时未重新输入 key 可不传/传空，后端保留原值
+    api_key: str = ""
     description: str = ""
     enabled: bool = True
     is_default: bool = False
@@ -77,6 +87,8 @@ class AIConfigResponse(BaseModel):
     description: str = ""
     enabled: bool = False
     is_default: bool = False
+    # 是否已配置 api_key（响应不回传 key 本身）
+    has_key: bool = False
 
 
 class BackupAnalysisResponse(BaseModel):
@@ -121,16 +133,22 @@ async def ai_search(
 
     answer_text = ""
     data_type = "unknown"
+    model_used = None
+    status = "success"
+    error_message = None
+    started = datetime.now()
+    payload = None
     try:
         # Step 0: 操作/故障处置类问题优先命中内部知识库（RAG）
         from ..services.ai_search import _looks_like_howto, answer_from_knowledge
         kb_result = None
-        if _looks_like_howto(req.question):
+        if not (await is_external_blocked(db)) and _looks_like_howto(req.question):
             kb_result = await answer_from_knowledge(db, req.question.strip())
 
         if kb_result:
             answer_text = kb_result["answer_text"]
             data_type = kb_result["data_type"]
+            model_used = kb_result.get("model")
             payload = {"code": 0, "data": {
                 "answer_text": answer_text,
                 "data": [],
@@ -139,19 +157,36 @@ async def ai_search(
             }}
         else:
             # Step 1: 解析意图（带上上一轮的数据类型，支持追问）
-            intent = await parse_user_query(req.question.strip(), (req.last_data_type or "").strip())
+            intent = await parse_user_query(
+                req.question.strip(), db, (req.last_data_type or "").strip()
+            )
+            intent_data_type = (intent.get("entities") or {}).get("type", "")
 
-            # Step 2: 执行查询
-            raw_data = await execute_query(intent, db)
+            # 审计日志一律禁止进入 AI 问答：不查询、不外发（防普通用户越权读取审计明细）
+            if intent_data_type == "audit_logs":
+                answer_text = "审计日志暂不支持 AI 问答，请前往「审计日志」页面查看相关记录。"
+                data_type = "audit_logs"
+                payload = {"code": 0, "data": {
+                    "answer_text": answer_text,
+                    "data": [],
+                    "data_type": data_type,
+                    "suggestions": [],
+                }}
+            else:
+                # Step 2: 执行查询
+                raw_data = await execute_query(intent, db)
 
-            # Step 3: 格式化回答
-            result = await format_answer(intent, raw_data, req.question)
+                # Step 3: 格式化回答（发给 LLM 的数据先过字段白名单 + 脱敏）
+                result = await format_answer(intent, raw_data, req.question, db)
 
-            answer_text = result.get("answer_text", "")
-            data_type = result.get("data_type", "unknown")
-            payload = {"code": 0, "data": result}
+                answer_text = result.get("answer_text", "")
+                data_type = result.get("data_type", "unknown")
+                model_used = result.get("model")
+                payload = {"code": 0, "data": result}
     except Exception as e:
         logger.error(f"AI search failed: {e}")
+        status = "failed"
+        error_message = str(e)
         answer_text = "查询失败，请稍后重试或换个问法。"
         data_type = "unknown"
         payload = {
@@ -165,6 +200,7 @@ async def ai_search(
         }
 
     # 持久化聊天日志（即便查询失败也记录问题本身，便于回溯）
+    duration_ms = int((datetime.now() - started).total_seconds() * 1000)
     await _persist_chat_log(
         db=db,
         user=current_user,
@@ -172,6 +208,10 @@ async def ai_search(
         answer_text=answer_text,
         data_type=data_type,
         request=request,
+        model=model_used,
+        duration_ms=duration_ms,
+        status=status,
+        error_message=error_message,
     )
 
     return payload
@@ -179,22 +219,9 @@ async def ai_search(
 
 # ── 聊天日志脱敏与持久化 ──────────────────────────
 
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-# 设备序列号/资产编码类：纯字母数字、长度>=10 且同时含字母与数字
-_SN_RE = re.compile(r"\b(?=[A-Za-z0-9]{10,}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b")
-
-
 def _mask_sensitive(text: str) -> str:
-    """对聊天日志中可能包含的敏感信息做轻量脱敏，避免 PII 落入日志表。"""
-    if not text:
-        return text
-    text = _EMAIL_RE.sub("[邮箱已脱敏]", text)
-    text = _MAC_RE.sub("[MAC已脱敏]", text)
-    text = _IPV4_RE.sub("[IP已脱敏]", text)
-    text = _SN_RE.sub("[编码已脱敏]", text)
-    return text
+    """对聊天日志中可能包含的敏感信息做轻量脱敏（规则集中在外发防护模块）。"""
+    return mask_outbound_text(text)
 
 
 async def _persist_chat_log(
@@ -204,16 +231,27 @@ async def _persist_chat_log(
     answer_text: str,
     data_type: str,
     request: Request,
+    model: str | None = None,
+    duration_ms: int | None = None,
+    status: str = "success",
+    error_message: str | None = None,
 ) -> None:
-    """写入一条 AI 聊天日志，并清理 30 天前的记录。失败不影响主流程。"""
+    """写入一条 AI 聊天日志，并清理 30 天前的记录。失败不影响主流程。
+
+    question 落库前脱敏（凭证/私钥/邮箱/MAC/IP/SN），answer 同样脱敏。
+    """
     try:
-        client_ip = request.client.host if request and request.client else None
+        client_ip = get_client_ip_from_request(request) if request else None
         log = AIChatLog(
             user_id=user.id,
-            question=question,
+            question=mask_question(question or ""),
             answer_text=_mask_sensitive(answer_text or ""),
             data_type=data_type or None,
             client_ip=client_ip,
+            model=model or None,
+            duration_ms=duration_ms,
+            status=status if status in ("success", "failed") else "success",
+            error_message=(error_message or None) and str(error_message)[:500],
         )
         db.add(log)
         await db.flush()
@@ -296,6 +334,10 @@ async def get_chat_logs(
             "answerText": log.answer_text,
             "dataType": log.data_type,
             "clientIp": log.client_ip,
+            "model": log.model,
+            "durationMs": log.duration_ms,
+            "status": log.status,
+            "errorMessage": log.error_message,
             "createdAt": created_at.isoformat() if created_at else None,
         })
     return {"total": total, "items": items}
@@ -312,6 +354,7 @@ def _csv_cell(value) -> str:
 
 @router.get("/chat-logs/export")
 async def export_chat_logs(
+    request: Request,
     keyword: str = "",
     data_type: str = "",
     user_id: int | None = None,
@@ -322,6 +365,7 @@ async def export_chat_logs(
     """
     流式导出聊天日志为 CSV（沿用列表的全部筛选条件与可见范围）。
     使用 StreamingResponse 逐行产出，规避前端一次拉全量导致的内存与超时问题。
+    导出动作写审计日志（普通用户仅审计自己的导出，范围本身受本人限制约束）。
     """
     conds = _build_chat_log_filters(current_user, keyword, data_type, user_id, days)
     stmt = select(AIChatLog).options(joinedload(AIChatLog.user))
@@ -330,10 +374,34 @@ async def export_chat_logs(
     stmt = stmt.order_by(AIChatLog.created_at.desc()).limit(200000)
     rows = (await db.execute(stmt)).scalars().all()
 
+    # 导出审计：记录筛选条件与行数，不记录任何日志内容
+    try:
+        filter_desc = ", ".join(
+            f"{k}={v}" for k, v in
+            {"keyword": keyword or None, "data_type": data_type or None,
+             "user_id": user_id, "days": days}.items() if v
+        ) or "无筛选"
+        audit_log = AuditLog(
+            user=current_user.username,
+            action="ai_chat_logs_export",
+            resource="ai_chat_logs",
+            detail=f"导出AI聊天日志：{filter_desc}，共 {len(rows)} 条",
+            ip_address=get_client_ip_from_request(request),
+            success="true",
+        )
+        db.add(audit_log)
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to audit chat log export: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
     def _line(values) -> str:
         return ",".join(_csv_cell(v) for v in values) + "\r\n"
 
-    header = _line(["时间", "用户", "提问", "回答", "数据类型", "来源IP"])
+    header = _line(["时间", "用户", "提问", "回答", "数据类型", "来源IP", "模型", "耗时(ms)", "状态"])
 
     async def gen():
         # 带 BOM，确保 Excel 正确识别 UTF-8 中文
@@ -346,6 +414,9 @@ async def export_chat_logs(
                 log.answer_text,
                 log.data_type or "",
                 log.client_ip or "",
+                log.model or "",
+                log.duration_ms if log.duration_ms is not None else "",
+                log.status or "",
             ])
 
     filename = f"ai-chat-logs-{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
@@ -374,27 +445,74 @@ async def ai_config_status(
 @router.get("/config", response_model=list[AIConfigResponse])
 async def get_ai_configs(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_super_admin),
 ):
-    """获取所有 AI 配置列表"""
+    """获取所有 AI 配置列表（仅超级管理员；api_key 不回传，仅 has_key）"""
     from ..services.ai_client import get_ai_configs as fetch_configs
     configs = await fetch_configs(db)
-    return configs
+    return [_config_response(c) for c in configs]
+
+
+def _config_response(c: dict) -> AIConfigResponse:
+    """把配置 dict 转 AIConfigResponse（剥离 api_key，只回 has_key）"""
+    return AIConfigResponse(
+        id=c.get("id", 0),
+        name=c.get("name", ""),
+        provider=c.get("provider", ""),
+        model=c.get("model", ""),
+        api_url=c.get("api_url", ""),
+        description=c.get("description", ""),
+        enabled=bool(c.get("enabled", False)),
+        is_default=bool(c.get("is_default", False)),
+        has_key=bool(c.get("api_key")),
+    )
+
+
+async def _audit_ai_config(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    action: str,
+    detail: str,
+) -> None:
+    """AI 配置写操作审计。detail 由调用方构造，绝不包含 api_key 内容。"""
+    try:
+        audit_log = AuditLog(
+            user=user.username,
+            action=action,
+            resource="ai_config",
+            detail=detail,
+            ip_address=get_client_ip_from_request(request),
+            success="true",
+        )
+        db.add(audit_log)
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to audit ai config action: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 @router.post("/config", response_model=AIConfigResponse)
 async def add_ai_config(
     req: AIConfigRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_super_admin),
 ):
-    """添加新的 AI 配置"""
+    """添加新的 AI 配置（仅超级管理员）"""
     from ..services.ai_client import get_ai_configs as fetch_configs, save_ai_configs
 
+    err = validate_ai_api_url(req.api_url)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+
     configs = await fetch_configs(db)
-    
+
     new_id = max((c.get("id", 0) for c in configs), default=0) + 1
-    
+
     new_config = {
         "id": new_id,
         "name": req.name,
@@ -406,37 +524,51 @@ async def add_ai_config(
         "enabled": req.enabled,
         "is_default": req.is_default,
     }
-    
+
     if req.is_default:
         for c in configs:
             c["is_default"] = False
-    
+
     configs.append(new_config)
     await save_ai_configs(db, configs)
 
-    return AIConfigResponse(**{k: v for k, v in new_config.items() if k != "api_key"})
+    await _audit_ai_config(
+        db, request, current_user, "ai_config_create",
+        f"新增AI配置：{req.name}（provider={req.provider}，model={req.model}，"
+        f"api_url={req.api_url}，has_key={'是' if req.api_key else '否'}，"
+        f"enabled={req.enabled}，is_default={req.is_default}）",
+    )
+
+    return _config_response(new_config)
 
 
 @router.put("/config/{config_id}", response_model=AIConfigResponse)
 async def update_ai_config(
     config_id: int,
     req: AIConfigRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_super_admin),
 ):
-    """更新指定的 AI 配置"""
+    """更新指定的 AI 配置（仅超级管理员；api_key 留空表示保留原值）"""
     from ..services.ai_client import get_ai_configs as fetch_configs, save_ai_configs
 
+    err = validate_ai_api_url(req.api_url)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+
     configs = await fetch_configs(db)
-    
+
     index = next((i for i, c in enumerate(configs) if c.get("id") == config_id), -1)
     if index == -1:
         raise HTTPException(status_code=404, detail="配置不存在")
-    
+
+    old_key_present = bool(configs[index].get("api_key"))
+
     if req.is_default:
         for c in configs:
             c["is_default"] = False
-    
+
     configs[index] = {
         "id": config_id,
         "name": req.name,
@@ -449,44 +581,83 @@ async def update_ai_config(
         "enabled": req.enabled,
         "is_default": req.is_default,
     }
-    
+
     await save_ai_configs(db, configs)
 
-    return AIConfigResponse(**{k: v for k, v in configs[index].items() if k != "api_key"})
+    new_key_present = bool(configs[index].get("api_key"))
+    key_change = "无变化" if old_key_present == new_key_present else (
+        "已设置" if new_key_present else "已清除"
+    )
+    await _audit_ai_config(
+        db, request, current_user, "ai_config_update",
+        f"更新AI配置：{req.name}（provider={req.provider}，model={req.model}，"
+        f"api_url={req.api_url}，api_key={key_change}，"
+        f"enabled={req.enabled}，is_default={req.is_default}）",
+    )
+
+    return _config_response(configs[index])
 
 
 @router.delete("/config/{config_id}", response_model=dict)
 async def delete_ai_config(
     config_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_super_admin),
 ):
-    """删除指定的 AI 配置"""
+    """删除指定的 AI 配置（仅超级管理员）"""
     from ..services.ai_client import get_ai_configs as fetch_configs, save_ai_configs
 
     configs = await fetch_configs(db)
-    
+
     index = next((i for i, c in enumerate(configs) if c.get("id") == config_id), -1)
     if index == -1:
         raise HTTPException(status_code=404, detail="配置不存在")
-    
-    configs.pop(index)
+
+    removed = configs.pop(index)
+    was_default = bool(removed.get("is_default"))
     await save_ai_configs(db, configs)
 
+    await _audit_ai_config(
+        db, request, current_user, "ai_config_delete",
+        f"删除AI配置：{removed.get('name', '')}（provider={removed.get('provider', '')}，"
+        f"model={removed.get('model', '')}，was_default={was_default}）",
+    )
+
     return {"message": "配置已删除"}
+
+
+# 测试连接进程内限频：同一目标 N 秒内只允许 1 次（沿 credential_test_rate_limit_seconds 模式）
+_ai_config_test_last: dict[str, float] = {}
 
 
 @router.post("/config/test")
 async def test_ai_config(
     req: AIConfigTestRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_super_admin),
 ):
     """
-    连接测试：验证 API Key / 模型 / URL 是否可用。
+    连接测试：验证 API Key / 模型 / URL 是否可用（仅超级管理员，限频 + 审计）。
     可传 config_id（用库里已存的 key 测）或完整字段（测未保存的新 key）。
     单次请求、不重试，避免加重限流。
     """
+    import time as _time
+    from ..config import settings as app_config
+
+    # 限频：按目标（config_id 或 adhoc）N 秒 1 次
+    limit_seconds = app_config.credential_test_rate_limit_seconds or 10
+    rate_key = str(req.config_id) if req.config_id is not None else "adhoc"
+    now_ts = _time.time()
+    last_ts = _ai_config_test_last.get(rate_key, 0)
+    if limit_seconds > 0 and now_ts - last_ts < limit_seconds:
+        raise HTTPException(
+            status_code=429,
+            detail=f"测试过于频繁，请 {int(limit_seconds - (now_ts - last_ts)) + 1} 秒后再试",
+        )
+    _ai_config_test_last[rate_key] = now_ts
+
     # 解析要测试的配置来源
     if req.config_id is not None:
         from ..services.ai_client import get_ai_configs as fetch_configs
@@ -510,6 +681,12 @@ async def test_ai_config(
     if provider.lower() not in OPENAI_COMPATIBLE:
         return {"ok": False, "message": f"暂不支持测试该提供商：{provider}"}
 
+    # api_url 校验（存量配置测试时同样按新规校验，要求改为 https 公网地址）
+    err = validate_ai_api_url(api_url)
+    if err:
+        return {"ok": False, "message": err}
+
+    result = {"ok": False, "message": ""}
     body = {
         "model": model,
         "messages": [
@@ -534,29 +711,38 @@ async def test_ai_config(
                     content = r.json()["choices"][0]["message"]["content"].strip()
                 except Exception:
                     content = ""
-                return {"ok": True, "message": f"连接成功，模型返回：{content[:50]}"}
+                result = {"ok": True, "message": f"连接成功，模型返回：{content[:50]}"}
+            else:
+                # 解析常见错误体
+                try:
+                    err_body = r.json().get("error", {})
+                    msg = err_body.get("message") or r.text[:200]
+                except Exception:
+                    msg = r.text[:200]
 
-            # 解析常见错误体
-            try:
-                err = r.json().get("error", {})
-                msg = err.get("message") or r.text[:200]
-            except Exception:
-                msg = r.text[:200]
-
-            if r.status_code == 401:
-                return {"ok": False, "message": f"认证失败（401）：API Key 无效或已失效"}
-            if r.status_code == 429:
-                friendly = "频率限制或额度不足（429）"
-                if "余额" in msg or "资源包" in msg or "1113" in msg:
-                    friendly = "账号余额不足或无可用资源包，请先充值"
-                return {"ok": False, "message": f"{friendly}：{msg}"}
-            return {"ok": False, "message": f"HTTP {r.status_code}：{msg}"}
+                if r.status_code == 401:
+                    result = {"ok": False, "message": f"认证失败（401）：API Key 无效或已失效"}
+                elif r.status_code == 429:
+                    friendly = "频率限制或额度不足（429）"
+                    if "余额" in msg or "资源包" in msg or "1113" in msg:
+                        friendly = "账号余额不足或无可用资源包，请先充值"
+                    result = {"ok": False, "message": f"{friendly}：{msg}"}
+                else:
+                    result = {"ok": False, "message": f"HTTP {r.status_code}：{msg}"}
     except httpx.ConnectError:
-        return {"ok": False, "message": "无法连接到 API 地址，请检查 API URL 是否正确"}
+        result = {"ok": False, "message": "无法连接到 API 地址，请检查 API URL 是否正确"}
     except httpx.TimeoutException:
-        return {"ok": False, "message": "连接超时（15s），请检查网络或 API URL"}
+        result = {"ok": False, "message": "连接超时（15s），请检查网络或 API URL"}
     except Exception as e:
-        return {"ok": False, "message": f"测试失败：{str(e)[:200]}"}
+        result = {"ok": False, "message": f"测试失败：{str(e)[:200]}"}
+
+    # 测试审计：只记目标与结果，不记 key
+    await _audit_ai_config(
+        db, request, current_user, "ai_config_test",
+        f"测试AI连接：config_id={req.config_id if req.config_id is not None else '未保存配置'}，"
+        f"api_url={api_url}，结果={'成功' if result['ok'] else '失败'}",
+    )
+    return result
 
 
 @router.get("/backups/{backup_id}/analysis", response_model=BackupAnalysisResponse)
