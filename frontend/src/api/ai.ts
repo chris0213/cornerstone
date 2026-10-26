@@ -9,6 +9,11 @@ export interface ChatLogItem {
   dataType: string | null
   clientIp: string | null
   createdAt: string | null
+  /** 调用元数据（可空，兼容历史记录） */
+  model: string | null
+  durationMs: number | null
+  status: string | null
+  errorMessage: string | null
 }
 
 export interface ChatLogResponse {

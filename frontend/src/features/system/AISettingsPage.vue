@@ -2,44 +2,44 @@
   <div class="ai-settings-page">
     <div class="capability-card">
       <div class="capability-header">
-        <span class="capability-title">巡检 AI 二次研判</span>
+        <span class="capability-title">{{ t('aiSettings.inspectionTitle') }}</span>
         <el-switch
           v-model="aiInspectionEnabled"
           @change="saveAIInspection"
         />
         <el-tag :type="aiInspectionEnabled ? 'success' : 'info'" size="small">
-          {{ aiInspectionEnabled ? '已开启' : '已关闭' }}
+          {{ aiInspectionEnabled ? t('common.enabled') : t('common.disabled') }}
         </el-tag>
       </div>
       <p class="capability-desc">
-        开启后，巡检任务在快速扫描与全量扫描完成后，会对发现的异常调用 LLM 做二次研判，结论写入巡检结果的 ai_summary 字段。需要在上方 LLM 配置列表中至少启用一个配置。默认关闭，不影响现有巡检流程。
+        {{ t('aiSettings.inspectionDesc') }}
       </p>
     </div>
 
     <div class="capability-card">
       <div class="capability-header">
-        <span class="capability-title">自适应告警基线</span>
+        <span class="capability-title">{{ t('aiSettings.adaptiveBaselineTitle') }}</span>
       </div>
       <p class="capability-desc">
-        将告警规则从固定阈值切换为动态基线检测（z-score 离群判定）与突变检测。仅对「延迟」与「丢包」两类条件生效；历史采样点不足 10 个时不会触发告警。默认全部为静态阈值。
+        {{ t('aiSettings.adaptiveBaselineDesc') }}
       </p>
       <el-table :data="rules" border style="width: 100%">
-        <el-table-column prop="name" label="规则名称" min-width="160" />
-        <el-table-column prop="condition_type" label="条件类型" width="110" />
-        <el-table-column label="检测模式" width="160">
+        <el-table-column prop="name" :label="t('aiSettings.ruleName')" min-width="160" />
+        <el-table-column prop="condition_type" :label="t('aiSettings.conditionType')" width="110" />
+        <el-table-column :label="t('aiSettings.detectionMode')" width="160">
           <template #default="{ row }">
             <el-select
               :model-value="ruleMode(row)"
               @change="(val: string) => onModeChange(row, val)"
               :disabled="!supportsAnomaly(row)"
             >
-              <el-option label="静态阈值" value="static" />
-              <el-option label="自适应基线" value="anomaly" />
+              <el-option :label="t('aiSettings.staticThreshold')" value="static" />
+              <el-option :label="t('aiSettings.adaptiveBaseline')" value="anomaly" />
             </el-select>
-            <div v-if="!supportsAnomaly(row)" class="capability-tip">仅支持延迟与丢包规则</div>
+            <div v-if="!supportsAnomaly(row)" class="capability-tip">{{ t('aiSettings.latencyPacketLossOnly') }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="基线窗口（分钟）" width="140">
+        <el-table-column :label="t('aiSettings.baselineWindow')" width="140">
           <template #default="{ row }">
             <el-input-number
               v-model="row.baseline_window"
@@ -51,7 +51,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="灵敏度 z-score" width="150">
+        <el-table-column :label="t('aiSettings.sensitivityZScore')" width="150">
           <template #default="{ row }">
             <el-input-number
               v-model="row.baseline_sensitivity"
@@ -64,10 +64,10 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="突变阈值" width="140">
+        <el-table-column width="140">
           <template #header>
-            <el-tooltip content="相对基线的变化率，0.5 表示变化 50%" placement="top">
-              <span>突变阈值</span>
+            <el-tooltip :content="t('aiSettings.mutationThresholdTip')" placement="top">
+              <span>{{ t('aiSettings.mutationThreshold') }}</span>
             </el-tooltip>
           </template>
           <template #default="{ row }">
@@ -82,7 +82,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column :label="t('aiSettings.actions')" width="90" fixed="right">
           <template #default="{ row }">
             <el-button
               type="primary"
@@ -90,7 +90,7 @@
               :loading="ruleSaving[row.id]"
               @click="saveRule(row)"
             >
-              保存
+              {{ t('common.save') }}
             </el-button>
           </template>
         </el-table-column>
@@ -99,14 +99,14 @@
 
     <div class="config-list-container">
       <div class="list-header">
-        <span class="list-title">LLM 配置列表</span>
-        <el-button type="primary" @click="openAddModal">+ 添加配置</el-button>
+        <span class="list-title">{{ t('aiSettings.llmConfigList') }}</span>
+        <el-button type="primary" @click="openAddModal">{{ t('aiSettings.addConfig') }}</el-button>
       </div>
 
       <div v-if="configs.length === 0" class="empty-state">
         <el-icon class="empty-icon"><InfoFilled /></el-icon>
-        <p>暂无 AI 配置</p>
-        <el-button type="primary" @click="openAddModal">添加配置</el-button>
+        <p>{{ t('aiSettings.noConfigs') }}</p>
+        <el-button type="primary" @click="openAddModal">{{ t('aiSettings.addConfig') }}</el-button>
       </div>
 
       <div v-else class="config-list">
@@ -119,25 +119,32 @@
           <div class="config-header">
             <div class="config-name">
               <span class="name-text">{{ config.name }}</span>
-              <el-tag v-if="config.is_default" type="primary" size="small">默认</el-tag>
+              <el-tag v-if="config.is_default" type="primary" size="small">{{ t('aiSettings.default') }}</el-tag>
+              <el-tag
+                :type="config.has_key ? 'success' : 'info'"
+                size="small"
+                effect="plain"
+              >
+                {{ config.has_key ? t('aiSettings.keyConfigured') : t('aiSettings.keyMissing') }}
+              </el-tag>
             </div>
             <div class="config-actions">
               <el-switch
                 v-model="config.enabled"
                 @change="toggleEnabled(config)"
               />
-              <el-button type="text" @click="testStoredConfig(config)" :loading="testingId === config.id">测试</el-button>
-              <el-button type="text" @click="openEditModal(config)">编辑</el-button>
-              <el-button type="text" @click="deleteConfig(config)" style="color: #ff4d4f">删除</el-button>
+              <el-button type="text" @click="testStoredConfig(config)" :loading="testingId === config.id">{{ t('aiSettings.test') }}</el-button>
+              <el-button type="text" @click="openEditModal(config)">{{ t('common.edit') }}</el-button>
+              <el-button type="text" @click="deleteConfig(config)" class="danger-btn">{{ t('common.delete') }}</el-button>
             </div>
           </div>
           <div class="config-body">
             <div class="config-row">
-              <span class="label">提供商</span>
+              <span class="label">{{ t('aiSettings.provider') }}</span>
               <span class="value">{{ getProviderLabel(config.provider) }}</span>
             </div>
             <div class="config-row">
-              <span class="label">模型</span>
+              <span class="label">{{ t('aiSettings.model') }}</span>
               <span class="value">{{ config.model }}</span>
             </div>
             <div class="config-row">
@@ -145,7 +152,7 @@
               <span class="value">{{ config.api_url }}</span>
             </div>
             <div v-if="config.description" class="config-row">
-              <span class="label">描述</span>
+              <span class="label">{{ t('aiSettings.description') }}</span>
               <span class="value">{{ config.description }}</span>
             </div>
           </div>
@@ -154,62 +161,42 @@
     </div>
 
     <el-dialog
-      :title="editingId ? '编辑 LLM 配置' : '添加 LLM 配置'"
+      :title="editingId ? t('aiSettings.editConfigTitle') : t('aiSettings.addConfigTitle')"
       v-model="modalVisible"
       width="650px"
     >
       <div class="modal-form">
         <div class="form-row">
-          <div class="form-group name-group">
-            <label class="form-label required">名称</label>
+          <div class="form-group">
+            <label class="form-label required">{{ t('aiSettings.configName') }}</label>
             <el-input
               v-model="form.name"
-              placeholder="请输入配置名称"
+              :placeholder="t('aiSettings.configNamePlaceholder')"
             />
           </div>
-          <div class="form-group switch-group">
-            <label class="form-label">启用</label>
-            <el-switch v-model="form.enabled" />
-          </div>
-          <div class="form-group switch-group">
-            <label class="form-label">默认</label>
-            <el-switch v-model="form.is_default" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group full-width">
-            <label class="form-label">描述</label>
-            <el-input
-              v-model="form.description"
-              type="textarea"
-              :rows="2"
-              placeholder="请输入 LLM 配置的描述信息"
-            />
-          </div>
-        </div>
-
-        <div class="form-row">
           <div class="form-group">
-            <label class="form-label required">提供商类型</label>
+            <label class="form-label required">{{ t('aiSettings.provider') }}</label>
             <el-select
               v-model="form.provider"
-              placeholder="请选择提供商类型"
+              :placeholder="t('aiSettings.selectProvider')"
               @change="handleProviderChange"
             >
-              <el-option label="OpenAI" value="openai" />
-              <el-option label="OpenAI 兼容" value="deepseek" />
-              <el-option label="阿里通义千问" value="qwen" />
-              <el-option label="智谱AI" value="zhipu" />
-              <el-option label="Anthropic Claude" value="claude" />
-              <el-option label="自定义 API" value="custom" />
+              <el-option
+                v-for="(label, value) in providerOptions"
+                :key="value"
+                :label="label"
+                :value="value"
+              />
             </el-select>
           </div>
+        </div>
+
+        <div class="form-row">
           <div class="form-group">
-            <label class="form-label required">模型</label>
+            <label class="form-label required">{{ t('aiSettings.model') }}</label>
             <el-input
               v-model="form.model"
-              placeholder="请输入模型名称"
+              :placeholder="t('aiSettings.modelNamePlaceholder')"
             />
           </div>
         </div>
@@ -219,43 +206,71 @@
             <label class="form-label required">API URL</label>
             <el-input
               v-model="form.api_url"
-              placeholder="请输入 API URL"
+              placeholder="https://..."
             />
+            <div class="form-tip">{{ t('aiSettings.apiUrlTip') }}</div>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group full-width api-key-group">
-            <label class="form-label required">API Key</label>
+            <label class="form-label" :class="{ required: !editingId }">API Key</label>
             <div class="input-with-icon">
               <el-input
                 v-model="form.api_key"
                 :type="showApiKey ? 'text' : 'password'"
-                :placeholder="editingId ? '已保存，留空则不修改' : '请输入 API Key'"
+                :placeholder="editingId ? t('aiSettings.apiKeyKeepHint') : t('aiSettings.apiKeyPlaceholder')"
               />
               <el-button type="text" @click="showApiKey = !showApiKey" class="eye-btn">
                 <el-icon><View /></el-icon>
               </el-button>
             </div>
+            <div class="form-tip">{{ t('aiSettings.apiKeyHint') }}</div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group switch-group">
+            <label class="form-label">{{ t('aiSettings.enable') }}</label>
+            <el-switch v-model="form.enabled" />
+          </div>
+          <div class="form-group switch-group">
+            <label class="form-label">{{ t('aiSettings.setDefault') }}</label>
+            <el-switch v-model="form.is_default" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group full-width">
+            <label class="form-label">{{ t('aiSettings.description') }}</label>
+            <el-input
+              v-model="form.description"
+              type="textarea"
+              :rows="2"
+              :placeholder="t('aiSettings.descriptionPlaceholder')"
+            />
           </div>
         </div>
       </div>
 
       <template #footer>
-        <el-button @click="closeModal">取消</el-button>
-        <el-button @click="testConfig" :loading="testing">测试连接</el-button>
-        <el-button type="primary" @click="saveConfig" :loading="loading">保存配置</el-button>
+        <el-button @click="closeModal">{{ t('common.cancel') }}</el-button>
+        <el-button @click="testConfig" :loading="testing">{{ t('aiSettings.testConnection') }}</el-button>
+        <el-button type="primary" @click="saveConfig" :loading="loading">{{ t('aiSettings.saveConfig') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { InfoFilled, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../../api/axios'
 import { confirmAndRun } from '../../lib/confirm'
+
+const { t } = useI18n()
 
 interface AIConfig {
   id: number
@@ -264,7 +279,8 @@ interface AIConfig {
   provider: string
   model: string
   api_url: string
-  api_key: string
+  /** 后端不回传 api_key，仅回传是否已配置密钥 */
+  has_key: boolean
   enabled: boolean
   is_default: boolean
 }
@@ -288,14 +304,14 @@ const form = reactive({
   is_default: false,
 })
 
-const providerOptions: Record<string, string> = {
+const providerOptions = computed(() => ({
   openai: 'OpenAI',
-  deepseek: 'OpenAI 兼容',
-  qwen: '阿里通义千问',
-  zhipu: '智谱AI',
-  claude: 'Anthropic Claude',
-  custom: '自定义 API',
-}
+  deepseek: t('aiSettings.providers.deepseekCompatible'),
+  qwen: t('aiSettings.providers.qwen'),
+  zhipu: t('aiSettings.providers.zhipu'),
+  claude: t('aiSettings.providers.claude'),
+  custom: t('aiSettings.providers.custom'),
+}))
 
 const apiUrlDefaults: Record<string, string> = {
   openai: 'https://api.openai.com/v1',
@@ -315,7 +331,8 @@ const modelDefaults: Record<string, string> = {
   custom: '',
 }
 
-const getProviderLabel = (provider: string) => providerOptions[provider] || provider
+const getProviderLabel = (provider: string): string =>
+  (providerOptions.value as Record<string, string>)[provider] || provider
 
 const handleProviderChange = () => {
   form.api_url = apiUrlDefaults[form.provider] || ''
@@ -368,13 +385,13 @@ const closeModal = () => {
 
 const saveConfig = async () => {
   if (!form.name || !form.provider || !form.api_url || !form.model) {
-    ElMessage.warning('请填写完整的配置信息')
+    ElMessage.warning(t('aiSettings.fillAllFields'))
     return
   }
   // 编辑时 API Key 留空 = 不修改（安全：不回显已有 key）
   // 仅新建时才强制要求填写
   if (!editingId.value && !form.api_key) {
-    ElMessage.warning('请填写 API Key')
+    ElMessage.warning(t('aiSettings.enterApiKey'))
     return
   }
 
@@ -399,12 +416,12 @@ const saveConfig = async () => {
     } else {
       await api.post('/ai/config', payload)
     }
-    ElMessage.success('配置已保存')
+    ElMessage.success(t('aiSettings.configSaved'))
     closeModal()
     await fetchConfigs()
   } catch (error: any) {
     console.error('保存配置失败:', error)
-    ElMessage.error(error.response?.data?.detail || '保存失败')
+    ElMessage.error(error.response?.data?.detail || t('aiSettings.saveFailed'))
   } finally {
     loading.value = false
   }
@@ -413,7 +430,7 @@ const saveConfig = async () => {
 // 测试连接：用弹窗当前表单值；编辑时若 key 留空则回退用 config_id 测已存配置
 const testConfig = async () => {
   if (!form.provider || !form.model || !form.api_url) {
-    ElMessage.warning('请先填写提供商、模型和 API URL')
+    ElMessage.warning(t('aiSettings.fillProviderModelUrl'))
     return
   }
   // 编辑模式 + key 未重新输入 → 用库里已存 key 测（config_id 路径）
@@ -423,11 +440,11 @@ const testConfig = async () => {
       await testStoredConfig(cfg)
       return
     }
-    ElMessage.warning('无法找到对应配置，请重新输入 API Key')
+    ElMessage.warning(t('aiSettings.reenterApiKey'))
     return
   }
   if (!form.api_key) {
-    ElMessage.warning('请填写 API Key')
+    ElMessage.warning(t('aiSettings.enterApiKey'))
     return
   }
   testing.value = true
@@ -441,11 +458,11 @@ const testConfig = async () => {
     if (res.data?.ok) {
       ElMessage.success(res.data.message)
     } else {
-      ElMessage.error(res.data?.message || '连接测试失败')
+      ElMessage.error(res.data?.message || t('aiSettings.testFailed'))
     }
   } catch (error: any) {
     console.error('测试失败:', error)
-    ElMessage.error(error.response?.data?.detail || '连接测试失败')
+    ElMessage.error(error.response?.data?.detail || t('aiSettings.testFailed'))
   } finally {
     testing.value = false
   }
@@ -459,11 +476,11 @@ const testStoredConfig = async (config: AIConfig) => {
     if (res.data?.ok) {
       ElMessage.success(`${config.name}：${res.data.message}`)
     } else {
-      ElMessage.error(`${config.name}：${res.data?.message || '连接测试失败'}`)
+      ElMessage.error(`${config.name}：${res.data?.message || t('aiSettings.testFailed')}`)
     }
   } catch (error: any) {
     console.error('测试失败:', error)
-    ElMessage.error(error.response?.data?.detail || '连接测试失败')
+    ElMessage.error(error.response?.data?.detail || t('aiSettings.testFailed'))
   } finally {
     testingId.value = null
   }
@@ -471,34 +488,34 @@ const testStoredConfig = async (config: AIConfig) => {
 
 const toggleEnabled = async (config: AIConfig) => {
   try {
+    // 不发送 api_key 字段：留空/缺省 = 后端保留已存密钥
     await api.put(`/ai/config/${config.id}`, {
       name: config.name,
       description: config.description,
       provider: config.provider,
       model: config.model,
       api_url: config.api_url,
-      api_key: '',
       enabled: config.enabled,
       is_default: config.is_default,
     })
-    ElMessage.success(config.enabled ? '已启用' : '已禁用')
+    ElMessage.success(config.enabled ? t('aiSettings.enabledMsg') : t('aiSettings.disabledMsg'))
   } catch (error: any) {
     console.error('更新状态失败:', error)
     config.enabled = !config.enabled
-    ElMessage.error('更新失败')
+    ElMessage.error(t('aiSettings.updateFailed'))
   }
 }
 
 const deleteConfig = async (config: AIConfig) => {
   await confirmAndRun({
-    message: `确定要删除配置 "${config.name}" 吗？`,
-    title: '确认删除',
+    message: t('aiSettings.deleteConfirm', { name: config.name }),
+    title: t('aiSettings.deleteTitle'),
     action: async () => {
       await api.delete(`/ai/config/${config.id}`)
       await fetchConfigs()
     },
-    successMessage: '已删除',
-    errorMessage: '删除失败',
+    successMessage: t('aiSettings.deleteSuccess'),
+    errorMessage: t('aiSettings.deleteFailed'),
   })
 }
 
@@ -540,11 +557,11 @@ const fetchAIInspection = async () => {
 const saveAIInspection = async (val: boolean) => {
   try {
     await api.put('/settings/ai-inspection', { enabled: val })
-    ElMessage.success(val ? '已开启巡检 AI 二次研判' : '已关闭巡检 AI 二次研判')
+    ElMessage.success(val ? t('aiSettings.inspectionEnabledMsg') : t('aiSettings.inspectionDisabledMsg'))
   } catch (error: any) {
     console.error('保存巡检AI研判设置失败:', error)
     aiInspectionEnabled.value = !val
-    ElMessage.error('保存失败')
+    ElMessage.error(t('aiSettings.saveFailed'))
   }
 }
 
@@ -575,15 +592,15 @@ const onModeChange = (row: AlertRuleRow, val: string) => {
 
 const saveRule = async (row: AlertRuleRow) => {
   if (row.baseline_window !== null && (row.baseline_window < 10 || row.baseline_window > 1440)) {
-    ElMessage.warning('基线窗口需在 10~1440 分钟之间')
+    ElMessage.warning(t('aiSettings.baselineWindowRange'))
     return
   }
   if (row.baseline_sensitivity !== null && (row.baseline_sensitivity < 1 || row.baseline_sensitivity > 10)) {
-    ElMessage.warning('灵敏度 z-score 需在 1~10 之间')
+    ElMessage.warning(t('aiSettings.sensitivityRange'))
     return
   }
   if (row.mutation_threshold !== null && (row.mutation_threshold < 0.05 || row.mutation_threshold > 5)) {
-    ElMessage.warning('突变阈值需在 0.05~5 之间')
+    ElMessage.warning(t('aiSettings.mutationRange'))
     return
   }
 
@@ -595,10 +612,10 @@ const saveRule = async (row: AlertRuleRow) => {
       baseline_sensitivity: row.baseline_sensitivity,
       mutation_threshold: row.mutation_threshold,
     })
-    ElMessage.success('已保存')
+    ElMessage.success(t('aiSettings.savedMsg'))
   } catch (error: any) {
     console.error('保存告警规则失败:', error)
-    ElMessage.error(error.response?.data?.detail || '保存失败')
+    ElMessage.error(error.response?.data?.detail || t('aiSettings.saveFailed'))
   } finally {
     ruleSaving.value[row.id] = false
   }
@@ -613,15 +630,15 @@ onMounted(() => {
 
 <style scoped>
 .ai-settings-page {
-  background: #f5f5f5;
+  background: var(--bg-secondary);
   min-height: 100vh;
 }
 
 .config-list-container {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .list-header {
@@ -634,7 +651,7 @@ onMounted(() => {
 .list-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .empty-state {
@@ -642,7 +659,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 60px 0;
-  color: #8c8c8c;
+  color: var(--text-muted);
 }
 
 .empty-icon {
@@ -660,19 +677,19 @@ onMounted(() => {
 }
 
 .config-card {
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 16px;
   transition: all 0.2s;
 }
 
 .config-card:hover {
-  border-color: #1890ff;
+  border-color: var(--accent-primary);
 }
 
 .config-card.active {
-  border-color: #1890ff;
-  background: #f0f5ff;
+  border-color: var(--accent-primary);
+  background: var(--bg-hover);
 }
 
 .config-header {
@@ -681,25 +698,30 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .config-name {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .name-text {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .config-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.config-actions .danger-btn {
+  color: var(--accent-danger);
 }
 
 .config-body {
@@ -715,13 +737,13 @@ onMounted(() => {
 
 .config-row .label {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-muted);
   min-width: 60px;
 }
 
 .config-row .value {
   font-size: 12px;
-  color: #333;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -746,10 +768,6 @@ onMounted(() => {
   flex: 100;
 }
 
-.form-group.name-group {
-  flex: 2;
-}
-
 .form-group.switch-group {
   flex: 0.4;
   min-width: 80px;
@@ -759,18 +777,25 @@ onMounted(() => {
   display: block;
   font-size: 13px;
   font-weight: 500;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 8px;
 }
 
 .form-label.required::before {
   content: '*';
-  color: #ff4d4f;
+  color: var(--accent-danger);
   margin-right: 4px;
 }
 
 .switch-group .form-label {
   margin-bottom: 4px;
+}
+
+.form-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .api-key-group {
@@ -789,8 +814,8 @@ onMounted(() => {
 }
 
 .capability-card {
-  background: #fff;
-  border: 1px solid #e8e8e8;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 16px 20px;
   margin-bottom: 16px;
@@ -806,20 +831,20 @@ onMounted(() => {
 .capability-title {
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .capability-desc {
   margin: 0;
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
 .capability-tip {
   margin-top: 4px;
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
   line-height: 1.4;
 }
 </style>

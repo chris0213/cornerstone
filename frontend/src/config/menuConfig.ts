@@ -16,6 +16,8 @@ export interface MenuItemConfig {
   nameKey: string
   key?: string
   permission: string | null
+  /** 仅超级管理员可见/可访问（叠加在 permission 之上，如 AI 设置，后端接口已收紧为 super_admin） */
+  superAdminOnly?: boolean
   children?: MenuChild[]
 }
 
@@ -91,7 +93,7 @@ export const menuConfig: MenuGroup[] = [
       { path: '/system/settings', nameKey: 'system.settings', permission: 'system:read' },
       { path: '/system/security', nameKey: 'system.security', permission: 'system:admin' },
       { path: '/system/notifications', nameKey: 'system.notifications', permission: 'system:admin' },
-      { path: '/system/ai-settings', nameKey: 'system.aiSettings', permission: 'system:read' },
+      { path: '/system/ai-settings', nameKey: 'system.aiSettings', permission: 'system:read', superAdminOnly: true },
       { path: '/system/ai-chat-logs', nameKey: 'system.aiChatLogs', permission: null },
       { path: '/system/logs-settings', nameKey: 'system.logsSettings', permission: 'system:admin' }
     ]

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '../../store/auth'
 import { getChatLogs, exportChatLogsCsv, type ChatLogItem } from '../../api/ai'
@@ -26,10 +26,14 @@ const selectedUserId = ref<number | undefined>(undefined)
 // 时间范围筛选：undefined = 全部（受 30 天留存约束），7 / 30 = 近 N 天
 const days = ref<number | undefined>(undefined)
 
+// 数据类型：value 为后端枚举，label 走 i18n 中文化
 const DATA_TYPES = [
   'sites', 'circuits', 'devices', 'ip_addresses', 'prefixes',
   'backups', 'inspection_results', 'topology', 'vlans', 'audit_logs', 'unknown',
-]
+] as const
+
+const dataTypeLabel = (value: string | null | undefined): string =>
+  value ? t(`system.aiChatLogsType_${value}`) : t('system.aiChatLogsType_unknown')
 
 const typeColor: Record<string, any> = {
   circuits: 'warning',
@@ -93,6 +97,13 @@ function onSearch() {
   fetchLogs()
 }
 
+// 即时搜索：关键字输入 300ms 防抖后自动查询（回车/清空行为保留）
+let keywordTimer: ReturnType<typeof setTimeout> | undefined
+watch(keyword, () => {
+  if (keywordTimer) clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(onSearch, 300)
+})
+
 function onPageChange() {
   fetchLogs()
 }
@@ -135,7 +146,7 @@ onMounted(() => {
             @change="onSearch"
           >
             <el-option :label="t('system.aiChatLogsAllTypes')" value="" />
-            <el-option v-for="dt in DATA_TYPES" :key="dt" :label="dt" :value="dt" />
+            <el-option v-for="dt in DATA_TYPES" :key="dt" :label="dataTypeLabel(dt)" :value="dt" />
           </el-select>
           <el-select
             v-if="isSuperuser"
@@ -158,7 +169,6 @@ onMounted(() => {
             <el-option :label="t('system.aiChatLogsLast7Days')" :value="7" />
             <el-option :label="t('system.aiChatLogsLast30Days')" :value="30" />
           </el-select>
-          <el-button type="primary" @click="onSearch">{{ t('common.search') }}</el-button>
           <el-button @click="fetchLogs">{{ t('common.refresh') }}</el-button>
           <el-button :loading="exporting" @click="exportCsv">{{ t('common.export') }}</el-button>
         </div>
@@ -179,6 +189,10 @@ onMounted(() => {
               <div class="answer-detail-text">{{ row.question }}</div>
               <div class="answer-detail-label">{{ t('system.aiChatLogsAnswer') }}：</div>
               <div class="answer-detail-text">{{ row.answerText || '-' }}</div>
+              <template v-if="row.errorMessage">
+                <div class="answer-detail-label">{{ t('system.aiChatLogsErrorMessage') }}：</div>
+                <div class="answer-detail-text error-text">{{ row.errorMessage }}</div>
+              </template>
             </div>
           </template>
         </el-table-column>
@@ -213,10 +227,34 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column :label="t('system.aiChatLogsDataType')" min-width="130" align="center">
+        <el-table-column :label="t('system.aiChatLogsDataType')" min-width="110" align="center">
           <template #default="{ row }">
             <el-tag :type="typeColor[row.dataType] || 'info'" size="small" effect="plain">
-              {{ row.dataType || 'unknown' }}
+              {{ dataTypeLabel(row.dataType) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column :label="t('system.aiChatLogsModel')" min-width="110" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="model-text">{{ row.model || '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column :label="t('system.aiChatLogsDuration')" min-width="90" align="right">
+          <template #default="{ row }">
+            <span class="duration-text">{{ row.durationMs != null ? `${row.durationMs} ms` : '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column :label="t('system.aiChatLogsStatus')" min-width="80" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="row.status === 'failed' ? 'danger' : row.status === 'success' ? 'success' : 'info'"
+              size="small"
+              effect="plain"
+            >
+              {{ t(`system.aiChatLogsStatus_${row.status || 'unknown'}`) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -269,11 +307,11 @@ onMounted(() => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .info-title .el-icon {
-  color: #1890ff;
+  color: var(--accent-primary);
 }
 
 .table-card {
@@ -291,12 +329,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #666;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
 .time-icon {
-  color: #1890ff;
+  color: var(--accent-primary);
   font-size: 14px;
 }
 
@@ -304,39 +342,51 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .user-icon {
-  color: #52c41a;
+  color: var(--accent-success);
   font-size: 14px;
 }
 
 .q-text {
-  color: #262626;
+  color: var(--text-primary);
   font-weight: 500;
 }
 
 .a-text {
-  color: #595959;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
-.ip-text {
-  color: #8c8c8c;
+.model-text {
+  color: var(--text-secondary);
   font-size: 13px;
-  font-family: monospace;
+  font-family: var(--font-mono);
+}
+
+.duration-text {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.ip-text {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-family: var(--font-mono);
 }
 
 .answer-detail {
   padding: 8px 16px;
-  background: #fafafa;
+  background: var(--bg-tertiary);
   border-radius: 6px;
 }
 
 .answer-detail-label {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-muted);
   margin-top: 8px;
 }
 
@@ -346,10 +396,14 @@ onMounted(() => {
 
 .answer-detail-text {
   font-size: 13px;
-  color: #262626;
+  color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
+}
+
+.answer-detail-text.error-text {
+  color: var(--accent-danger);
 }
 
 .pagination-bar {

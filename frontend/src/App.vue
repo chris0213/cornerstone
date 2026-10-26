@@ -146,6 +146,7 @@ interface MenuItem {
   key?: string
   icon: typeof DataBoard
   permission: string | null
+  superAdminOnly?: boolean
   children?: Array<{ path: string; name: string; permission: string | null }>
 }
 
@@ -173,6 +174,7 @@ const menuItems = computed((): Array<{ group: string; items: MenuItem[] }> => {
         key: item.key,
         icon: iconMap[iconName] || DataBoard,
         permission: item.permission,
+        superAdminOnly: item.superAdminOnly,
       }
       if (item.children) {
         result.children = item.children.map((child) => ({
@@ -216,10 +218,17 @@ function hasMenuPermission(permission: string | null): boolean {
   return authStore.hasPermission(permission)
 }
 
+// 超管专属菜单项（如 AI 设置）仅超级管理员可见
+function isSuperAdminMenuItem(item: MenuItem): boolean {
+  return !item.superAdminOnly || authStore.isAdmin()
+}
+
 // 过滤菜单
 const filteredMenuItems = computed(() => {
   return menuItems.value.map(group => {
     const filteredItems = group.items.filter(item => {
+      // 超管专属菜单项：非超管直接隐藏
+      if (!isSuperAdminMenuItem(item)) return false
       // 如果是有子菜单的项目
       if (item.children) {
         // 检查是否有子项有权限

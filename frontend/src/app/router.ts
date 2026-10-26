@@ -56,7 +56,7 @@ const router = createRouter({
     { path: '/system', redirect: '/system/users' },
     { path: '/system/logs', name: 'system-logs', component: LogsPage, meta: { requiresAuth: true, permission: 'logs:read', titleKey: 'system.logs' } },
     { path: '/system/settings', name: 'system-settings', component: SettingsPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'system.settings' } },
-    { path: '/system/ai-settings', name: 'ai-settings', component: AISettingsPage, meta: { requiresAuth: true, permission: 'system:read', titleKey: 'system.aiSettings' } },
+    { path: '/system/ai-settings', name: 'ai-settings', component: AISettingsPage, meta: { requiresAuth: true, permission: 'system:read', superAdminOnly: true, titleKey: 'system.aiSettings' } },
     { path: '/system/ai-chat-logs', name: 'ai-chat-logs', component: AIChatLogsPage, meta: { requiresAuth: true, permission: null, titleKey: 'system.aiChatLogs' } },
     { path: '/system/logs-settings', name: 'logs-settings', component: LogsSettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.logsSettings' } },
     { path: '/system/security', name: 'system-security', component: SecuritySettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.security' } },
@@ -119,6 +119,11 @@ router.beforeEach(async (to, _from) => {
     
     // 检查权限
     if (to.meta.permission && !authStore.hasPermission(to.meta.permission as string)) {
+      return { name: 'forbidden' }
+    }
+
+    // 超管专属页面（如 AI 设置）：非超级管理员一律 403
+    if (to.meta.superAdminOnly && !authStore.isAdmin()) {
       return { name: 'forbidden' }
     }
   }
