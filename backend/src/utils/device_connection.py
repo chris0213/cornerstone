@@ -1,7 +1,10 @@
+import logging
 from typing import Optional, Dict, Any
 from netmiko import ConnectHandler
 from paramiko.ssh_exception import AuthenticationException, SSHException
 from socket import timeout as SocketTimeout
+logger = logging.getLogger(__name__)
+
 
 def connect_device(device_info: Dict[str, Any]) -> Optional[ConnectHandler]:
     """
@@ -22,16 +25,16 @@ def connect_device(device_info: Dict[str, Any]) -> Optional[ConnectHandler]:
         )
         return conn
     except AuthenticationException:
-        print(f"认证失败: {device_info.get('ip')}")
+        logger.warning(f"认证失败: {device_info.get('ip')}")
         return None
     except SSHException:
-        print(f"SSH错误: {device_info.get('ip')}")
+        logger.warning(f"SSH错误: {device_info.get('ip')}")
         return None
     except SocketTimeout:
-        print(f"连接超时: {device_info.get('ip')}")
+        logger.info(f"连接超时: {device_info.get('ip')}")
         return None
     except Exception as e:
-        print(f"连接错误 {device_info.get('ip')}: {str(e)}")
+        logger.warning(f"连接错误 {device_info.get('ip')}: {str(e)}")
         return None
 
 def get_config(conn: ConnectHandler, config_type: str = "running") -> Optional[str]:
@@ -50,7 +53,7 @@ def get_config(conn: ConnectHandler, config_type: str = "running") -> Optional[s
             output = conn.send_command("show running-config")
         return output
     except Exception as e:
-        print(f"获取配置失败: {str(e)}")
+        logger.warning(f"获取配置失败: {str(e)}")
         return None
 
 def backup_config(device_info: Dict[str, Any], config_type: str = "running") -> Optional[str]:
@@ -69,7 +72,7 @@ def backup_config(device_info: Dict[str, Any], config_type: str = "running") -> 
         conn.disconnect()
         return config
     except Exception as e:
-        print(f"备份配置失败: {str(e)}")
+        logger.warning(f"备份配置失败: {str(e)}")
         if conn:
             conn.disconnect()
         return None
@@ -84,7 +87,7 @@ def get_device_info(conn: ConnectHandler) -> Optional[Dict[str, str]]:
         output = conn.send_command("show version")
         return {"version": output}
     except Exception as e:
-        print(f"获取设备信息失败: {str(e)}")
+        logger.warning(f"获取设备信息失败: {str(e)}")
         return None
 
 
@@ -115,15 +118,7 @@ def get_lldp_neighbors(conn: ConnectHandler) -> Optional[list]:
         for cmd in commands:
             try:
                 output = conn.send_command(cmd)
-
-                # 写入调试日志（截断以防日志过大）
-                try:
-                    with open('/tmp/lldp_debug.log', 'a', encoding='utf-8') as f:
-                        from datetime import datetime
-                        f.write(f"[{datetime.now().isoformat()}] host={host} cmd={cmd}\n")
-                        f.write(output[:4000] + "\n---\n")
-                except Exception as log_e:
-                    print(f"写调试日志失败: {log_e}")
+                logger.debug(f"LLDP host={host} cmd={cmd} output_len={len(output)}")
 
                 if output and output.strip():
                     # 检查是否为错误输出
@@ -133,34 +128,16 @@ def get_lldp_neighbors(conn: ConnectHandler) -> Optional[list]:
                     # 尝试解析
                     neighbors = parse_lldp_output(output)
                     if neighbors and len(neighbors) > 0:
-                        try:
-                            with open('/tmp/lldp_debug.log', 'a', encoding='utf-8') as f:
-                                f.write(f"[{datetime.now().isoformat()}] host={host} parsed_neighbors={neighbors}\n")
-                        except:
-                            pass
+                        logger.debug(f"LLDP host={host} cmd={cmd} parsed neighbors count={len(neighbors)}")
                         return neighbors
-                    # 调试：输出未解析成功的命令和输出
-                    print(f"命令 {cmd} 执行成功但未解析到邻居")
-                    print(f"输出片段（前500字符）: {output[:500]}...")
+                    logger.debug(f"LLDP host={host} cmd={cmd} succeeded but no neighbors parsed")
             except Exception as cmd_e:
-                try:
-                    with open('/tmp/lldp_debug.log', 'a', encoding='utf-8') as f:
-                        from datetime import datetime
-                        f.write(f"[{datetime.now().isoformat()}] host={host} cmd={cmd} failed: {str(cmd_e)}\n")
-                except:
-                    pass
-                print(f"命令 {cmd} 执行失败: {str(cmd_e)}")
+                logger.warning(f"LLDP host={host} cmd={cmd} failed: {cmd_e}")
                 continue
 
         return None
     except Exception as e:
-        try:
-            with open('/tmp/lldp_debug.log', 'a', encoding='utf-8') as f:
-                from datetime import datetime
-                f.write(f"[{datetime.now().isoformat()}] get_lldp_neighbors exception: {str(e)}\n")
-        except:
-            pass
-        print(f"获取LLDP邻居失败: {str(e)}")
+        logger.error(f"获取LLDP邻居失败 host={host}", exc_info=True)
         return None
 
 

@@ -1,4 +1,5 @@
 """LDAP认证API路由"""
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from ..api.system import encrypt_secret, decrypt_secret
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Request body models
 class LDAPLoginRequest(BaseModel):
@@ -196,8 +198,10 @@ async def ldap_login(
         result = await ldap_service.login(db, body.username, body.password, client_ip, user_agent)
         return result
     except LDAPAuthException as e:
+        logger.warning(f"LDAP 登录认证失败 username={body.username}: {e}")
         await log_login_attempt(db, body.username, False, client_ip)
-        raise HTTPException(status_code=401, detail=str(e))
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
     except Exception as e:
+        logger.error(f"LDAP 登录异常 username={body.username}", exc_info=True)
         await log_login_attempt(db, body.username, False, client_ip)
-        raise HTTPException(status_code=500, detail=f"LDAP登录失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="LDAP 服务暂不可用，请稍后重试")

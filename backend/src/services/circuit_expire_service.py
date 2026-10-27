@@ -1,3 +1,4 @@
+import logging
 """专线到期检查服务"""
 import asyncio
 from datetime import datetime, timedelta
@@ -12,6 +13,8 @@ from src.services.alert_ws import broadcast_new_alert
 import json
 
 NOTIFICATION_SETTINGS_KEY = "notification_settings"
+
+logger = logging.getLogger(__name__)
 
 
 class CircuitExpireService:
@@ -93,7 +96,7 @@ class CircuitExpireService:
             new_level = severity_order.get(severity, 0)
 
             if new_level > old_level:
-                print(f"专线 [{circuit.name}] 告警严重度升级: {old_severity} -> {severity}, 重新发送通知")
+                logger.info(f"专线 [{circuit.name}] 告警严重度升级: {old_severity} -> {severity}, 重新发送通知")
                 await CircuitExpireService._send_expire_notifications(db, existing_alert)
             else:
                 # 检查上次通知时间，如果超过24小时则重新发送
@@ -107,11 +110,11 @@ class CircuitExpireService:
                 if last_notification and last_notification.sent_at:
                     hours_since_last_notification = (now - last_notification.sent_at).total_seconds() / 3600
                     if hours_since_last_notification >= 24:
-                        print(f"专线 [{circuit.name}] 告警已超过24小时，重新发送通知")
+                        logger.info(f"专线 [{circuit.name}] 告警已超过24小时，重新发送通知")
                         await CircuitExpireService._send_expire_notifications(db, existing_alert)
                 elif not last_notification:
                     # 从未发送过通知，立即发送
-                    print(f"专线 [{circuit.name}] 告警从未发送过通知，立即发送")
+                    logger.info(f"专线 [{circuit.name}] 告警从未发送过通知，立即发送")
                     await CircuitExpireService._send_expire_notifications(db, existing_alert)
             return
 
@@ -128,8 +131,7 @@ class CircuitExpireService:
         if resolved_alert and resolved_alert.current_value is not None \
                 and days_remaining >= resolved_alert.current_value:
             # 剩余天数未比上次处理时更小（问题未恶化），不重建
-            print(f"专线 [{circuit.name}] 到期告警已于 {resolved_alert.resolved_at} 处理"
-                  f"（当时剩余 {resolved_alert.current_value:.0f} 天，现 {days_remaining} 天，未恶化），不重建")
+            logger.info(f"专线 [{circuit.name}] 到期告警已于 {resolved_alert.resolved_at} 处理（当时剩余 {resolved_alert.current_value:.0f} 天，现 {days_remaining} 天，未恶化），不重建")
             return
 
         # 全新告警（或处理后又恶化）：新建记录，object_type 标记真实对象类型

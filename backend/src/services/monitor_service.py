@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import platform
 import asyncio
@@ -39,8 +40,10 @@ async def ping_host(target_ip: str, count: int = 4, timeout: int = 5) -> Tuple[O
             return parse_ping_output(stdout.decode('utf-8'), count)
     
     except Exception as e:
-        print(f"Ping error: {e}")
+        logger.warning(f"Ping error: {e}")
         return (None, None)
+
+logger = logging.getLogger(__name__)
 
 
 def parse_ping_output(output: str, count: int) -> Tuple[Optional[float], Optional[float]]:
@@ -151,7 +154,7 @@ async def monitor_device(db: AsyncSession, device: Device) -> None:
                     from src.services.alert_service import AlertService
                     await AlertService.collect_metric_samples(db, device.id, latency, packet_loss)
                 except Exception as sample_err:
-                    print(f"[monitor] 设备 {device.name} 指标采样失败: {sample_err}")
+                    logger.warning(f"[monitor] 设备 {device.name} 指标采样失败: {sample_err}")
 
                 # 评估告警规则，产生 AlertRecord（修复：接入预警链路）
                 from src.services.alert_service import AlertService
@@ -168,19 +171,19 @@ async def monitor_device(db: AsyncSession, device: Device) -> None:
                         status=status,
                     )
                     if triggered:
-                        print(f"[monitor] 设备 {device.name} 触发 {len(triggered)} 条告警")
+                        logger.info(f"[monitor] 设备 {device.name} 触发 {len(triggered)} 条告警")
                 except Exception as alert_err:
                     # 告警评估失败不影响监控数据写入
-                    print(f"[monitor] 设备 {device.name} 告警评估失败: {alert_err}")
+                    logger.warning(f"[monitor] 设备 {device.name} 告警评估失败: {alert_err}")
 
                 # 自动恢复：监控恢复正常时关闭该设备活动告警
                 if status == "normal":
                     try:
                         await _auto_recover_alerts(db, device.id)
                     except Exception as recover_err:
-                        print(f"[monitor] 设备 {device.name} 告警恢复失败: {recover_err}")
+                        logger.warning(f"[monitor] 设备 {device.name} 告警恢复失败: {recover_err}")
     except Exception as e:
-        print(f"Error monitoring device {device.name}: {e}")
+        logger.warning(f"Error monitoring device {device.name}: {e}")
 
 
 async def _auto_recover_alerts(db: AsyncSession, device_id: int) -> int:
@@ -205,7 +208,7 @@ async def _auto_recover_alerts(db: AsyncSession, device_id: int) -> int:
         recovered += 1
 
     if recovered:
-        print(f"[monitor] 设备 {device_id} 自动恢复 {recovered} 条活动告警")
+        logger.info(f"[monitor] 设备 {device_id} 自动恢复 {recovered} 条活动告警")
     return recovered
 
 

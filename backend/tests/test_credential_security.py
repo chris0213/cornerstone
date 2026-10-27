@@ -168,6 +168,14 @@ def reset_rate_limiter():
     backups_module._credential_test_last.clear()
 
 
+@pytest.fixture(autouse=True)
+def allow_private_test_ips(monkeypatch):
+    """本模块测试统一使用私网 IP（192.168.x / 10.0.0.9）作为测试目标，
+    显式开启私网放行；生产默认 credential_test_allow_private=False（防 SSRF）不受影响。"""
+    from src.config import settings
+    monkeypatch.setattr(settings, "credential_test_allow_private", True)
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_second_call_rejected(client, db_session, mock_connect):
     """同一凭证 10 秒内第二次测试连接返回 400 credential.test_rate_limited。"""

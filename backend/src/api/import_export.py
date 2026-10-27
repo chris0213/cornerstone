@@ -1,4 +1,6 @@
 """数据导入导出API"""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,7 @@ from ..services.import_export_service import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ==================== 设备导入导出 ====================
@@ -45,7 +48,8 @@ async def export_devices(
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        logger.error("数据导出失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
 @router.post("/devices/import")
@@ -80,9 +84,11 @@ async def import_devices(
         )
         return result
     except ValueError as e:
+        logger.warning(f"参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.error("数据导入失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
 @router.get("/devices/template")
@@ -150,7 +156,8 @@ async def export_prefixes(
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if format == "excel" else "text/csv"
         return StreamingResponse(io.BytesIO(file_content), media_type=media_type, headers={"Content-Disposition": f"attachment; filename={filename}"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        logger.error("数据导出失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
 @router.get("/prefixes/template")
@@ -225,9 +232,11 @@ async def import_prefixes(
         result = await PrefixImportExport.import_prefixes(db=db, file_content=file_content, file_type=file_type, user=current_user.username, client_ip=client_ip)
         return {"success_count": result["success_count"], "failed_count": result["failed_count"], "errors": result["errors"]}
     except ValueError as e:
+        logger.warning(f"参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.error("数据导入失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
 # ==================== IP地址导入导出 ====================
@@ -258,7 +267,8 @@ async def export_ip_addresses(
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        logger.error("数据导出失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
 @router.post("/ip-addresses/import")
@@ -295,9 +305,11 @@ async def import_ip_addresses(
         )
         return result
     except ValueError as e:
+        logger.warning(f"参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.error("数据导入失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
 @router.get("/ip-addresses/template")
@@ -377,7 +389,8 @@ async def export_circuits(
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        logger.error("数据导出失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
 @router.post("/circuits/import")
@@ -412,9 +425,11 @@ async def import_circuits(
         )
         return result
     except ValueError as e:
+        logger.warning(f"参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.error("数据导入失败", exc_info=True)
+        raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
 @router.get("/circuits/template")

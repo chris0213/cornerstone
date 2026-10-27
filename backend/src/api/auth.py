@@ -76,7 +76,8 @@ async def sso_authorize(
         authorize_url, state = await sso_service.get_oauth2_authorize_url(db)
         return {"authorize_url": authorize_url, "state": state}
     except SSOException as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"SSO 登录失败: {e}")
+        raise HTTPException(status_code=400, detail="SSO 登录失败，请重试")
 
 @router.post("/sso/callback")
 async def sso_callback(
@@ -89,7 +90,8 @@ async def sso_callback(
         result = await sso_service.oauth2_login(db, code)
         return result
     except SSOException as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"SSO 登录失败: {e}")
+        raise HTTPException(status_code=400, detail="SSO 登录失败，请重试")
 
 @router.post("/sso/saml/callback")
 async def saml_callback(
@@ -103,7 +105,8 @@ async def saml_callback(
     except NotImplementedError:
         raise HTTPException(status_code=501, detail="SAML功能尚未实现")
     except SSOException as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"SSO 登录失败: {e}")
+        raise HTTPException(status_code=400, detail="SSO 登录失败，请重试")
 
 def generate_random_code(length: int = 4):
     """生成随机验证码"""

@@ -19,7 +19,12 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     debug=settings.debug,
-    redirect_slashes=False
+    redirect_slashes=False,
+    # 生产环境关闭 FastAPI 自动文档与 OpenAPI schema，避免暴露内部结构
+    # dev(DEBUG=true) 保留 docs/redoc 方便联调；生产由 nginx 侧也对 /docs /redoc /openapi.json 做 deny all 双保险
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
 
 # 设置日志

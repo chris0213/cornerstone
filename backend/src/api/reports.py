@@ -1,3 +1,4 @@
+import logging
 """运营月报 API"""
 import os
 from datetime import datetime, timedelta, timezone
@@ -97,7 +98,8 @@ async def generate_monthly_report(
     try:
         result = await generate_report(db, year, month, current_user.username)
     except ReportError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"月报生成失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="月报生成失败，请稍后重试")
 
     await audit_log(
         db, current_user.id, "report", 0, "generate",
@@ -132,6 +134,7 @@ async def update_report_schedule(
     try:
         result = await save_schedule(db, config.model_dump())
     except ValueError as e:
+        logger.warning(f"月报定时配置校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     await audit_log(
         db, current_user.id, "report", 0, "schedule_update",

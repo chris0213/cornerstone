@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, model_validator
 from pathlib import Path
 from typing import Optional
 
@@ -60,8 +60,9 @@ class Settings(BaseSettings):
 
     # 凭证测试连接限流：同一凭证 N 秒内只允许 1 次（0 = 不限流）
     credential_test_rate_limit_seconds: int = 10
-    # 凭证测试连接是否放行私网段目标（False = 仅允许设备表内已登记 IP）
-    credential_test_allow_private: bool = True
+    # 凭证测试连接是否放行私网段目标（True = 可测试内网 IP；False = 仅允许设备表内已登记 IP）
+    # 生产环境建议默认 False：避免攻击者在"凭证测试连接"里 SSRF 探测内网
+    credential_test_allow_private: bool = False
     
     # 应用配置
     app_name: str = "Cornerstone API"
@@ -79,6 +80,26 @@ class Settings(BaseSettings):
     
     # 通知渠道配置
     notification: NotificationSettings = NotificationSettings()
+
+    @model_validator(mode='after')
+    def _validate_critical_secrets(self) -> "Settings":
+        """启动时校验关键密钥配置，避免弱密钥/空密钥在生产默默生效。"""
+        if not self.secret_key or len(self.secret_key) < 32:
+            # FastAPI 会把 Pydantic 校验异常原样抛到启动栈顶，运维一眼就能看到
+            raise ValueError(
+                "SECRET_KEY 必须设置且至少 32 个字符（HS256 要求 256bit 以上）。"
+                f"当前长度: {len(self.secret_key) if self.secret_key else 0}。"
+                "请在 .env 或环境变量里生成一个强随机值（例如 openssl rand -hex 32）。"
+            )
+        # REDIS_URL 带密码才算配置安全：生产 compose 已通过 REDIS_PASSWORD 注入，
+        # 但本地直接跑 backend 容易忘。提示性质，不阻断（开发环境需要空密码兼容）。
+        if self.redis_url and self.redis_url.startswith("redis://redis/"):
+            import logging
+            logging.getLogger(__name__).warning(
+                "REDIS_URL 未包含密码字段（redis://:password@host/0）。"
+                "生产环境建议启用 Redis requirepass。"
+            )
+        return self
     
     model_config = SettingsConfigDict(env_file=Path(__file__).parent.parent / ".env", env_nested_delimiter="__", extra="allow")
 

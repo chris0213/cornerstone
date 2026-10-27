@@ -5,7 +5,10 @@ import { resolve } from 'path'
 import svgLoader from 'vite-svg-loader'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // 仅生产构建移除 console.* 与 debugger（esbuild minify 复用此 transform 配置），
+  // 防止错误信息与 token 泄漏到浏览器控制台；dev 模式保留便于调试
+  esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},
   plugins: [vue(), svgLoader()],
   resolve: {
     alias: {
@@ -30,6 +33,10 @@ export default defineConfig({
     },
   },
   build: {
+    // 生产构建不生成 sourcemap：避免攻击者通过 .map 文件还原前端源码与 i18n key
+    sourcemap: false,
+    // 用 esbuild（Vite 内建）做压缩并移除 console/debugger；不选 terser，避免引入额外生产依赖
+    minify: 'esbuild',
     rollupOptions: {
       output: {
         // 拆分 vendor：element-plus / echarts 独立成 chunk，业务代码更新不再使第三方缓存失效；
@@ -54,4 +61,4 @@ export default defineConfig({
       include: ['src/lib/', 'src/store/', 'src/api/'],
     },
   },
-})
+}))

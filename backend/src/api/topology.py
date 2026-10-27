@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, status
@@ -16,6 +17,7 @@ from src.models.discovery import DiscoveryUnknownEndpoint
 from src.schemas import DeviceLinkCreate, DeviceLinkUpdate, DeviceLinkResponse
 
 router = APIRouter(tags=["topology"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/site-graph")
@@ -607,7 +609,7 @@ async def discover_lldp_neighbors(
             raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
         devices_with_ip = [d for d in devices if d.mgmt_ip_id]
         if not devices_with_ip:
-            raise Exception("没有设备配置了管理IP，无法进行LLDP发现")
+            raise ValueError("没有设备配置了管理IP，无法进行LLDP发现")
 
         task = manager.create("lldp", total=len(devices_with_ip))
         asyncio.get_running_loop().run_in_executor(
@@ -615,7 +617,8 @@ async def discover_lldp_neighbors(
             lambda: asyncio.run(run_discovery_task(task, run_full_discovery, async_session))
         )
         return {"task_id": task.id, "running": False}
-    except Exception as e:
+    except ValueError as e:
+        logger.warning(f"发现任务参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -640,7 +643,7 @@ async def discover_mac_endpoints(
             raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
         scannable = [d for d in devices if d.mgmt_ip_id]
         if not scannable:
-            raise Exception("没有可扫描的网络设备（需为交换机/路由器配置管理IP）")
+            raise ValueError("没有可扫描的网络设备（需为交换机/路由器配置管理IP）")
 
         task = manager.create("mac", total=len(scannable))
         asyncio.get_running_loop().run_in_executor(
@@ -648,7 +651,8 @@ async def discover_mac_endpoints(
             lambda: asyncio.run(run_discovery_task(task, run_mac_discovery, async_session))
         )
         return {"task_id": task.id, "running": False}
-    except Exception as e:
+    except ValueError as e:
+        logger.warning(f"发现任务参数校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -733,6 +737,7 @@ async def accept_unknown_endpoint(
     try:
         data = AcceptPayload(**payload)
     except Exception as e:
+        logger.warning(f"未知接入参数校验失败: {e}")
         raise HTTPException(status_code=422, detail=str(e))
 
     # 查找未知接入记录

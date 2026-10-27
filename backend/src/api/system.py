@@ -1,5 +1,6 @@
 """系统配置API"""
 import json
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from ..models import User
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.crypto import encrypt_password, decrypt_password
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 加密密文前缀：迁移脚本与读取逻辑据此判断是否已加密
@@ -217,7 +219,8 @@ async def test_sso_config(
     except httpx.ConnectError:
         raise HTTPException(status_code=400, detail="无法连接到授权端点")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"测试失败: {str(e)}")
+        logger.error(f"SSO 授权端点测试异常", exc_info=True)
+        raise HTTPException(status_code=400, detail="测试失败：无法连接到授权端点")
 
 
 @router.delete("/sso-config")
