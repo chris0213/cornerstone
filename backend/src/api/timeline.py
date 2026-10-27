@@ -5,7 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import literal_column
 
 from ..database import get_db
+from ..api.dependencies import get_current_active_user
 from ..models import InspectionDeviceResult, Backup, AuditLog, Device, Circuit
+from ..models.user import User
 
 router = APIRouter(tags=["timeline"])
 
@@ -16,7 +18,8 @@ async def get_timeline_events(
     end_time: datetime | None = None,
     event_types: str | None = None,
     limit: int = 100,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     now = datetime.now(timezone.utc)
     if start_time is None:

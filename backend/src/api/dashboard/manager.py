@@ -332,6 +332,7 @@ async def get_risks(
     # 1. 配置备份连续失败超过3次
     failed_backups_result = await db.execute(
         select(
+            Device.id.label('device_id'),
             Device.name,
             func.count(Backup.id).label('fail_count')
         )
@@ -352,7 +353,8 @@ async def get_risks(
             "description": f"{fb.name} 配置备份连续失败超过3次，请检查设备连接",
             "count": fb.fail_count,
             "resource_ids": [],
-            "action_url": f"/devices/{fb.device_id}/backups"
+            # 前端无 /devices/{id}/backups 路由，统一跳配置备份页
+            "action_url": "/backups"
         })
     
     # 2. 子网使用率超过90%

@@ -9,7 +9,7 @@ from src.models.circuit_change import CircuitChange
 from src.models.device import Device
 from src.models.site import Site
 from src.models.circuit_incident import CircuitIncident
-from src.api.auth import get_current_active_user
+from src.api.dependencies import get_current_active_user
 from src.models.user import User
 from .common import require_manager_or_admin, to_naive_bjt
 
@@ -17,7 +17,10 @@ router = APIRouter()
 
 
 @router.get("/circuit-types")
-async def get_circuit_types(db: AsyncSession = Depends(get_db)):
+async def get_circuit_types(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     """获取专线类型分布统计（含带宽）"""
     
     # 获取所有专线类型的数量和总带宽
@@ -71,7 +74,10 @@ async def get_circuit_types(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/device-types")
-async def get_device_types(db: AsyncSession = Depends(get_db)):
+async def get_device_types(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     """获取设备类型分布统计"""
     
     # 按 vendor+type 分组统计（GROUP BY 下推，避免 2000+ 设备全量拉到内存）

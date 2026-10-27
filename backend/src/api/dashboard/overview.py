@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
+from src.api.dependencies import get_current_active_user
+from src.models.user import User
 from src.models.circuit import Circuit
 from src.models.device import Device
 from src.models.prefix import Prefix
@@ -20,7 +22,8 @@ router = APIRouter()
 @router.get("/stats")
 async def get_dashboard_stats(
     time_range: str = "all",
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """获取仪表盘统计数据"""
     
@@ -166,7 +169,10 @@ async def get_dashboard_stats(
 
 
 @router.get("/prefixes-usage")
-async def get_prefixes_usage(db: AsyncSession = Depends(get_db)):
+async def get_prefixes_usage(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     """获取子网使用率"""
     
     def calculate_usable_ips(network: str) -> int:
@@ -216,7 +222,8 @@ async def get_prefixes_usage(db: AsyncSession = Depends(get_db)):
 @router.get("/recent-logs")
 async def get_recent_logs(
     limit: int = 8,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """获取最近的操作日志"""
     
