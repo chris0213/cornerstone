@@ -32,9 +32,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _load_ai_configs(bind) -> list:
-    """读取 settings 表 ai_config JSON（列表格式），不存在或格式不符返回空列表。"""
+    """读取 settings 表 ai_config JSON（列表格式），不存在或格式不符返回空列表。
+
+    注意：列名 key 不加反引号——PostgreSQL 不支持 ` 反引号引用（key 为非保留字，
+    裸写跨 SQLite/PG 兼容）；反引号是 MySQL 专用语法，曾导致生产 PG 迁移崩溃。
+    """
     row = bind.execute(
-        sa.text("SELECT value FROM settings WHERE `key` = :k"),
+        sa.text("SELECT value FROM settings WHERE key = :k"),
         {"k": AI_CONFIG_KEY},
     ).first()
     if not row or not row[0]:
@@ -49,7 +53,7 @@ def _load_ai_configs(bind) -> list:
 
 def _save_ai_configs(bind, configs: list) -> None:
     bind.execute(
-        sa.text("UPDATE settings SET value = :v WHERE `key` = :k"),
+        sa.text("UPDATE settings SET value = :v WHERE key = :k"),
         {"v": json.dumps(configs, ensure_ascii=False), "k": AI_CONFIG_KEY},
     )
 
