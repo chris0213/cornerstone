@@ -89,9 +89,24 @@ async def get_device_types(
 
     # 统计各品牌数量
     brand_counts = {}
-    
+
+    # netmiko 驱动名 → 品牌 显式映射（devices.vendor 实际存驱动名，如 cisco_ios/huawei_vrp/linux；
+    # 旧关键词匹配导致 linux/paloalto_panos 等大量设备落入"其他"）
+    driver_brand_map = {
+        'cisco_ios': 'cisco', 'cisco_nxos': 'cisco', 'cisco_xe': 'cisco', 'cisco_asa': 'cisco',
+        'huawei': 'huawei', 'huawei_vrp': 'huawei',
+        'h3c': 'h3c', 'hp_comware': 'h3c',
+        'juniper': 'juniper', 'juniper_junos': 'juniper',
+        'fortinet': 'fortinet', 'fortios': 'fortinet',
+        'paloalto_panos': 'paloalto',
+        'arista_eos': 'arista', 'mikrotik_routeros': 'mikrotik',
+        'dell_force10': 'dell', 'dell_os9': 'dell', 'dell_os10': 'dell',
+        'hp_procurve': 'hp', 'ruijie_os': 'ruijie', 'ubiquiti_edge': 'ubiquiti',
+        'linux': 'linux',
+    }
+
     def get_brand(vendor: str, device_type: str) -> str:
-        """根据vendor和type确定品牌"""
+        """根据vendor和type确定品牌（驱动名精确映射优先，关键词匹配兜底）"""
         if not vendor:
             # 如果没有vendor，尝试从type推断
             if device_type:
@@ -110,7 +125,11 @@ async def get_device_types(
                     return 'fortinet'
             return 'unknown'
         
-        normalized_vendor = vendor.lower()
+        normalized_vendor = vendor.strip().lower()
+        if normalized_vendor in driver_brand_map:
+            return driver_brand_map[normalized_vendor]
+
+        # 关键词兜底（vendor 为自由文本时）
         if 'huawei' in normalized_vendor or 'vrp' in normalized_vendor:
             return 'huawei'
         elif 'cisco' in normalized_vendor:
@@ -146,10 +165,12 @@ async def get_device_types(
         'h3c': 'H3C',
         'juniper': '瞻博',
         'fortinet': '飞塔',
+        'paloalto': 'Palo Alto',
         'arista': 'Arista',
         'mikrotik': 'MikroTik',
         'dell': '戴尔',
         'hp': '惠普',
+        'linux': 'Linux 系统',
         'other': '其他',
         'unknown': '未知'
     }

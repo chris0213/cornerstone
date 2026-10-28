@@ -86,28 +86,36 @@ function handleNavigate(url: string | null) {
   }
 }
 
+// 本地挂钟格式（无时区后缀）：与后端「naive 北京挂钟」口径一致，
+// 不再用 toISOString（UTC）避免跨日偏移
+function formatLocalDT(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 async function loadEvents() {
   loading.value = true
   try {
+    // 用 Date(y, m, d) 构造器生成边界（自动跨月/跨年），不 mutate 共享的 now
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const yestStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+    const weekAgoStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
+
     let start_time: string | undefined
     let end_time: string | undefined
-    const now = new Date()
-    
+
     if (timeRange.value === 'today') {
-      start_time = new Date(now.setHours(0, 0, 0, 0)).toISOString()
-      end_time = new Date().toISOString()
+      start_time = formatLocalDT(todayStart)
+      end_time = formatLocalDT(now)
     } else if (timeRange.value === 'yesterday') {
-      const yesterday = new Date()
-      yesterday.setDate(yesterday.getDate() - 1)
-      start_time = new Date(yesterday.setHours(0, 0, 0, 0)).toISOString()
-      end_time = new Date(yesterday.setHours(23, 59, 59, 999)).toISOString()
+      start_time = formatLocalDT(yestStart)
+      end_time = formatLocalDT(new Date(yestStart.getFullYear(), yestStart.getMonth(), yestStart.getDate(), 23, 59, 59))
     } else if (timeRange.value === '7days') {
-      const sevenDaysAgo = new Date()
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-      start_time = sevenDaysAgo.toISOString()
-      end_time = new Date().toISOString()
+      start_time = formatLocalDT(weekAgoStart)
+      end_time = formatLocalDT(now)
     }
-    
+
     const result = await getTimelineEvents(start_time, end_time, selectedTypes.value.join(','))
     events.value = result.events
   } catch (error) {
