@@ -30,25 +30,18 @@ async def get_manager_stats(
     require_manager_or_admin(current_user)
     
     now = datetime.now()
-    today = now.date()
     month_start = datetime(now.year, now.month, 1)
     
-    # 上月时间范围
+    # 上月时间范围（半开区间下界；上界即 month_start，见下方可用性统计）
     if now.month == 1:
         last_month_start = datetime(now.year - 1, 12, 1)
-        last_month_end = datetime(now.year - 1, 12, 31)
     else:
         last_month_start = datetime(now.year, now.month - 1, 1)
-        last_month_end = datetime(now.year, now.month, 1) - timedelta(days=1)
     
-    # 1. 网络可用性（本月设备在线时长 / 总时长）
-    # 统计本月所有设备的监控状态
-    month_devices_result = await db.execute(
-        select(Device.id).where(Device.status == 'active')
-    )
-    total_devices = len(month_devices_result.scalars().all())
-    
-    # 获取本月在线设备统计
+    # 1. 网络可用性（本月链路探测记录中 normal 占比——快照口径，非时长加权）
+    # 数据源为 LinkMonitor 链路探测快照：每轮探测每条链路各记一条，
+    # 可用性 = normal 记录数 / 探测记录总数；无探测记录时返回 null（前端显示"未探测"）
+    # 本月探测记录统计
     online_stats_result = await db.execute(
         select(
             LinkMonitor.status,
@@ -61,10 +54,13 @@ async def get_manager_stats(
     total_records = sum(online_stats.values()) if online_stats else 0
     # normal = 在线正常，warning/critical = 离线/异常
     online_records = online_stats.get('normal', 0)
-    
+
     current_availability = round((online_records / total_records * 100), 1) if total_records > 0 else None
-    
-    # 上月可用性
+    # 探测全失败标记：本月有探测记录但全部异常（前端区分"0%"与"探测全失败"）
+    all_failed = total_records > 0 and online_records == 0
+
+    # 上月探测记录统计（半开区间：>= 上月1日 且 < 本月1日，
+    # 修复原先 <= 上月最后一天00:00 漏掉上月末整天数据的边界问题）
     last_month_online_stats_result = await db.execute(
         select(
             LinkMonitor.status,
@@ -72,7 +68,7 @@ async def get_manager_stats(
         )
         .where(and_(
             LinkMonitor.created_at >= last_month_start,
-            LinkMonitor.created_at <= last_month_end
+            LinkMonitor.created_at < month_start
         ))
         .group_by(LinkMonitor.status)
     )
@@ -80,9 +76,11 @@ async def get_manager_stats(
     last_month_total = sum(last_month_stats.values()) if last_month_stats else 0
     last_month_online = last_month_stats.get('normal', 0)
     last_month_availability = round((last_month_online / last_month_total * 100), 1) if last_month_total > 0 else None
-    
+
+    # trend：两侧都「有数据」才比较（is not None 判断，修复 0.0 为 falsy 被短路的问题）；
+    # 上月无探测数据时 trend=null，由前端显示"上月无数据"而非误判"持平"
     availability_trend = None
-    if current_availability and last_month_availability:
+    if current_availability is not None and last_month_availability is not None:
         if current_availability > last_month_availability:
             availability_trend = "up"
         elif current_availability < last_month_availability:
@@ -90,25 +88,29 @@ async def get_manager_stats(
         else:
             availability_trend = "stable"
     
-    # 2. 专线月租费用
-    current_cost_result = await db.execute(
+    # 2. 专线月租费用（口径与费用趋势一致，拆「合同内」与「已到期未续约」）
+    # - 合同内：已开通（contract_start<=今天 或未设）且未到期（contract_end>=今天 或未设）
+    # - 已到期未续约：contract_end<今天 且 status 仍为 active/正常（未改状态，继续在册）
+    # - 未开通专线（contract_start>今天）不计入
+    # 月租无变更历史表，上月费用无法还原：last_month/trend 返回 null（不返回假同比）
+    active_cond = or_(Circuit.status == 'active', Circuit.status == '正常')
+    opened_cond = or_(Circuit.contract_start == None, Circuit.contract_start <= now)
+    not_expired_cond = or_(Circuit.contract_end == None, Circuit.contract_end >= now)
+
+    in_contract_result = await db.execute(
         select(func.coalesce(func.sum(Circuit.monthly_cost), 0))
-        .where(or_(Circuit.status == 'active', Circuit.status == '正常'))
+        .where(active_cond, opened_cond, not_expired_cond)
     )
-    current_cost = current_cost_result.scalar() or 0
-    
-    # 上月费用（假设上月专线数量和费用不变，取当前active专线的费用作为上月参考）
-    # 实际应该从历史记录获取，但当前表结构没有费用变更历史
-    last_month_cost = current_cost  # 简化处理
-    
-    cost_trend = None
-    if current_cost > 0 and last_month_cost > 0:
-        if current_cost > last_month_cost:
-            cost_trend = "up"
-        elif current_cost < last_month_cost:
-            cost_trend = "down"
-        else:
-            cost_trend = "stable"
+    in_contract_cost = in_contract_result.scalar() or 0
+
+    expired_unrenewed_result = await db.execute(
+        select(func.coalesce(func.sum(Circuit.monthly_cost), 0))
+        .where(active_cond, Circuit.contract_end != None, Circuit.contract_end < now)
+    )
+    expired_unrenewed_cost = expired_unrenewed_result.scalar() or 0
+
+    # 兼容字段：= 两者之和（步骤 C 前端改造完成前，卡片仍显示合计）
+    current_cost = in_contract_cost + expired_unrenewed_cost
     
     # 3. 未解决故障
     open_incidents_result = await db.execute(
@@ -223,12 +225,20 @@ async def get_manager_stats(
         "availability": {
             "current": current_availability,
             "last_month": last_month_availability,
-            "trend": availability_trend
+            "trend": availability_trend,
+            # 本月有探测记录但全部异常（区分"0%"与"探测全失败"）
+            "all_failed": all_failed,
+            # 上月是否有探测数据（false 时前端显示"上月无数据"而非"持平"）
+            "last_month_available": last_month_availability is not None
         },
         "circuit_cost": {
+            "in_contract": int(in_contract_cost),
+            "expired_unrenewed": int(expired_unrenewed_cost),
+            # 兼容字段 = in_contract + expired_unrenewed（前端改造完成前卡片仍显示合计）
             "current": int(current_cost),
-            "last_month": int(last_month_cost),
-            "trend": cost_trend
+            # 无月租变更历史，无法还原上月：返回 null（不再返回假同比）
+            "last_month": None,
+            "trend": None
         },
         "open_incidents": {
             "count": open_incidents_count,
@@ -259,9 +269,36 @@ async def get_risks(
     three_years_ago = now - timedelta(days=365 * 3)
     
     risks = []
-    
+
     # ===== 高风险 =====
-    
+
+    # 0. 已逾期未续约的在册专线（置顶：比"30天内到期"更紧急）
+    # 范围：contract_end < 今天 且 status 仍为 active/正常（已改状态的不算）
+    expired_contracts_result = await db.execute(
+        select(Circuit.name)
+        .where(and_(
+            Circuit.contract_end != None,
+            Circuit.contract_end < now,
+            or_(Circuit.status == 'active', Circuit.status == '正常')
+        ))
+    )
+    expired_contracts = expired_contracts_result.all()
+    if expired_contracts:
+        names = "、".join([c.name for c in expired_contracts[:3]])
+        if len(expired_contracts) > 3:
+            names += f"等{len(expired_contracts)}条"
+        # action_url：前端 CircuitsPage 暂不支持 ?filter= 参数（遗留项，步骤 C 可加），
+        # 先跳专线列表页
+        risks.append({
+            "severity": "high",
+            "category": "circuit",
+            "title": f"{len(expired_contracts)}条专线合同已逾期未续约",
+            "description": f"{names} 合同已到期且未续约，存在服务中断风险",
+            "count": len(expired_contracts),
+            "resource_ids": [],
+            "action_url": "/circuits"
+        })
+
     # 1. 保修已过期的设备
     expired_warranty_result = await db.execute(
         select(Device.name, Device.model, Site.name)

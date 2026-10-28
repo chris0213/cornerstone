@@ -242,6 +242,7 @@ async def get_recent_logs(
             "resource": log.resource,
             "detail": log.detail,
             "success": log.success,
+            "ip_address": log.ip_address,
             "created_at": log.created_at.isoformat() if log.created_at else None
         }
         for log in logs

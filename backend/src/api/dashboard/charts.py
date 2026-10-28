@@ -244,6 +244,11 @@ async def get_circuit_cost_trend(
     if any(not (c.type or "").strip() for c in circuits):
         by_type["其他"] = []
 
+    # 计费口径拆分（与 manager-stats 卡片一致）：
+    # - in_contract：该月合同期内（含无 contract_end 的持续有效专线）
+    # - expired_unrenewed：该月已出合同期（end < 月初）但专线仍在册（status active/正常）
+    by_billing: dict = {"in_contract": [], "expired_unrenewed": []}
+
     months = []
     total_costs = []
 
@@ -256,6 +261,7 @@ async def get_circuit_cost_trend(
         months.append(f"{year:04d}-{month:02d}")
 
         total = 0.0
+        billing = {"in_contract": 0.0, "expired_unrenewed": 0.0}
         per_type = {k: 0.0 for k in by_type}
         for circuit in circuits:
             history = changes_by_circuit.get(circuit.id)
@@ -264,14 +270,22 @@ async def get_circuit_cost_trend(
             type_key = (circuit.type or "").strip() or "其他"
             per_type[type_key] += value
 
+            end = _naive(circuit.contract_end) if circuit.contract_end else None
+            billing_key = "expired_unrenewed" if (end and end < month_start) else "in_contract"
+            billing[billing_key] += value
+
         total_costs.append(int(total))
+        by_billing["in_contract"].append(int(billing["in_contract"]))
+        by_billing["expired_unrenewed"].append(int(billing["expired_unrenewed"]))
         for key in by_type:
             by_type[key].append(int(per_type[key]))
 
     return {
         "months": months,
         "total_costs": total_costs,
-        "by_type": by_type
+        "by_type": by_type,
+        # 逐月守恒：in_contract + expired_unrenewed == total_costs
+        "by_billing": by_billing
     }
 
 
