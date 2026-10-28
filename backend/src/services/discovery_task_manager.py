@@ -30,6 +30,8 @@ class DiscoveryTask:
         self.error: Optional[str] = None
         self.created_at = datetime.now()
         self.finished_at: Optional[datetime] = None
+        # 持有后台协程的 asyncio.Task 强引用（防 GC 提前回收；同类型任务互斥由此保证）
+        self.asyncio_task: Optional[asyncio.Task] = None
 
     def to_dict(self) -> dict:
         percent = int(self.done * 100 / self.total) if self.total else 0
@@ -107,8 +109,6 @@ def make_progress_callback(task: DiscoveryTask) -> ProgressCallback:
 
 async def run_discovery_task(task: DiscoveryTask, runner: Callable[..., Awaitable[dict]], db_factory) -> None:
     """在后台执行发现任务：独立 DB 会话，异常落任务状态"""
-    from src.database import async_session
-
     async def progress(phase, done, total, message=""):
         task.phase = phase
         task.done = done

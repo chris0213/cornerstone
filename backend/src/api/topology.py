@@ -612,9 +612,12 @@ async def discover_lldp_neighbors(
             raise ValueError("没有设备配置了管理IP，无法进行LLDP发现")
 
         task = manager.create("lldp", total=len(devices_with_ip))
-        asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: asyncio.run(run_discovery_task(task, run_full_discovery, async_session))
+        # 必须在当前（uvicorn 主）事件循环内直接跑后台协程：async_session 的连接池
+        # 绑定主 loop，此前用 run_in_executor + asyncio.run 新开 loop 导致
+        # "Future attached to a different loop"。SSH 同步采集已由 to_thread 下放线程池，
+        # 在主 loop 长跑不阻塞请求。
+        task.asyncio_task = asyncio.create_task(
+            run_discovery_task(task, run_full_discovery, async_session)
         )
         return {"task_id": task.id, "running": False}
     except ValueError as e:
@@ -646,9 +649,9 @@ async def discover_mac_endpoints(
             raise ValueError("没有可扫描的网络设备（需为交换机/路由器配置管理IP）")
 
         task = manager.create("mac", total=len(scannable))
-        asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: asyncio.run(run_discovery_task(task, run_mac_discovery, async_session))
+        # 同 discover-lldp：主 loop 内直接跑后台协程，避免跨 loop 使用连接池
+        task.asyncio_task = asyncio.create_task(
+            run_discovery_task(task, run_mac_discovery, async_session)
         )
         return {"task_id": task.id, "running": False}
     except ValueError as e:
