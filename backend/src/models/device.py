@@ -14,6 +14,7 @@ class Device(Base):
     vendor = Column(String(50))  # cisco_ios, cisco_nxos, huawei_vrp, h3c, juniper, fortinet
     model = Column(String(100))
     sn = Column(String(50))
+    asset_tag = Column(String(50))  # 资产编号（选填）
     site_id = Column(Integer, ForeignKey("sites.id"))
     location = Column(String(255))
     mgmt_ip_id = Column(Integer, ForeignKey("ip_addresses.id"))

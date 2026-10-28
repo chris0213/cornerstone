@@ -355,6 +355,8 @@
     "model": "型号",
     "modelPlaceholder": "如：Catalyst 9300",
     "serialPlaceholder": "请输入序列号",
+    "assetTag": "资产编号",
+    "assetTagPlaceholder": "请输入资产编号（选填）",
     "locationPlaceholder": "如：A栋机房-机柜01-U12",
     "mgmtIpPlaceholder": "手动输入 IP 或从下拉框选择",
     "selectIp": "或选择已有 IP",

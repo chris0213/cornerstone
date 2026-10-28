@@ -9,7 +9,7 @@ import { applyKeywordFilter } from '../../lib/filters'
 import { confirmAndRun } from '../../lib/confirm'
 import { useCrudForm } from '../../lib/useCrudForm'
 import type { Device, IPAddress, Site } from '../../types/domain'
-import { getIPAddresses, createIPAddress } from '../../api/ipam'
+import { getIPAddresses, getIPAddressesByIds, findIPAddressByAddress, createIPAddress } from '../../api/ipam'
 import { getDevices, createDevice, updateDevice, deleteDevice, type DeviceResponse } from '../../api/devices'
 import { getDeviceLinks } from '../../api/topology'
 import { getSites, type SiteResponse } from '../../api/sites'
@@ -111,6 +111,7 @@ const defaultDeviceForm = () => ({
   vendor: '',
   model: '',
   sn: '',
+  assetTag: '',
   siteId: null as number | null,
   location: '',
   mgmtIpId: null as number | null,
@@ -139,6 +140,7 @@ const {
     vendor: device.vendor,
     model: device.model,
     sn: device.sn,
+    assetTag: device.assetTag || '',
     siteId: device.siteId,
     location: device.location,
     mgmtIpId: device.mgmtIpId,
@@ -405,9 +407,18 @@ async function handleSave() {
     // 如果用户手动输入了IP地址
     if (form.value.mgmtIpAddress.trim() && !mgmtIpId) {
       const inputIp = form.value.mgmtIpAddress.trim()
-      
-      // 检查IP是否已存在
-      const existingIp = ipAddresses.value.find(ip => ip.address === inputIp)
+
+      // 检查IP是否已存在：本地缓存未命中时再查后端（本地只加载了分页首页，
+      // 已有 IP 可能不在其中，误判会导致重复创建）
+      let existingIp = ipAddresses.value.find(ip => ip.address === inputIp)
+      if (!existingIp) {
+        try {
+          existingIp = await findIPAddressByAddress(inputIp)
+          if (existingIp) ipAddresses.value.push(existingIp)
+        } catch (lookupError) {
+          console.error(`Failed to lookup IP ${inputIp}:`, lookupError)
+        }
+      }
       if (existingIp) {
         mgmtIpId = typeof existingIp.id === 'number' ? existingIp.id : null
       } else {
@@ -437,6 +448,7 @@ async function handleSave() {
       vendor: form.value.vendor,
       model: form.value.model,
       sn: form.value.sn,
+      asset_tag: form.value.assetTag?.trim() || null,
       site_id: form.value.siteId,
       location: form.value.location || null,
       mgmt_ip_id: mgmtIpId,
@@ -550,6 +562,7 @@ const convertToDevice = (response: DeviceResponse): Device => ({
   vendor: response.vendor || '',
   model: response.model,
   sn: response.sn,
+  assetTag: response.asset_tag || '',
   siteId: response.site_id,
   location: response.location || '',
   mgmtIpId: response.mgmt_ip_id,
@@ -601,11 +614,28 @@ const loadDevices = async () => {
   try {
     const response = await getDevices()
     devices.value = response.map(convertToDevice)
+    // IP 列表接口是分页的（默认 100 条），扫描入库几千条后设备引用的管理 IP
+    // 大概率不在首页，导致下拉回显裸 id、列表/在线状态解析失败——按 id 补拉
+    await ensureMgmtIpsLoaded()
   } catch (error) {
     console.error(t('devices.loadFailed'), error)
     ElMessage.error(t('devices.loadFailed'))
   } finally {
     loading.value = false
+  }
+}
+
+// 补拉被设备引用但不在已加载集合中的管理 IP（一次请求，按 id 精确查询）
+async function ensureMgmtIpsLoaded() {
+  const known = new Set(ipAddresses.value.map(ip => String(ip.id)))
+  const missing = [...new Set(devices.value.map(d => d.mgmtIpId).filter(Boolean))] as number[]
+  const need = missing.filter(id => !known.has(String(id)))
+  if (need.length === 0) return
+  try {
+    const extra = await getIPAddressesByIds(need)
+    ipAddresses.value.push(...extra)
+  } catch (error) {
+    console.error('Failed to load referenced management IPs:', error)
   }
 }
 
@@ -702,13 +732,15 @@ function downloadTemplate() {
 
 onMounted(async () => {
   await loadSites()
-  loadDevices()
+  // 先加载 IP 基础列表（分页首页），再加载设备并按 id 补拉被引用的管理 IP；
+  // 顺序不能反：getIPAddresses 是整体赋值，会冲掉 ensureMgmtIpsLoaded 的补拉结果
   try {
     ipAddresses.value = await getIPAddresses()
   } catch (error) {
     console.error('Failed to load IP addresses:', error)
   }
-  
+  await loadDevices()
+
   // 如果有 ?id= 参数，高亮并滚动到对应设备
   const targetId = route.query.id
   if (targetId) {
@@ -1066,6 +1098,13 @@ onMounted(async () => {
               <el-select v-model="form.siteId" style="width: 100%" :placeholder="t('sites.select')">
                 <el-option v-for="site in sites" :key="site.id" :label="site.name" :value="site.id" />
               </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item :label="t('devices.assetTag')">
+              <el-input v-model="form.assetTag" :placeholder="t('devices.assetTagPlaceholder')" />
             </el-form-item>
           </el-col>
         </el-row>

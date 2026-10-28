@@ -327,6 +327,8 @@
     "model": "Model",
     "modelPlaceholder": "e.g., Catalyst 9300",
     "serialPlaceholder": "Enter serial number",
+    "assetTag": "Asset Tag",
+    "assetTagPlaceholder": "Enter asset tag (optional)",
     "locationPlaceholder": "e.g., Building A - Rack 01-U12",
     "mgmtIpPlaceholder": "Enter IP or select from dropdown",
     "selectIp": "Or select existing IP",

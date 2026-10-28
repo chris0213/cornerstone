@@ -14,6 +14,7 @@ class DeviceCreate(BaseModel):
     vendor: str | None = None
     model: str | None = None
     sn: str | None = None
+    asset_tag: str | None = None
     site_id: int | None = None
     location: str | None = None
     mgmt_ip_id: int | None = None
@@ -32,6 +33,7 @@ class DeviceUpdate(BaseModel):
     vendor: str | None = None
     model: str | None = None
     sn: str | None = None
+    asset_tag: str | None = None
     site_id: int | None = None
     location: str | None = None
     mgmt_ip_id: int | None = None
@@ -51,6 +53,7 @@ class DeviceResponse(BaseModel):
     vendor: str | None
     model: str | None
     sn: str | None
+    asset_tag: str | None = None
     site_id: int | None
     location: str | None
     mgmt_ip_id: int | None

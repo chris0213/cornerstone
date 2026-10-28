@@ -88,6 +88,23 @@ export async function getIPAddresses(prefixId?: number): Promise<IPAddress[]> {
   return normalizeOpenPorts(snakeToCamel(response.data))
 }
 
+// 按 id 批量精确取回（后端 ids 参数，不受分页限制），
+// 用于补拉分页窗口之外、被设备引用的管理 IP
+export async function getIPAddressesByIds(ids: Array<number | string>): Promise<IPAddress[]> {
+  const valid = ids.filter(id => id !== null && id !== undefined && id !== '').map(String)
+  if (valid.length === 0) return []
+  const response = await api.get('/ipam/addresses/', { params: { ids: valid.join(',') } })
+  return normalizeOpenPorts(snakeToCamel(response.data))
+}
+
+// 按地址精确查找 IP（keyword 模糊查询 + 客户端精确匹配），
+// 用于保存设备时查重，避免把分页窗口外的已有 IP 误判为不存在而重复创建
+export async function findIPAddressByAddress(address: string): Promise<IPAddress | undefined> {
+  const response = await api.get('/ipam/addresses/', { params: { keyword: address, limit: 50 } })
+  const list = normalizeOpenPorts(snakeToCamel(response.data)) as IPAddress[]
+  return list.find(ip => ip.address === address)
+}
+
 export async function createIPAddress(ip: Omit<IPAddress, 'id'>): Promise<IPAddress> {
   const payload = {
     ...ip,

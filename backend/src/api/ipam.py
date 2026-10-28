@@ -335,6 +335,7 @@ async def read_addresses(
     status: str | None = None,
     is_online: bool | None = None,
     keyword: str | None = None,
+    ids: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
@@ -343,6 +344,13 @@ async def read_addresses(
         stmt = stmt.where(IPAddress.prefix_id == prefix_id)
     if device_id is not None:
         stmt = stmt.where(IPAddress.device_id == device_id)
+    if ids:
+        # 按 id 批量精确取回（逗号分隔），供设备页补拉分页外的管理 IP
+        id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+        if id_list:
+            stmt = stmt.where(IPAddress.id.in_(id_list))
+        else:
+            return []
     if status:
         stmt = stmt.where(IPAddress.status == status)
     if is_online is not None:
@@ -355,6 +363,10 @@ async def read_addresses(
             IPAddress.owner.ilike(like),
             IPAddress.mac_address.ilike(like),
         ))
+    if ids:
+        # 按 id 精确取回时不受分页限制（数量即传入 id 数）
+        result = await db.execute(stmt)
+        return result.scalars().all()
     stmt = stmt.offset(page.skip).limit(page.limit)
     result = await db.execute(stmt)
     return result.scalars().all()

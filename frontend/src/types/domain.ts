@@ -72,6 +72,7 @@ export interface Device {
   vendor: string
   model: string
   sn: string
+  assetTag: string
   siteId: number | null
   location: string
   mgmtIpId: number | null

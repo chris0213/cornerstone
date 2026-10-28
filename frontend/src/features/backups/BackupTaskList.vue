@@ -213,6 +213,7 @@ const convertToDevice = (response: DeviceResponse): Device => ({
   vendor: response.vendor || '',
   model: response.model || '',
   sn: response.sn || '',
+  assetTag: response.asset_tag || '',
   siteId: response.site_id,
   location: response.location || '',
   mgmtIpId: response.mgmt_ip_id,

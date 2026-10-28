@@ -7,6 +7,7 @@ export interface DeviceResponse {
   vendor: string | null
   model: string
   sn: string
+  asset_tag: string | null
   site_id: number | null
   location: string | null
   mgmt_ip_id: number | null
@@ -29,6 +30,7 @@ export interface DeviceCreate {
   vendor: string | null
   model: string
   sn: string
+  asset_tag: string | null
   site_id: number | null
   location: string | null
   mgmt_ip_id: number | null
