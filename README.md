@@ -13,6 +13,15 @@
 
 ## 📌 最近更新
 
+**安全加固与看板口径修复（2026-10-28）：**
+
+✅ **API 安全**：首页汇总 / 时间线等六个接口补充登录认证；API 层异常信息泛化（不再回显内部堆栈与上游响应）；生产环境关闭 FastAPI 内置文档（`/docs` 仅 DEBUG 模式开启）
+✅ **看板口径统一**：专线费用拆分「合同内 / 已到期未续约」；IP 占用口径与 IPAM 页对齐（已分配 + 预留、归属子网）；可用性卡片区分「未探测 / 探测全失败 / 上月无数据」
+✅ **风险看板增强**：新增「已逾期未续约」高风险置顶；风险项支持点击跳转对应模块
+✅ **事件时间线**：设备离线 / 恢复改为「状态变化」事件（避免巡检快照刷屏）；时间口径统一北京时间
+✅ **数据质量**：CIDR 录入 / 导入自动规范化（缩写补零、非法拒绝），杜绝非标准网段导致的统计偏差
+✅ **部署安全**：Redis 加访问密码；`SECRET_KEY` 启动强制校验 ≥32 字符；前端生产构建关闭 sourcemap 并移除 console；生产关闭 8000 端口映射
+
 **M0 筑底行动（2026-08-09 完成）：**
 
 ✅ **预警引擎接入监控**：关键设备每5分钟 ping 检测 → 告警规则匹配 → 自动创建告警记录
@@ -100,16 +109,16 @@
 
 ### 本地开发
 
-> **注意**：本项目后端默认端口 `8001`，前端默认端口 `5174`（避免与常见服务的 8000/5173 冲突）。如需修改请编辑 `backend/.env` 与 `frontend/vite.config.ts`。
+> **注意**：后端默认端口 `8000`，前端默认端口 `5174`。如需修改请编辑 `scripts/dev.sh`（支持 `BE_PORT` / `FE_PORT` 环境变量覆盖）与 `frontend/vite.config.ts`。
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/pancq/cornerstone.git
+git clone https://github.com/chris0213/cornerstone.git
 cd cornerstone
 
 # 2. 启动后端（新终端）
 cd backend
-cp .env.example .env      # 编辑 .env：至少修改 SECRET_KEY、INITIAL_ADMIN_PASSWORD
+cp .env.example .env      # 编辑 .env：至少修改 SECRET_KEY（≥32 字符，启动强制校验）、INITIAL_ADMIN_PASSWORD
 python3.11 -m venv .venv  # 推荐使用与 Docker 一致的 3.11
 source .venv/bin/activate # Windows: .venv\Scripts\activate
 pip install poetry
@@ -120,7 +129,7 @@ alembic upgrade head
 #   2b. 初始化种子数据（权限/角色/admin账号 + 演示数据）
 python init_db.py
 #   2c. 启动后端
-uvicorn src.main:app --reload --port 8001
+uvicorn src.main:app --reload --port 8000
 
 # 3. 启动前端（新终端）
 cd ../frontend
@@ -128,13 +137,15 @@ npm install
 npm run dev               # 开发服务器 http://localhost:5174
 ```
 
+> 💡 也可以使用一键脚本 `./scripts/dev.sh start|stop|restart|status|logs`（自动完成端口预检、进程管理、日志聚合）。
+
 访问：
 
 | 服务 | 地址 |
 |------|------|
 | 前端 | http://localhost:5174 |
-| 后端 API | http://localhost:8001 |
-| API Swagger | http://localhost:8001/docs |
+| 后端 API | http://localhost:8000 |
+| API Swagger | http://localhost:8000/docs（仅 `DEBUG=true` 时开启，生产环境自动关闭） |
 
 默认账号：`admin` / `INITIAL_ADMIN_PASSWORD` 中配置的密码。
 
@@ -158,18 +169,21 @@ cornerstone-redis    (Redis 7, AOF持久化)
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/pancq/cornerstone.git
+git clone https://github.com/chris0213/cornerstone.git
 cd cornerstone
 
-# 2. 配置环境变量（至少修改带 change-me 的三项）
+# 2. 配置环境变量（至少修改带 change-me 的项）
 cp .env.docker.example .env
 vim .env
 # 必填项:
 #   POSTGRES_PASSWORD       数据库密码（强密码）
-#   SECRET_KEY              JWT 签名密钥: `openssl rand -hex 32` 生成
+#   SECRET_KEY              JWT 签名密钥: `openssl rand -hex 32`（启动时强制校验 ≥32 字符，弱密钥拒绝启动）
 #   INITIAL_ADMIN_PASSWORD  首次启动时 admin 账号的初始密码
+#   REDIS_PASSWORD          Redis 访问密码: `openssl rand -hex 16`
+#                           ⚠ 变更后必须 docker compose up -d 整栈重建——
+#                           只重启 backend 会导致新旧 Redis 密码不一致（验证码等接口报 NOAUTH）
 #   CORS_ORIGINS            改为你的域名或服务器公网IP，如 http://1.2.3.4,https://itsm.example.com
-#   HTTP_PORT               宿主机暴露端口（默认80，若被占用可改为8080）
+#   HTTP_PORT               宿主机暴露端口（默认80，若被占用可改为8080/8089）
 
 # 3. 构建并启动（首次约 3~5 分钟）
 docker compose up -d --build
@@ -293,6 +307,9 @@ docker exec cornerstone-frontend nginx -s reload
 | `docker compose pull/push` 失败报 `local changes` | 服务器上有未提交的文件被改（如 entrypoint） | `git checkout -- <冲突文件>` 后再 pull |
 | PDF 报告里中文为方框 □ | 字体文件损坏/被 Docker volume 覆盖 | 不要将字体目录挂到 volume，字体文件必须放在容器内非 volume 目录 |
 | 全新部署登录报 500 / auth 接口 500 | SECRET_KEY 为空或 PostgreSQL 未完成迁移 | 检查 `.env` 三项必填；`docker exec cornerstone-backend alembic current` 确认 migration 已到 head |
+| 升级后 backend 起不来、日志报 `SECRET_KEY 必须设置且至少 32 个字符` | 旧版本 `.env` 的 SECRET_KEY 长度不足（新版启动强制校验） | `sed -i "s\|^SECRET_KEY=.*\|SECRET_KEY=$(openssl rand -hex 32)\|" .env` 后 `docker compose up -d backend`；⚠ 换密钥会使所有登录态失效 |
+| 部署/改密后验证码接口 500、日志有 Redis `NOAUTH` | 只重建了 backend，Redis 容器还是旧配置（密码不一致） | `docker compose up -d --build` **整栈重建**，勿只 restart/重建单个容器 |
+| 升级后首页时间线接口 500 | 后端镜像未更新到最新（旧镜像的时间绑定与 PG 类型不兼容） | `git pull && docker compose up -d --build backend`，确认 `docker compose ps` 的 Created 时间 |
 | 管理页面标题重复（显示两次「运营月报」等） | 代码版本过旧（旧版本在页面内部再渲染了标题） | 升级到 main 分支最新 commit c8e4504 之后 |
 
 ---
@@ -309,8 +326,8 @@ docker exec cornerstone-frontend nginx -s reload
 
 ![管理视图](docs/images/ScreenShot_2026-06-30_165256_560.png)
 
-- **运维视图**：专线 / IP / 设备 / 备份 状态卡片、近期预警、资源总览（运维工程师）
-- **管理视图**：IT负责人专属看板 - 网络可用性、专线月租费用、未解决故障、即将到期事项、IT风险看板、专线费用趋势图、设备生命周期分布、本月故障汇总（IT负责人）
+- **运维视图**：站点 / 设备在线 / IP 占用 / 备份 状态卡片（含数据更新时间）、事件时间线（状态变化驱动、可切换范围）、子网使用率、设备品牌分布、快捷操作（按权限显隐）
+- **管理视图**：IT负责人专属看板 - 网络可用性（区分探测全失败/未探测）、专线月租费用（拆分合同内/已到期未续约）、未解决故障、即将到期事项（两级预警）、IT风险看板（含已逾期未续约置顶，可点击跳转）、专线费用趋势图、设备生命周期分布、本月故障汇总、运营月报
 - **super_admin**：支持在两个视图之间自由切换，菜单按权限自动过滤
 
 ### 2. 站点管理
