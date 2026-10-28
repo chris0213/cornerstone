@@ -136,28 +136,42 @@ async def quick_add_device(
     current_user: dict = Depends(require_permission("devices:write"))
 ):
     try:
+        ip_address = None
         existing_ip = await db.execute(
             select(IPAddress).where(IPAddress.address == request.ip_address)
         )
         existing_ip = existing_ip.scalar_one_or_none()
-        
+
         if existing_ip:
-            return {
-                "success": False,
-                "message": f"IP地址 {request.ip_address} 已存在",
-                "device_id": None
-            }
-        
-        ip_address = None
-        if request.prefix_id:
-            stmt = insert(IPAddress).values(
-                address=request.ip_address,
-                prefix_id=request.prefix_id,
-                status="已分配",
-                usage="管理IP"
-            ).returning(IPAddress)
-            result = await db.execute(stmt)
-            ip_address = result.scalar_one()
+            # 区分「扫描发现/预登记的未归属记录」与「已被其他设备占用」：
+            # 网段扫描会把在线 IP 自动入库占位（status=已分配），此时添加设备应接管该记录，
+            # 而不是报错阻断；仅当 IP 已作为其他设备的管理 IP 时才是真冲突。
+            used_by = (await db.execute(
+                select(Device).where(Device.mgmt_ip_id == existing_ip.id)
+            )).scalars().first()
+            if used_by:
+                return {
+                    "success": False,
+                    "message": f"IP地址 {request.ip_address} 已被设备「{used_by.name}」占用",
+                    "device_id": None
+                }
+            # 接管扫描占位/预登记记录
+            ip_address = existing_ip
+            existing_ip.status = "已分配"
+            existing_ip.usage = "管理IP"
+            if request.prefix_id and existing_ip.prefix_id is None:
+                existing_ip.prefix_id = request.prefix_id
+
+        if ip_address is None:
+            if request.prefix_id:
+                stmt = insert(IPAddress).values(
+                    address=request.ip_address,
+                    prefix_id=request.prefix_id,
+                    status="已分配",
+                    usage="管理IP"
+                ).returning(IPAddress)
+                result = await db.execute(stmt)
+                ip_address = result.scalar_one()
         
         stmt = insert(Device).values(
             name=request.name,
