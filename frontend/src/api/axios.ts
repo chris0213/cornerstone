@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../app/router'
+import { getToken, getRefreshToken, setTokens, clearTokens } from './tokenStorage'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -26,8 +27,7 @@ async function handle401(error: any) {
 
   // 已被标记为重试过的请求，不再重试，直接清 token 跳登录
   if (originalRequest._retry) {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+    clearTokens()
     if (router.currentRoute.value.path !== '/login') {
       localStorage.setItem('redirect_after_login', router.currentRoute.value.fullPath)
       router.push('/login')
@@ -38,7 +38,7 @@ async function handle401(error: any) {
   // 如果正在 refresh，等待同一轮 refresh 结果
   if (!refreshPromise) {
     refreshPromise = (async () => {
-      const refreshToken = localStorage.getItem('refresh_token')
+      const refreshToken = getRefreshToken()
       if (!refreshToken) {
         return null
       }
@@ -50,12 +50,11 @@ async function handle401(error: any) {
         })
         const newAccessToken = resp.data.access_token
         const newRefreshToken = resp.data.refresh_token
-        localStorage.setItem('access_token', newAccessToken)
-        localStorage.setItem('refresh_token', newRefreshToken || '')
+        // 沿用当前「记住我」存储位置
+        setTokens(newAccessToken, newRefreshToken, localStorage.getItem('remember_me') === '1')
         return newAccessToken
       } catch {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        clearTokens()
         return null
       } finally {
         refreshPromise = null
@@ -82,8 +81,8 @@ async function handle401(error: any) {
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('access_token')
-    
+    const token = getToken()
+
     config.url = normalizeUrl(config.url)
 
     if (token && !NO_AUTH_ROUTES.includes(config.url || '')) {
@@ -103,8 +102,7 @@ api.interceptors.response.use(
       const url = normalizeUrl(error.config?.url)
       // refresh 接口本身返回 401 直接清 token，不走 refresh 流程
       if (url === '/auth/refresh') {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        clearTokens()
         if (router.currentRoute.value.path !== '/login') {
           localStorage.setItem('redirect_after_login', router.currentRoute.value.fullPath)
           router.push('/login')
@@ -113,10 +111,15 @@ api.interceptors.response.use(
       }
       return handle401(error)
     }
-    // IP 白名单拒绝（403）：token 本身有效，只是 IP 被拦，给出明确原因避免表现为莫名"掉登录"
+    // IP 白名单拒绝（403）：token 本身有效，只是 IP 被拦，给出明确原因避免表现为莫名"掉登录"。
+    // 登录页跳过全局 toast——页面内已有内联错误提示，避免双重弹窗。
     if (error.response?.status === 403) {
       const detail = error.response?.data?.detail
-      if (typeof detail === 'string' && detail.includes('白名单')) {
+      if (
+        typeof detail === 'string' &&
+        detail.includes('白名单') &&
+        router.currentRoute.value.path !== '/login'
+      ) {
         ElMessage({ message: detail, type: 'error', duration: 6000, showClose: true })
       }
     }

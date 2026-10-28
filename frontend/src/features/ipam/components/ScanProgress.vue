@@ -1,6 +1,7 @@
 <script setup lang="ts">import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Clock, Check, CircleCheck, CircleClose } from '@element-plus/icons-vue';
+import { getToken } from '../../../api/tokenStorage';
 const props = defineProps<{
  visible: boolean;
  network: string;
@@ -41,7 +42,7 @@ const connectWebSocket = () => {
     // 动态拼 WebSocket 地址：http→ws、https→wss，复用浏览器当前 host
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const token = localStorage.getItem('access_token') || ''
+    const token = getToken() || ''
     const wsUrl = `${proto}//${host}/api/v1/ipam/ws/scan/${props.taskId}?token=${encodeURIComponent(token)}`
     console.log('WebSocket URL:', wsUrl)
     ws = new WebSocket(wsUrl)

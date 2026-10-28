@@ -10,6 +10,8 @@ import json
 from ..database import get_db
 from ..models import User, Role, AuditLog, SystemConfig
 from ..services.ldap_service import ldap_service, LDAPException as LDAPAuthException
+from ..utils.ip_whitelist import get_client_ip_from_request
+from ..utils.login_throttle import check_login_allowed, record_login_failure, reset_login_failures, LoginThrottled
 from .dependencies import get_current_superuser
 from ..api.system import encrypt_secret, decrypt_secret
 
@@ -44,9 +46,10 @@ class LDAPConfigRequest(BaseModel):
     default_role: str = "viewer"
 
 
-async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None):
-    """记录登录尝试日志"""
-    detail = "LDAP登录成功" if success else "LDAP登录失败"
+async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None,
+                            reason: str = None):
+    """记录登录尝试日志（只记原因分类，绝不记录密码）"""
+    detail = "LDAP登录成功" if success else f"LDAP登录失败：{reason or '用户名或密码错误'}"
     stmt = insert(AuditLog).values(
         user=username,
         action="用户登录",
@@ -190,18 +193,26 @@ async def ldap_login(
     body: LDAPLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """LDAP用户登录"""
-    client_ip = request.client.host if request.client else None
+    """LDAP用户登录（与本地登录共用同一套限流：用户名锁定 + IP 限流）"""
+    client_ip = get_client_ip_from_request(request)
     user_agent = request.headers.get("User-Agent", "")
 
     try:
+        await check_login_allowed(body.username, client_ip)
+    except LoginThrottled as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    try:
         result = await ldap_service.login(db, body.username, body.password, client_ip, user_agent)
+        await reset_login_failures(body.username, client_ip)
         return result
     except LDAPAuthException as e:
         logger.warning(f"LDAP 登录认证失败 username={body.username}: {e}")
         await log_login_attempt(db, body.username, False, client_ip)
+        await record_login_failure(body.username, client_ip)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     except Exception as e:
+        # LDAP 服务故障不属于认证失败，不计入限流，但记审计
         logger.error(f"LDAP 登录异常 username={body.username}", exc_info=True)
-        await log_login_attempt(db, body.username, False, client_ip)
+        await log_login_attempt(db, body.username, False, client_ip, reason="LDAP服务暂不可用")
         raise HTTPException(status_code=500, detail="LDAP 服务暂不可用，请稍后重试")

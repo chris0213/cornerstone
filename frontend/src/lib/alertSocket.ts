@@ -5,13 +5,15 @@
  * - 收到新告警时以自定义事件 `alert:new` 向 window 派发，
  *   任意组件监听即可响应（App 弹通知、预警页刷新列表）
  */
+import { getToken } from '../api/tokenStorage'
 
 let socket: WebSocket | null = null
 let retryTimer: number | null = null
 let started = false
 
 function getAccessToken(): string | null {
-  return localStorage.getItem('access_token')
+  // 支持 localStorage/sessionStorage 双存储（「记住我」实现）
+  return getToken()
 }
 
 function buildUrl(): string {

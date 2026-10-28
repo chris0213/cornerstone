@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginPage from '../features/auth/LoginPage.vue'
 import ForbiddenPage from '../features/errors/ForbiddenPage.vue'
+import { getToken, clearTokens } from '../api/tokenStorage'
 
 // 路由懒加载：首屏只加载 login/403，其余按需加载，预计减少 60%+ 首屏 JS 体积
 const DashboardPage = () => import('../features/dashboard/DashboardPage.vue')
@@ -79,7 +80,7 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from) => {
-  const token = localStorage.getItem('access_token')
+  const token = getToken()
   const isLoggedIn = !!token
   
   // 如果路由需要认证，用户未登录，且不是登录页面
@@ -108,8 +109,7 @@ router.beforeEach(async (to, _from) => {
         // token无效，清除并重定向到登录页
         // axios 拦截器可能已触发跳转，这里加守卫避免重复
         if (router.currentRoute.value.path !== '/login') {
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
+          clearTokens()
           localStorage.setItem('redirect_after_login', to.fullPath)
           return '/login'
         }

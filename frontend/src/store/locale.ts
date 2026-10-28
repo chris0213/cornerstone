@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { setLocale as setI18nLocale, getLocale, type LocaleType } from '../i18n'
 import api from '../api/axios'
+import { getToken } from '../api/tokenStorage'
 
 export const useLocaleStore = defineStore('locale', () => {
   // 状态
@@ -31,7 +32,7 @@ export const useLocaleStore = defineStore('locale', () => {
     }
 
     // 如果已登录，同步服务器设置（仅同步到服务器，不从服务器读取）
-    const token = localStorage.getItem('access_token')
+    const token = getToken()
     if (token) {
       await syncToServer()
     }
@@ -49,7 +50,7 @@ export const useLocaleStore = defineStore('locale', () => {
     localStorage.setItem('locale', newLocale)
 
     // 同步到服务器
-    const token = localStorage.getItem('access_token')
+    const token = getToken()
     if (token) {
       await syncToServer()
     }

@@ -9,8 +9,9 @@ from ..config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 登录失败记录（内存存储，生产环境建议用Redis）
-login_failures = {}
+# 恒定时间校验用的哑哈希：用户不存在时也执行一次 bcrypt，
+# 消除「用户不存在（快）vs 密码错误（慢）」的响应时差，防止时序枚举用户名。
+DUMMY_HASH = pwd_context.hash("TimingEqualizer#Dummy")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -46,39 +47,6 @@ def decode_access_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
-
-def is_account_locked(username: str) -> bool:
-    """检查账号是否被锁定"""
-    failure_info = login_failures.get(username)
-    if not failure_info:
-        return False
-    
-    attempts, lock_time = failure_info
-    if attempts >= 5:
-        # 检查锁定是否已过期（15分钟）
-        if datetime.now(timezone.utc) < lock_time + timedelta(minutes=15):
-            return True
-        else:
-            # 锁定过期，重置失败计数
-            del login_failures[username]
-            return False
-    return False
-
-def record_login_failure(username: str):
-    """记录登录失败"""
-    failure_info = login_failures.get(username, (0, None))
-    attempts, _ = failure_info
-    new_attempts = attempts + 1
-    
-    if new_attempts >= 5:
-        login_failures[username] = (new_attempts, datetime.now(timezone.utc))
-    else:
-        login_failures[username] = (new_attempts, None)
-
-def reset_login_failures(username: str):
-    """重置登录失败计数"""
-    if username in login_failures:
-        del login_failures[username]
 
 def validate_password(password: str) -> bool:
     """验证密码强度：至少8位，包含字母和数字"""

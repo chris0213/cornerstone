@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/store/auth'
 import { useRouter } from 'vue-router'
 import { useNetworkAnimation } from '../composables/useNetworkAnimation'
+import { setTokens, isRemembered } from '@/api/tokenStorage'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
@@ -24,6 +25,8 @@ const captchaLoading = ref(false)
 const ssoConfigLoaded = ref(false)
 const ldapEnabled = ref(false)
 const ldapConfigLoaded = ref(false)
+const rememberMe = ref(isRemembered())
+const capsLockOn = ref(false)
 
 const loginMode = ref<'local' | 'ldap'>('local')
 
@@ -52,7 +55,13 @@ async function refreshCaptcha() {
   }
 }
 
+function checkCapsLock(e: KeyboardEvent) {
+  capsLockOn.value = e.getModifierState?.('CapsLock') ?? false
+}
+
 async function handleLogin() {
+  // 防重复：loading 中回车/点击不再触发（输入框回车绕过按钮 disabled，需在这里兜底）
+  if (loading.value) return
   if (!username.value) {
     error.value = t('login.usernameRequired')
     return
@@ -75,7 +84,8 @@ async function handleLogin() {
       username.value,
       password.value,
       captchaId.value,
-      captchaCode.value
+      captchaCode.value,
+      rememberMe.value
     )
     if (success) {
       setAnimationMode('login-success')
@@ -89,15 +99,19 @@ async function handleLogin() {
     }
   } catch (err: any) {
     setAnimationMode('login-fail')
+    // 验证码类错误（400）：区分「已过期」与「错误」，其余按验证码错误处理
     if (err.response?.status === 400) {
-      error.value = t('login.captchaError')
-      refreshCaptcha()
+      const detail = String(err.response?.data?.detail || '')
+      error.value = detail.includes('过期') ? t('login.captchaExpired') : t('login.captchaError')
     } else if (err.response?.data?.detail) {
-      // 403 白名单拒绝等业务原因，优先展示后端具体提示
+      // 401 账密错误 / 423 锁定 / 429 限流 / 403 白名单：透传后端明确提示
       error.value = err.response.data.detail
     } else {
+      // 网络错误等无响应场景
       error.value = t('login.loginFailed')
     }
+    // 任何失败都刷新验证码：后端校验通过即消费验证码，旧图已失效
+    refreshCaptcha()
   } finally {
     loading.value = false
   }
@@ -118,6 +132,8 @@ async function handleSSOLogin() {
 }
 
 async function handleLDAPLogin() {
+  // 防重复：与 handleLogin 同样兜底
+  if (loading.value) return
   if (!username.value) {
     error.value = t('login.usernameRequired')
     return
@@ -146,8 +162,8 @@ async function handleLDAPLogin() {
     const data = await response.json()
 
     if (response.ok) {
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token)
+      // LDAP 登录页无独立记住我逻辑，跟随「记住我」复选框
+      setTokens(data.access_token, data.refresh_token, rememberMe.value)
       setAnimationMode('login-success')
       setTimeout(() => {
         router.push('/')
@@ -298,7 +314,9 @@ onMounted(async () => {
               class="form-input"
               :autocomplete="showPassword ? 'off' : 'current-password'"
               @focus="setAnimationMode('password')"
-              @blur="setAnimationMode('default')"
+              @blur="capsLockOn = false; setAnimationMode('default')"
+              @keydown="checkCapsLock"
+              @keyup="checkCapsLock"
               @input="triggerNodePulse()"
               @keyup.enter="handleLogin"
             />
@@ -318,6 +336,14 @@ onMounted(async () => {
             </span>
             <span class="input-focus-ring"></span>
           </div>
+          <Transition name="fade-slide">
+            <div v-if="capsLockOn" class="caps-lock-hint">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 4l7 7h-4v6h-6v-6H5l7-7z" />
+              </svg>
+              <span>{{ t('login.capsLockOn') }}</span>
+            </div>
+          </Transition>
         </div>
 
         <div v-if="loginMode === 'local'" class="form-group">
@@ -332,6 +358,8 @@ onMounted(async () => {
                 type="text"
                 :placeholder="t('login.captchaPlaceholder')"
                 class="form-input"
+                autocomplete="off"
+                maxlength="4"
                 @focus="setAnimationMode('captcha')"
                 @blur="setAnimationMode('default')"
                 @input="triggerNodePulse()"
@@ -361,7 +389,7 @@ onMounted(async () => {
 
         <div class="form-group remember-me">
           <label class="checkbox-label">
-            <input type="checkbox" class="checkbox" />
+            <input v-model="rememberMe" type="checkbox" class="checkbox" />
             <span class="checkbox-custom">
               <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3">
                 <path d="M5 13l4 4L19 7" />
@@ -391,6 +419,10 @@ onMounted(async () => {
           </span>
         </button>
 
+        <div class="forgot-password">
+          <span>{{ t('login.forgotPasswordHint') }}</span>
+        </div>
+
         <template v-if="hasSSO">
           <div class="login-divider">
             <span class="divider-line"></span>
@@ -417,7 +449,14 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* 登录页强调色走主题变量（Element Plus），硬编码值仅作回退 */
 .login-form-container {
+  --lp-primary: var(--el-color-primary, #3b82f6);
+  --lp-primary-2: var(--el-color-primary-dark-2, #6366f1);
+  --lp-danger: var(--el-color-danger, #dc2626);
+  --lp-danger-bg: var(--el-color-danger-light-9, #fef2f2);
+  --lp-danger-border: var(--el-color-danger-light-7, #fecaca);
+  --lp-warn: var(--el-color-warning, #d97706);
   width: 520px;
   display: flex;
   align-items: center;
@@ -460,7 +499,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
   border-radius: 18px;
   color: white;
   font-size: 26px;
@@ -531,7 +570,7 @@ onMounted(async () => {
 
 .tab-btn.active {
   background: white;
-  color: #3b82f6;
+  color: var(--lp-primary);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transform: translateY(-1px);
 }
@@ -551,18 +590,40 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #dc2626;
-  background: #fef2f2;
+  color: var(--lp-danger);
+  background: var(--lp-danger-bg);
   border-radius: 12px;
   padding: 14px 18px;
   font-size: 13px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--lp-danger-border);
 }
 
 .error-message svg {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
+}
+
+/* Caps Lock 开启提示 */
+.caps-lock-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--lp-warn);
+}
+
+.caps-lock-hint svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 忘记密码提示 */
+.forgot-password {
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .fade-slide-enter-active,
@@ -625,7 +686,7 @@ onMounted(async () => {
 }
 
 .form-input:focus + .input-focus-ring {
-  border-color: #3b82f6;
+  border-color: var(--lp-primary);
   box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.08);
 }
 
@@ -643,13 +704,13 @@ onMounted(async () => {
 
 .form-input:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--lp-primary);
   background: white;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08), 0 3px 12px rgba(0, 0, 0, 0.05);
 }
 
 .form-input:focus ~ .input-icon {
-  color: #3b82f6;
+  color: var(--lp-primary);
   transform: scale(1.08);
 }
 
@@ -671,7 +732,7 @@ onMounted(async () => {
 }
 
 .input-suffix:hover {
-  color: #3b82f6;
+  color: var(--lp-primary);
   transform: scale(1.12);
 }
 
@@ -724,7 +785,7 @@ onMounted(async () => {
 }
 
 .loading-spinner .path {
-  stroke: #3b82f6;
+  stroke: var(--lp-primary);
   stroke-linecap: round;
   animation: spin 0.9s linear infinite;
 }
@@ -771,8 +832,8 @@ onMounted(async () => {
 }
 
 .checkbox:checked + .checkbox-custom {
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
-  border-color: #3b82f6;
+  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
+  border-color: var(--lp-primary);
   transform: scale(1.05);
   box-shadow: 0 5px 16px rgba(59, 130, 246, 0.35);
 }
@@ -796,7 +857,7 @@ onMounted(async () => {
   height: 52px;
   border: none;
   border-radius: 12px;
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
   color: white;
   font-size: 15px;
   font-weight: 600;
@@ -870,8 +931,8 @@ onMounted(async () => {
 }
 
 .sso-login-btn:hover:not(:disabled) {
-  border-color: #3b82f6;
-  color: #3b82f6;
+  border-color: var(--lp-primary);
+  color: var(--lp-primary);
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(59, 130, 246, 0.15);
 }
@@ -895,6 +956,29 @@ onMounted(async () => {
   .login-form-container {
     width: 100%;
     justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-form-container {
+    padding: 16px 12px;
+  }
+
+  .login-box {
+    padding: 28px 20px;
+    border-radius: 16px;
+  }
+
+  .login-header {
+    margin-bottom: 28px;
+  }
+
+  .login-header h2 {
+    font-size: 22px;
+  }
+
+  .login-form {
+    gap: 16px;
   }
 }
 </style>

@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime, timezone
 from typing import Optional
 import logging
-import random
+import secrets
 import string
 import io
 from PIL import Image
@@ -16,20 +16,24 @@ from captcha.image import ImageCaptcha
 import redis.asyncio as aioredis
 
 from ..utils.ip_whitelist import get_client_ip_from_request, get_cached_whitelist, is_ip_in_networks
+from ..utils.login_throttle import (
+    check_login_allowed,
+    record_login_failure,
+    reset_login_failures,
+    LoginThrottled,
+)
 
 from ..database import get_db
 from ..models import User, AuditLog, UserSession, Role
 from ..schemas import Token, UserResponse, ChangePasswordRequest
 from ..utils.security import (
-    verify_password, 
-    create_access_token, 
+    verify_password,
+    create_access_token,
     create_refresh_token,
     generate_jti,
-    is_account_locked,
-    record_login_failure,
-    reset_login_failures,
     validate_password,
-    get_password_hash
+    get_password_hash,
+    DUMMY_HASH
 )
 from ..config import settings
 from ..services.permission_service import get_user_permissions
@@ -109,13 +113,14 @@ async def saml_callback(
         raise HTTPException(status_code=400, detail="SSO 登录失败，请重试")
 
 def generate_random_code(length: int = 4):
-    """生成随机验证码"""
+    """生成随机验证码（ secrets 模块，密码学安全随机源）"""
     characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
+    return ''.join(secrets.choice(characters) for _ in range(length))
 
-async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None):
-    """记录登录尝试日志"""
-    detail = "登录成功" if success else "登录失败：用户名或密码错误"
+async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None,
+                            reason: str = None):
+    """记录登录尝试日志（只记原因分类，绝不记录密码）"""
+    detail = "登录成功" if success else f"登录失败：{reason or '用户名或密码错误'}"
     stmt = insert(AuditLog).values(
         user=username,
         action="用户登录",
@@ -137,7 +142,7 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
         try:
             networks = await get_cached_whitelist(db)
             if networks and not is_ip_in_networks(client_ip, networks):
-                await log_login_attempt(db, user.username, False, client_ip)
+                await log_login_attempt(db, user.username, False, client_ip, reason="IP不在访问白名单")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="您的IP地址不在访问白名单中，请联系管理员添加"
@@ -192,7 +197,7 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
     await db.execute(stmt)
 
     await log_login_attempt(db, user.username, True, client_ip)
-    reset_login_failures(user.username)
+    await reset_login_failures(user.username, client_ip)
     await db.commit()
 
     return {
@@ -220,19 +225,26 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
+    """OAuth2 密码端点（Swagger/脚本兼容）。无验证码，靠双维度限流防护：
+    用户名 5 次失败锁 15 分钟 + IP 10 分钟 20 次失败限流（见 login_throttle）。"""
     client_ip = get_client_ip_from_request(request)
     user_agent = request.headers.get("User-Agent", "")
 
-    if is_account_locked(form_data.username):
-        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="账号已被锁定，请15分钟后重试")
+    try:
+        await check_login_allowed(form_data.username, client_ip)
+    except LoginThrottled as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     stmt = select(User).where(User.username == form_data.username)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
+    if not user:
+        # 用户不存在也执行一次 bcrypt 校验，抹平响应时差（防时序枚举用户名）
+        verify_password(form_data.password, DUMMY_HASH)
     if not user or not verify_password(form_data.password, user.hashed_password):
         await log_login_attempt(db, form_data.username, False, client_ip)
-        record_login_failure(form_data.username)
+        await record_login_failure(form_data.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -240,7 +252,7 @@ async def login_for_access_token(
         )
 
     if not user.is_active:
-        await log_login_attempt(db, user.username, False, client_ip)
+        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="账号已被禁用",
@@ -494,12 +506,16 @@ async def login_with_captcha(
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis)
 ):
-    """带验证码的登录接口"""
+    """带验证码的登录接口（前端主登录入口）"""
     stored_code = await redis.get(f"captcha:{body.captcha_id}")
     if not stored_code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码已过期，请刷新")
 
     if body.captcha_code.lower() != stored_code:
+        # 错误验证码只计 IP 不计用户名：攻击者无法借验证码环节锁定他人账号
+        client_ip = get_client_ip_from_request(request)
+        await record_login_failure(None, client_ip)
+        await log_login_attempt(db, body.username, False, client_ip, reason="验证码错误")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码错误")
 
     await redis.delete(f"captcha:{body.captcha_id}")
@@ -507,16 +523,21 @@ async def login_with_captcha(
     client_ip = get_client_ip_from_request(request)
     user_agent = request.headers.get("User-Agent", "")
 
-    if is_account_locked(body.username):
-        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="账号已被锁定，请15分钟后重试")
+    try:
+        await check_login_allowed(body.username, client_ip)
+    except LoginThrottled as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     stmt = select(User).where(User.username == body.username)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
+    if not user:
+        # 用户不存在也执行一次 bcrypt 校验，抹平响应时差（防时序枚举用户名）
+        verify_password(body.password, DUMMY_HASH)
     if not user or not verify_password(body.password, user.hashed_password):
         await log_login_attempt(db, body.username, False, client_ip)
-        record_login_failure(body.username)
+        await record_login_failure(body.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -524,7 +545,7 @@ async def login_with_captcha(
         )
 
     if not user.is_active:
-        await log_login_attempt(db, user.username, False, client_ip)
+        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="账号已被禁用",

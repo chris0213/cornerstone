@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useAppStore } from './index'
 import api from '../api/axios'
+import { getToken, getRefreshToken, setTokens, clearTokens, isRemembered } from '../api/tokenStorage'
+import { i18n } from '../i18n'
 
 export interface User {
   id: number
@@ -29,8 +31,8 @@ export interface SSOConfig {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(localStorage.getItem('access_token'))
-  const refreshToken = ref<string | null>(localStorage.getItem('refresh_token'))
+  const token = ref<string | null>(getToken())
+  const refreshToken = ref<string | null>(getRefreshToken())
   const user = ref<User | null>(null)
   const isLoggedIn = computed(() => !!token.value)
   const ssoConfig = ref<SSOConfig | null>(null)
@@ -61,19 +63,18 @@ export const useAuthStore = defineStore('auth', () => {
     return hasRole('super_admin') || (user.value?.is_superuser ?? false)
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, remember: boolean = true) {
     try {
       const response = await api.post('/auth/token', new URLSearchParams({
         username,
         password,
       }))
-      
+
       const data = response.data
-      
+
       token.value = data.access_token
       refreshToken.value = data.refresh_token
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token || '')
+      setTokens(data.access_token, data.refresh_token, remember)
       
       // 直接从响应中设置用户信息
       if (data.user) {
@@ -94,12 +95,12 @@ export const useAuthStore = defineStore('auth', () => {
       return { success: true }
     } catch (error: any) {
       console.error('Login failed:', error)
-      const errorMsg = error.response?.data?.detail || error.message || '登录失败'
+      const errorMsg = error.response?.data?.detail || error.message || i18n.global.t('login.loginFailed')
       return { success: false, message: errorMsg }
     }
   }
 
-  async function loginWithCaptcha(username: string, password: string, captchaId: string, captchaCode: string) {
+  async function loginWithCaptcha(username: string, password: string, captchaId: string, captchaCode: string, remember: boolean = false) {
     try {
       const response = await api.post('/auth/login-with-captcha', {
         username,
@@ -111,13 +112,12 @@ export const useAuthStore = defineStore('auth', () => {
           'Content-Type': 'application/json'
         }
       })
-      
+
       const data = response.data
-      
+
       token.value = data.access_token
       refreshToken.value = data.refresh_token
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token || '')
+      setTokens(data.access_token, data.refresh_token, remember)
       
       // 直接从响应中设置用户信息
       if (data.user) {
@@ -217,8 +217,7 @@ export const useAuthStore = defineStore('auth', () => {
       
       token.value = response.data.access_token
       refreshToken.value = response.data.refresh_token
-      localStorage.setItem('access_token', response.data.access_token)
-      localStorage.setItem('refresh_token', response.data.refresh_token || '')
+      setTokens(response.data.access_token, response.data.refresh_token, isRemembered())
       return true
     } catch (error) {
       console.error('Refresh token failed:', error)
@@ -236,8 +235,7 @@ export const useAuthStore = defineStore('auth', () => {
       token.value = null
       refreshToken.value = null
       user.value = null
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
+      clearTokens()
     }
   }
 
@@ -251,7 +249,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (error: any) {
       return { 
         success: false, 
-        message: error.response?.data?.detail || (error instanceof Error ? error.message : '修改密码失败') 
+        message: error.response?.data?.detail || (error instanceof Error ? error.message : i18n.global.t('common.changePasswordFailed'))
       }
     }
   }
@@ -292,11 +290,11 @@ export const useAuthStore = defineStore('auth', () => {
       })
       
       const data = response.data
-      
+
       token.value = data.access_token
       refreshToken.value = data.refresh_token
-      localStorage.setItem('access_token', data.access_token)
-      localStorage.setItem('refresh_token', data.refresh_token || '')
+      // SSO 登录无「记住我」复选框，保持既有行为：持久存储
+      setTokens(data.access_token, data.refresh_token, true)
       
       // 设置用户信息
       if (data.user) {
@@ -318,7 +316,7 @@ export const useAuthStore = defineStore('auth', () => {
       return { success: true }
     } catch (error: any) {
       console.error('SSO login failed:', error)
-      const errorMsg = error.response?.data?.detail || error.message || 'SSO登录失败'
+      const errorMsg = error.response?.data?.detail || error.message || i18n.global.t('login.ssoLoginFailed')
       return { success: false, message: errorMsg }
     }
   }
