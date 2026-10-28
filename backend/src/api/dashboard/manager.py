@@ -14,7 +14,7 @@ from src.models.link_monitor import LinkMonitor
 from src.models.circuit_incident import CircuitIncident
 from src.api.auth import get_current_active_user
 from src.models.user import User
-from .common import require_manager_or_admin, to_naive_bjt
+from .common import require_manager_or_admin, to_naive_bjt, IP_OCCUPIED_STATUSES
 
 router = APIRouter()
 
@@ -411,14 +411,12 @@ async def get_risks(
         usable_ips = calculate_usable_ips(prefix.network)
         ip_count_result = await db.execute(
             select(func.count(IPAddress.id))
-            .where(and_(
-                IPAddress.prefix_id == prefix.id,
-                IPAddress.status == 'assigned'
-            ))
+            .where(and_(IPAddress.prefix_id == prefix.id,
+                        IPAddress.status.in_(IP_OCCUPIED_STATUSES)))
         )
         ip_count = ip_count_result.scalar() or 0
         usage_percent = (ip_count / usable_ips * 100) if usable_ips > 0 else 0
-        
+
         if usage_percent > 90:
             risks.append({
                 "severity": "medium",
@@ -505,14 +503,12 @@ async def get_risks(
         usable_ips = calculate_usable_ips(prefix.network)
         ip_count_result = await db.execute(
             select(func.count(IPAddress.id))
-            .where(and_(
-                IPAddress.prefix_id == prefix.id,
-                IPAddress.status == 'assigned'
-            ))
+            .where(and_(IPAddress.prefix_id == prefix.id,
+                        IPAddress.status.in_(IP_OCCUPIED_STATUSES)))
         )
         ip_count = ip_count_result.scalar() or 0
         usage_percent = (ip_count / usable_ips * 100) if usable_ips > 0 else 0
-        
+
         if 80 <= usage_percent <= 90:
             risks.append({
                 "severity": "low",

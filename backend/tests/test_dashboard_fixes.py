@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from src.models import AuditLog, Backup, Circuit, Device, LinkMonitor, Role, User
+from src.models import AuditLog, Backup, Circuit, Device, IPAddress, LinkMonitor, Prefix, Role, User
 from src.services.permission_service import pwd_context
 
 # 六个原无认证的汇总/时间线接口（本轮已统一加 get_current_active_user）
@@ -280,6 +280,27 @@ async def test_expired_circuit_risk_first(client, db_session):
     assert "已逾期未续约" in first["title"]
     assert first["count"] == 2
     assert first["action_url"] == "/circuits?filter=expired"
+
+
+# ==================== IP 占用口径 ====================
+
+@pytest.mark.asyncio
+async def test_ip_used_occupied_status_and_prefix_scoped(client, db_session):
+    """IP 占用口径与 IPAM 页 ipCount 一致：已分配+预留（含中文存量），孤立 IP（无子网）不计。"""
+    p1 = Prefix(network="10.10.0.0/24")
+    db_session.add(p1)
+    await db_session.flush()
+    db_session.add(IPAddress(address="10.10.0.1", prefix_id=p1.id, status="assigned"))
+    db_session.add(IPAddress(address="10.10.0.2", prefix_id=p1.id, status="reserved"))
+    db_session.add(IPAddress(address="10.10.0.3", prefix_id=p1.id, status="已分配"))  # 中文存量
+    db_session.add(IPAddress(address="10.10.0.4", prefix_id=p1.id, status="available"))  # 未分配不计
+    db_session.add(IPAddress(address="10.10.0.9", prefix_id=None, status="assigned"))  # 孤立不计
+    await db_session.commit()
+
+    headers = await _login(client, "admin", "admin123")
+    resp = await client.get("/api/v1/dashboard/stats", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ip"]["used"] == 3
 
 
 # ==================== recent-logs 字段 ====================

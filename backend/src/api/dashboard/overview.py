@@ -5,6 +5,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.api.dependencies import get_current_active_user
+from .common import IP_OCCUPIED_STATUSES
 from src.models.user import User
 from src.models.circuit import Circuit
 from src.models.device import Device
@@ -52,8 +53,10 @@ async def get_dashboard_stats(
             select(func.count(func.distinct(LinkMonitor.device_id)))
             .where(LinkMonitor.status == 'normal')
             .scalar_subquery().label("online_devices"),
+            # IP 占用口径与 IPAM 页 prefix.ipCount 一致：已分配+预留（兼容中文存量），且归属子网
             select(func.count(IPAddress.id))
-            .where(IPAddress.status == 'assigned')
+            .where(IPAddress.status.in_(IP_OCCUPIED_STATUSES),
+                   IPAddress.prefix_id != None)
             .scalar_subquery().label("ip_used"),
             select(func.count(AlertRecord.id))
             .where(AlertRecord.status == 'active')
@@ -191,10 +194,10 @@ async def get_prefixes_usage(
     prefixes_result = await db.execute(select(Prefix))
     prefixes = prefixes_result.scalars().all()
 
-    # 一次 GROUP BY 查出各前缀已分配 IP 数（替代循环内逐前缀查询的 N+1）
+    # 一次 GROUP BY 查出各前缀占用 IP 数（占用口径与 IPAM 页 ipCount 一致：已分配+预留）
     counts_result = await db.execute(
         select(IPAddress.prefix_id, func.count(IPAddress.id))
-        .where(IPAddress.status == 'assigned')
+        .where(IPAddress.status.in_(IP_OCCUPIED_STATUSES))
         .group_by(IPAddress.prefix_id)
     )
     assigned_by_prefix = dict(counts_result.all())

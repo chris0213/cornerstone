@@ -6,6 +6,10 @@ from src.models.user import User
 
 BJT = timezone(timedelta(hours=8))  # 北京时间
 
+# IP「业务占用」口径：已分配 + 预留（不含未分配），与 IPAM 页 prefix.ipCount 聚合一致；
+# 同时兼容英文枚举与 DB 存量中文值（扫描器/表单历史上写入过两种）
+IP_OCCUPIED_STATUSES = ("assigned", "active", "已分配", "reserved", "预留")
+
 
 def to_naive_bjt(dt: datetime) -> datetime:
     """DB 时间转北京挂钟 naive（PG timestamptz 返回 aware UTC，SQLite 返回 naive）
