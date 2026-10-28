@@ -48,6 +48,7 @@ export interface AuditLogItem {
   resource: string
   detail: string
   success: string
+  ip_address: string | null
   created_at: string
 }
 

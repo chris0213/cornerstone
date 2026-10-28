@@ -19,56 +19,67 @@ const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const router = useRouter()
 
-// 快捷操作列表
+// 快捷操作：按权限点显隐（hasPermission 对 super_admin 直通）
 const quickActions = computed(() => {
   const actions = []
-  
-  if (isAdmin.value || isEngineer.value) {
+  const can = (perm: string) => authStore.hasPermission(perm)
+
+  if (can('devices:write')) {
     actions.push({
       icon: 'Plus',
-      label: '添加设备',
+      label: t('dashboard.actAddDevice'),
       path: '/devices',
       color: '#409EFF',
-      description: '快速添加网络设备'
-    })
-    actions.push({
-      icon: 'Globe',
-      label: '添加专线',
-      path: '/circuits',
-      color: '#67C23A',
-      description: '管理网络专线'
-    })
-    actions.push({
-      icon: 'Network',
-      label: '分配IP',
-      path: '/ipam',
-      color: '#E6A23C',
-      description: 'IP地址管理'
-    })
-    actions.push({
-      icon: 'Clock',
-      label: '创建巡检',
-      path: '/inspection',
-      color: '#909399',
-      description: '设备巡检任务'
-    })
-    actions.push({
-      icon: 'Database',
-      label: '备份配置',
-      path: '/backups',
-      color: '#F56C6C',
-      description: '配置备份管理'
+      description: t('dashboard.actAddDeviceDesc')
     })
   }
-  
-  actions.push({
-    icon: 'FolderOpened',
-    label: '查看站点',
-    path: '/sites',
-    color: '#9C27B0',
-    description: '站点资源管理'
-  })
-  
+  if (can('circuits:write')) {
+    actions.push({
+      icon: 'Globe',
+      label: t('dashboard.actAddCircuit'),
+      path: '/circuits',
+      color: '#67C23A',
+      description: t('dashboard.actAddCircuitDesc')
+    })
+  }
+  if (can('ipam:write')) {
+    actions.push({
+      icon: 'Network',
+      label: t('dashboard.actAllocIp'),
+      path: '/ipam',
+      color: '#E6A23C',
+      description: t('dashboard.actAllocIpDesc')
+    })
+  }
+  // 智能巡检入口在报告中心（/inspection 已 redirect 到 /reports）
+  if (can('inspection:write')) {
+    actions.push({
+      icon: 'Clock',
+      label: t('dashboard.actInspection'),
+      path: '/reports',
+      color: '#909399',
+      description: t('dashboard.actInspectionDesc')
+    })
+  }
+  if (can('backups:read')) {
+    actions.push({
+      icon: 'Database',
+      label: t('dashboard.actBackup'),
+      path: '/backups',
+      color: '#F56C6C',
+      description: t('dashboard.actBackupDesc')
+    })
+  }
+  if (can('sites:read')) {
+    actions.push({
+      icon: 'FolderOpened',
+      label: t('dashboard.actViewSites'),
+      path: '/sites',
+      color: '#9C27B0',
+      description: t('dashboard.actViewSitesDesc')
+    })
+  }
+
   return actions
 })
 
@@ -80,17 +91,16 @@ function navigateTo(path: string) {
 const isAdmin = computed(() => authStore.user?.role === 'super_admin')
 const isEngineer = computed(() => authStore.user?.role === 'engineer')
 
-// 根据角色确定可见的概览卡片
+// 根据权限点确定可见的概览卡片
 const visibleCards = computed(() => {
   const cards = []
-  // 所有角色都能看到站点统计
+  // 站点/设备/带宽基础统计对所有登录用户可见
   cards.push('sites', 'devices', 'bandwidth')
-  // 工程师和管理员能看到 IP 统计
-  if (isAdmin.value || isEngineer.value) cards.push('ipam')
-  // 工程师和管理员能看到备份统计
-  if (isAdmin.value || isEngineer.value) cards.push('backups')
-  // 管理员能看到系统健康状态
-  if (isAdmin.value) cards.push('health')
+  // IP 统计、备份统计需要对应读权限
+  if (authStore.hasPermission('ipam:read')) cards.push('ipam')
+  if (authStore.hasPermission('backups:read')) cards.push('backups')
+  // 系统健康状态需要告警读权限
+  if (authStore.hasPermission('alerts:read')) cards.push('health')
   return cards
 })
 
@@ -103,6 +113,8 @@ const circuitTypes = ref<CircuitTypeItem[]>([])
 const loading = ref(true)
 const searchQuery = ref('')
 const backupTimeRange = ref('all')
+// 数据更新时间（每次加载刷新）
+const lastUpdated = ref('')
 
 const timeRangeOptions = [
   { label: t('dashboard.allTime'), value: 'all' },
@@ -112,13 +124,21 @@ const timeRangeOptions = [
   { label: t('dashboard.last30d'), value: '30d' }
 ]
 
-// 设备类型颜色映射
+// 设备品牌颜色映射（后端 /dashboard/device-types 按品牌分组，key 为品牌英文标识）
 const deviceTypeColors: Record<string, string> = {
-  'router': '#409EFF',
-  'switch': '#67C23A',
-  'firewall': '#E6A23C',
-  'server': '#909399',
-  'other': '#F56C6C',
+  'huawei': '#E6A23C',
+  'cisco': '#409EFF',
+  'ruijie': '#F56C6C',
+  'h3c': '#67C23A',
+  'juniper': '#722ED1',
+  'fortinet': '#36BFFA',
+  'paloalto': '#FF6347',
+  'arista': '#00CED1',
+  'mikrotik': '#F7BA1E',
+  'dell': '#4682B4',
+  'hp': '#9932CC',
+  'linux': '#909399',
+  'other': '#C0C4CC',
   'unknown': '#909399'
 }
 
@@ -143,10 +163,22 @@ function formatTime(dateString: string) {
 
 // 操作日志翻译映射
 function getActionTranslation(action: string): string {
+  // 数据库 action 值中英文混杂（用户登录/删除用户 为中文，delete/create 为英文枚举），统一映射
   const actionMap: Record<string, string> = {
     '用户登录': t('common.userLogin'),
     '登录成功': t('common.loginSuccess'),
-    '登录失败': t('common.loginFailed')
+    '登录失败': t('common.loginFailed'),
+    'delete': t('dashboard.actDelete'),
+    'create': t('dashboard.actCreate'),
+    'update': t('dashboard.actUpdate'),
+    'test': t('dashboard.actTest'),
+    'import': t('dashboard.actImport'),
+    'notification_update': t('dashboard.actNotificationUpdate'),
+    'notification_test': t('dashboard.actNotificationTest'),
+    'brand_update': t('dashboard.actBrandUpdate'),
+    'brand_reset': t('dashboard.actBrandReset'),
+    'logo_upload': t('dashboard.actLogoUpload'),
+    'logo_delete': t('dashboard.actLogoDelete')
   }
   return actionMap[action] || action
 }
@@ -155,7 +187,13 @@ function getActionTranslation(action: string): string {
 function getResourceTranslation(resource: string): string {
   const resourceMap: Record<string, string> = {
     '认证': t('common.auth'),
-    '系统': t('common.system')
+    '系统': t('common.system'),
+    'system_settings': t('dashboard.resSystemSettings'),
+    '用户': t('dashboard.resUser'),
+    '设备': t('dashboard.resDevice'),
+    '专线': t('dashboard.resCircuit'),
+    'IP地址': t('dashboard.resIp'),
+    '报告': t('dashboard.resReport')
   }
   return resourceMap[resource] || resource
 }
@@ -199,6 +237,7 @@ async function loadDashboardData() {
     recentLogs.value = logs
     deviceTypes.value = deviceTypesData
     circuitTypes.value = circuitTypesData
+    lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   } catch (error) {
     console.error('Failed to load dashboard data:', error)
   } finally {
@@ -217,9 +256,10 @@ onMounted(() => {
 
 <template>
   <div class="engineer-dashboard" v-loading="loading">
+    <div class="data-updated-bar" v-if="lastUpdated">{{ t('dashboard.updatedAt', { time: lastUpdated }) }}</div>
     <div class="overview-cards">
       <div v-if="visibleCards.includes('sites')" class="overview-card" @click="navigateTo('/sites')">
-        <div class="overview-card-label">站点</div>
+        <div class="overview-card-label">{{ t('sites.title') }}</div>
         <div class="overview-card-value">{{ dashboardStats?.sites.total || 0 }}</div>
         <div class="overview-card-trend">{{ t('topology.deviceCount') }}</div>
         <div class="overview-card-arrow">›</div>
@@ -265,13 +305,14 @@ onMounted(() => {
         </div>
         <div class="overview-card-value">{{ dashboardStats?.backups.successful || 0 }}/{{ dashboardStats?.backups.failed || 0 }}</div>
         <div class="overview-card-trend">{{ t('backups.backupSuccess') }} / {{ t('backups.backupFailed') }}</div>
+        <div class="overview-card-hint">{{ t('dashboard.backupRangeHint') }}</div>
         <div class="overview-card-arrow">›</div>
       </div>
-      <div v-if="visibleCards.includes('health')" class="overview-card" :style="{ borderLeftColor: dashboardStats?.alerts.pending ? '#F56C6C' : '#67C23A' }" @click="navigateTo('/alerts?status=pending')">
-        <div class="overview-card-label">未处理告警</div>
-        <div class="overview-card-value" :style="{ color: dashboardStats?.alerts.pending ? '#F56C6C' : '#67C23A' }">{{ dashboardStats?.alerts.pending || 0 }}</div>
-        <div class="overview-card-trend" :style="{ color: dashboardStats?.alerts.pending ? '#F56C6C' : '#67C23A' }">
-          {{ dashboardStats?.alerts.pending ? '有待处理告警' : '一切正常' }}
+      <div v-if="visibleCards.includes('health')" class="overview-card" :style="{ borderLeftColor: dashboardStats?.alerts.pending ? 'var(--accent-danger)' : 'var(--accent-success)' }" @click="navigateTo('/alerts?status=pending')">
+        <div class="overview-card-label">{{ t('dashboard.pendingAlerts') }}</div>
+        <div class="overview-card-value" :style="{ color: dashboardStats?.alerts.pending ? 'var(--accent-danger)' : 'var(--accent-success)' }">{{ dashboardStats?.alerts.pending || 0 }}</div>
+        <div class="overview-card-trend" :style="{ color: dashboardStats?.alerts.pending ? 'var(--accent-danger)' : 'var(--accent-success)' }">
+          {{ dashboardStats?.alerts.pending ? t('dashboard.hasPendingAlerts') : t('dashboard.noPendingAlerts') }}
         </div>
         <div class="overview-card-arrow">›</div>
       </div>
@@ -282,7 +323,7 @@ onMounted(() => {
         <div class="quick-actions-panel">
           <div class="panel-header">
             <el-icon><Lightning /></el-icon>
-            <span>快捷操作</span>
+            <span>{{ t('dashboard.quickActions') }}</span>
           </div>
           <div class="quick-actions-grid">
             <div 
@@ -335,11 +376,11 @@ onMounted(() => {
     </div>
 
     <div class="bottom-grid">
-      <el-card v-if="isAdmin || isEngineer" class="table-card" shadow="never">
+      <el-card v-if="authStore.hasPermission('logs:read')" class="table-card" shadow="never">
         <template #header>
           <div class="card-title">
             <el-icon><Monitor /></el-icon>
-            子网使用率
+            {{ t('dashboard.subnetUsage') }}
           </div>
         </template>
         <div class="usage-section">
@@ -367,7 +408,7 @@ onMounted(() => {
         <template #header>
           <div class="card-title">
             <el-icon><Cpu /></el-icon>
-            设备类型分布
+            {{ t('dashboard.brandDistribution') }}
           </div>
         </template>
         <div class="device-types-section">
@@ -382,7 +423,7 @@ onMounted(() => {
         </div>
       </el-card>
 
-      <el-card v-if="isAdmin || isEngineer" class="table-card" shadow="never">
+      <el-card v-if="authStore.hasPermission('logs:read')" class="table-card" shadow="never">
         <template #header>
           <div class="card-title">
             <el-icon><Clock /></el-icon>
@@ -409,7 +450,11 @@ onMounted(() => {
                 <span class="activity-resource">· {{ getResourceTranslation(log.resource) }}</span>
               </div>
               <div class="activity-detail">{{ getDetailTranslation(log.detail) }}</div>
-              <div class="activity-time">{{ log.created_at ? formatTime(log.created_at) : '-' }}</div>
+              <div class="activity-meta">
+                <span v-if="log.user" class="activity-user">{{ log.user }}</span>
+                <span v-if="log.ip_address" class="activity-ip">{{ log.ip_address }}</span>
+                <span class="activity-time">{{ log.created_at ? formatTime(log.created_at) : '-' }}</span>
+              </div>
             </div>
           </div>
           <el-empty v-if="filteredLogs.length === 0" :description="t('common.noData')" />
@@ -426,6 +471,19 @@ onMounted(() => {
   gap: 20px;
 }
 
+.data-updated-bar {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.overview-card-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+
 .overview-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -433,10 +491,10 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--text-secondary);
   transition: all 0.2s ease;
   position: relative;
   cursor: pointer;
@@ -448,14 +506,14 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.overview-card-success { border-left-color: #52c41a; }
+.overview-card-success { border-left-color: var(--accent-success); }
 .overview-card-warning { border-left-color: #faad14; }
-.overview-card-blue { border-left-color: #1890ff; }
+.overview-card-blue { border-left-color: var(--accent-primary); }
 .overview-card-purple { border-left-color: #722ed1; }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
@@ -473,19 +531,19 @@ onMounted(() => {
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--text-primary);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
 }
 
 .overview-card-sub-trend {
   font-size: 11px;
-  color: #bfbfbf;
+  color: var(--text-muted);
   margin-top: 2px;
 }
 
@@ -500,7 +558,7 @@ onMounted(() => {
 }
 
 .overview-card:hover .overview-card-arrow {
-  color: #1890ff;
+  color: var(--accent-primary);
   right: 12px;
 }
 
@@ -549,7 +607,7 @@ onMounted(() => {
 }
 
 .circuit-types-card {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -566,7 +624,7 @@ onMounted(() => {
   border-radius: 6px;
   padding: 12px 14px;
   border-left: 3px solid #e8e8e8;
-  background: #fafafa;
+  background: var(--bg-secondary);
   transition: all 0.2s ease;
 }
 
@@ -589,7 +647,7 @@ onMounted(() => {
 
 .circuit-type-name {
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   font-size: 14px;
 }
 
@@ -607,13 +665,13 @@ onMounted(() => {
 
 .circuit-stat-label {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 .circuit-stat-value {
   font-size: 13px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .table-card {
@@ -625,7 +683,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   font-size: 15px;
 }
 
@@ -649,7 +707,7 @@ onMounted(() => {
 
 .usage-tag {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   background: #f5f7fa;
   padding: 2px 8px;
   border-radius: 4px;
@@ -664,24 +722,24 @@ onMounted(() => {
 .usage-bar {
   flex: 1;
   height: 10px;
-  background: #f5f5f5;
+  background: var(--bg-tertiary);
   border-radius: 5px;
   overflow: hidden;
 }
 
 .usage-fill {
   height: 100%;
-  background: #67C23A;
+  background: var(--accent-success);
   transition: width 0.3s ease;
 }
 
 .usage-fill.danger {
-  background: #F56C6C;
+  background: var(--accent-danger);
 }
 
 .usage-percent {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   width: 40px;
   text-align: right;
 }
@@ -697,7 +755,7 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .device-type-row:last-child {
@@ -718,13 +776,13 @@ onMounted(() => {
 
 .device-type-name {
   font-size: 14px;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .device-type-count {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .activity-list {
@@ -737,7 +795,7 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   padding: 12px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   border-radius: 6px;
 }
 
@@ -767,12 +825,12 @@ onMounted(() => {
 
 .activity-header strong {
   font-size: 14px;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .activity-resource {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 .activity-detail {
@@ -781,13 +839,34 @@ onMounted(() => {
   margin-bottom: 4px;
 }
 
+.activity-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.activity-user {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 1px 8px;
+  border-radius: 8px;
+}
+
+.activity-ip {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+}
+
 .activity-time {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
 }
 
 .quick-actions-panel {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -800,7 +879,7 @@ onMounted(() => {
   margin-bottom: 12px;
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .quick-actions-grid {
@@ -816,14 +895,14 @@ onMounted(() => {
   padding: 0;
   height: 60px;
   border-radius: 8px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
   gap: 8px;
 }
 
 .quick-action-item:hover {
-  background: #f5f5f5;
+  background: var(--bg-tertiary);
   transform: translateY(-1px);
 }
 
@@ -840,7 +919,7 @@ onMounted(() => {
 
 .action-label {
   font-size: 13px;
-  color: #262626;
+  color: var(--text-primary);
   font-weight: 500;
 }
 </style>

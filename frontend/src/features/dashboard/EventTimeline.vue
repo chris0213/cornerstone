@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { getTimelineEvents, type TimelineEvent } from '@/api/timeline'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const events = ref<TimelineEvent[]>([])
 const loading = ref(true)
-const timeRange = ref('today')
+const timeRange = ref('7days')
 const selectedTypes = ref<string[]>(['device_offline', 'device_online', 'config_change', 'backup_success', 'backup_fail', 'system'])
 const hasReadAll = ref(false)
 
@@ -170,9 +172,9 @@ onMounted(() => {
     
     <div class="timeline-content" v-loading="loading">
       <div v-if="filteredEvents.length === 0 && !loading" class="empty-state">
-        <el-icon class="empty-icon"><CircleCheck /></el-icon>
-        <div class="empty-text">一切正常 ✓</div>
-        <div class="empty-sub">{{ timeRangeLabel }}，无相关事件</div>
+        <el-icon class="empty-icon"><Clock /></el-icon>
+        <div class="empty-text">{{ t('dashboard.timelineNoEvents') }}</div>
+        <div class="empty-sub">{{ timeRangeLabel }} · {{ t('dashboard.timelineNoEventsSub') }}</div>
       </div>
       
       <div v-for="event in filteredEvents" :key="event.id" class="timeline-item" @click="handleNavigate(event.detail_url)">
@@ -210,7 +212,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .card-actions {
@@ -225,7 +227,7 @@ onMounted(() => {
   gap: 8px;
   margin-bottom: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .filter-tag {
@@ -249,7 +251,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   height: 120px;
-  color: #67C23A;
+  color: var(--accent-success);
 }
 
 .empty-icon {
@@ -264,7 +266,7 @@ onMounted(() => {
 
 .empty-sub {
   font-size: 13px;
-  color: #bfbfbf;
+  color: var(--text-muted);
   margin-top: 4px;
 }
 
@@ -274,7 +276,7 @@ onMounted(() => {
   gap: 8px;
   padding: 8px 12px;
   margin-bottom: 12px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   border-radius: 6px;
   font-size: 13px;
   color: #595959;
@@ -282,16 +284,16 @@ onMounted(() => {
 
 .time-range-bar .el-icon {
   font-size: 14px;
-  color: #1890ff;
+  color: var(--accent-primary);
 }
 
 .time-range-bar strong {
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .event-count {
   margin-left: auto;
-  color: #bfbfbf;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -300,13 +302,13 @@ onMounted(() => {
   gap: 12px;
   padding: 12px;
   border-radius: 8px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .timeline-item:hover {
-  background: #f0f0f0;
+  background: var(--border-light);
 }
 
 .timeline-time {
@@ -318,13 +320,13 @@ onMounted(() => {
 .time-hour {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   font-family: 'SF Mono', monospace;
 }
 
 .time-date {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
 }
 
 .timeline-dot {
@@ -343,13 +345,13 @@ onMounted(() => {
 .event-title {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .event-description {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -361,7 +363,7 @@ onMounted(() => {
 
 .source-tag {
   font-size: 12px;
-  color: #1890ff;
+  color: var(--accent-primary);
   background: #e6f7ff;
   padding: 2px 8px;
   border-radius: 4px;
@@ -369,6 +371,6 @@ onMounted(() => {
 
 .link-hint {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
 }
 </style>
