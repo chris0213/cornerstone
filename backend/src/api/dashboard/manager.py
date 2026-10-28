@@ -14,7 +14,7 @@ from src.models.link_monitor import LinkMonitor
 from src.models.circuit_incident import CircuitIncident
 from src.api.auth import get_current_active_user
 from src.models.user import User
-from .common import require_manager_or_admin, to_naive_bjt, IP_OCCUPIED_STATUSES
+from .common import require_manager_or_admin, to_naive_bjt, IP_OCCUPIED_STATUSES, calculate_usable_ips
 
 router = APIRouter()
 
@@ -394,17 +394,6 @@ async def get_risks(
         })
     
     # 2. 子网使用率超过90%
-    def calculate_usable_ips(network: str) -> int:
-        try:
-            if '/' in network:
-                prefix_length = int(network.split('/')[1])
-                if prefix_length >= 31:
-                    return 1 if prefix_length == 32 else 2
-                return 2 ** (32 - prefix_length) - 2
-            return 254
-        except:
-            return 254
-    
     prefixes_result = await db.execute(select(Prefix))
     prefixes = prefixes_result.scalars().all()
     for prefix in prefixes:

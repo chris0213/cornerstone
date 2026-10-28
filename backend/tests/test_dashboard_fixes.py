@@ -284,6 +284,21 @@ async def test_expired_circuit_risk_first(client, db_session):
 
 # ==================== IP 占用口径 ====================
 
+def test_usable_ip_capacity_matches_frontend_semantics():
+    """容量算法与 IPAM 前端 getPrefixCapacity 同语义：
+    小数 mask（'23.0'）按 23 算（旧实现 int() 抛异常走 254，单条造成 256 分母偏差）。"""
+    from src.api.dashboard.common import calculate_usable_ips as cap
+    assert cap("10.0.0.0/24") == 254
+    assert cap("10.0.0.0/23") == 510
+    assert cap("10.0.0.0/23.0") == 510
+    assert cap("10.0.0.0/31") == 2
+    assert cap("10.0.0.0/32") == 1
+    assert cap("10.0.0.0/16") == 65534
+    assert cap("10.0.0.0") == 254      # 无 mask
+    assert cap("10.0.0.0/40") == 254   # mask 越界
+    assert cap("bad-input") == 254
+
+
 @pytest.mark.asyncio
 async def test_ip_used_occupied_status_and_prefix_scoped(client, db_session):
     """IP 占用口径与 IPAM 页 ipCount 一致：已分配+预留（含中文存量），孤立 IP（无子网）不计。"""

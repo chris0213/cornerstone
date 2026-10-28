@@ -5,7 +5,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.api.dependencies import get_current_active_user
-from .common import IP_OCCUPIED_STATUSES
+from .common import IP_OCCUPIED_STATUSES, calculate_usable_ips
 from src.models.user import User
 from src.models.circuit import Circuit
 from src.models.device import Device
@@ -84,18 +84,6 @@ async def get_dashboard_stats(
     prefixes = prefixes_result.scalars().all()
 
     # 根据CIDR掩码计算每个子网的可用IP数量
-    def calculate_usable_ips(network: str) -> int:
-        """根据CIDR格式计算可用IP数量"""
-        try:
-            if '/' in network:
-                prefix_length = int(network.split('/')[1])
-                # 可用IP数 = 2^(32-prefix_length) - 2（减去网络地址和广播地址）
-                if prefix_length >= 31:
-                    return 1 if prefix_length == 32 else 2  # /32只有1个IP，/31有2个
-                return 2 ** (32 - prefix_length) - 2
-            return 254  # 默认/24
-        except:
-            return 254
 
     ip_total = sum(calculate_usable_ips(prefix) for prefix in prefixes) if prefixes else 0
 
@@ -177,19 +165,6 @@ async def get_prefixes_usage(
     current_user: User = Depends(get_current_active_user)
 ):
     """获取子网使用率"""
-    
-    def calculate_usable_ips(network: str) -> int:
-        """根据CIDR格式计算可用IP数量"""
-        try:
-            if '/' in network:
-                prefix_length = int(network.split('/')[1])
-                if prefix_length >= 31:
-                    return 1 if prefix_length == 32 else 2
-                return 2 ** (32 - prefix_length) - 2
-            return 254
-        except:
-            return 254
-    
     # 获取所有前缀
     prefixes_result = await db.execute(select(Prefix))
     prefixes = prefixes_result.scalars().all()
