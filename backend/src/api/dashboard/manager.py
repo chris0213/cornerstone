@@ -287,8 +287,7 @@ async def get_risks(
         names = "、".join([c.name for c in expired_contracts[:3]])
         if len(expired_contracts) > 3:
             names += f"等{len(expired_contracts)}条"
-        # action_url：前端 CircuitsPage 暂不支持 ?filter= 参数（遗留项，步骤 C 可加），
-        # 先跳专线列表页
+        # action_url：前端 CircuitsPage 已支持 ?filter=expired 自动过滤
         risks.append({
             "severity": "high",
             "category": "circuit",
@@ -296,7 +295,7 @@ async def get_risks(
             "description": f"{names} 合同已到期且未续约，存在服务中断风险",
             "count": len(expired_contracts),
             "resource_ids": [],
-            "action_url": "/circuits"
+            "action_url": "/circuits?filter=expired"
         })
 
     # 1. 保修已过期的设备

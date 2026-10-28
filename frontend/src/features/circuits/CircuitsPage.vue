@@ -547,6 +547,11 @@ onMounted(async () => {
   // 支持 ?siteId= 查询参数：从站点管理页跳转过来时自动过滤
   const q = useRoute().query.siteId
   if (q) filterSiteId.value = String(q)
+  // 支持 ?filter= 查询参数（expired/fault/expiring）：首页风险看板跳转时自动过滤
+  const f = useRoute().query.filter
+  if (f && ['expired', 'fault', 'expiring'].includes(String(f))) {
+    quickFilter.value = String(f) as 'expired' | 'fault' | 'expiring'
+  }
 })
 </script>
 
