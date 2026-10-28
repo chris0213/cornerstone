@@ -24,13 +24,14 @@ async def get_timeline_events(
     # 时间口径统一为 naive 北京挂钟：
     # - 前端传本地挂钟字符串（无时区后缀）→ naive 原样；
     # - 兼容旧调用方传 UTC aware ISO → to_naive_bjt 归一为北京挂钟；
-    # - 最终格式化为 'YYYY-MM-DD HH:MM:SS' 字符串绑定：
-    #   SQLite 列存该格式，datetime 对象绑定可能携带 T 分隔/时区后缀导致
-    #   字符串比较错位（T > 空格使 end 条件恒假）；PG 下 timestamptz 按字符串解析，
-    #   依赖 session timezone（生产 compose TZ=Asia/Shanghai）。
-    # ⚠ PG 行为需在 PG 环境验证后才能认为完全闭合。
-    def _norm_bound_time(dt: datetime) -> str:
-        return to_naive_bjt(dt).strftime("%Y-%m-%d %H:%M:%S")
+    # - 绑定值必须是「naive datetime 对象」而非字符串：
+    #   * SQLite：naive datetime 由驱动转为与列存储一致的 'YYYY-MM-DD HH:MM:SS' 格式比较；
+    #   * PG(asyncpg)：强类型协议，str 绑定会报
+    #     `operator does not exist: timestamp with time zone >= text`（生产实测 500）；
+    #     naive datetime → timestamp(无时区)，由 PG 按 session timezone 隐式转换。
+    # ⚠ PG 语义需在 PG 环境复测（生产 compose TZ=Asia/Shanghai）。
+    def _norm_bound_time(dt: datetime) -> datetime:
+        return to_naive_bjt(dt)
 
     now = datetime.now(timezone.utc)
     if start_time is None:
