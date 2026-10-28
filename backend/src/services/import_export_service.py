@@ -281,6 +281,14 @@ class PrefixImportExport(ImportExportService):
                     failed_count += 1
                     errors.append(f"第{idx}行: 子网不能为空")
                     continue
+                # 校验并规范化 CIDR（缩写补零 / host bits 归零），非法行记为失败
+                from ..schemas.prefix import normalize_cidr
+                try:
+                    network = normalize_cidr(str(network))
+                except ValueError as ve:
+                    failed_count += 1
+                    errors.append(f"第{idx}行: {ve}")
+                    continue
 
                 site_id = None
                 if row_data.get("site_name"):
