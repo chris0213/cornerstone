@@ -18,6 +18,7 @@ import { getLocale } from '@/i18n'
 const { t, locale } = useI18n()
 
 const router = useRouter()
+const route = useRoute()
 const store = useAppStore()
 const { circuits } = storeToRefs(store)
 
@@ -545,10 +546,11 @@ onMounted(async () => {
   await loadSites()
   loadCircuits()
   // 支持 ?siteId= 查询参数：从站点管理页跳转过来时自动过滤
-  const q = useRoute().query.siteId
+  // 注意：route 需在 setup 顶层 useRoute()（await 之后再调用会丢失组件实例上下文）
+  const q = route.query.siteId
   if (q) filterSiteId.value = String(q)
   // 支持 ?filter= 查询参数（expired/fault/expiring）：首页风险看板跳转时自动过滤
-  const f = useRoute().query.filter
+  const f = route.query.filter
   if (f && ['expired', 'fault', 'expiring'].includes(String(f))) {
     quickFilter.value = String(f) as 'expired' | 'fault' | 'expiring'
   }
