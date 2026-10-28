@@ -99,10 +99,19 @@ export interface ManagerStats {
     current: number | null
     last_month: number | null
     trend: 'up' | 'down' | 'stable' | null
+    /** 本月有探测记录但全部异常（区分"0%"与"探测全失败"） */
+    all_failed: boolean
+    /** 上月是否有探测数据（false 时前端显示"上月无数据"） */
+    last_month_available: boolean
   }
   circuit_cost: {
+    /** 合同期内（已开通且未到期，无 contract_end 视为持续有效） */
+    in_contract: number
+    /** 已到期未续约（contract_end<今天 且 status 仍在册） */
+    expired_unrenewed: number
+    /** 兼容字段 = in_contract + expired_unrenewed */
     current: number
-    last_month: number
+    last_month: number | null
     trend: 'up' | 'down' | 'stable' | null
   }
   open_incidents: {

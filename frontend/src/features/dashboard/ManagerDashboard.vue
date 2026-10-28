@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/store/auth'
+import { useI18n } from 'vue-i18n'
 import {
   getManagerStats,
   getRisks,
@@ -27,8 +27,6 @@ import {
   Money,
   Clock,
   CircleCheck,
-  ArrowUp,
-  ArrowDown,
   Document,
   Download
 } from '@element-plus/icons-vue'
@@ -43,7 +41,7 @@ import { formatFileSize } from '@/lib/utils'
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, AxisPointerComponent, CanvasRenderer])
 
 const router = useRouter()
-const authStore = useAuthStore()
+const { t } = useI18n()
 
 const loading = ref(true)
 const managerStats = ref<ManagerStats | null>(null)
@@ -52,8 +50,8 @@ const costTrendData = ref<CircuitCostTrend | null>(null)
 const lifecycleData = ref<DeviceLifecycle | null>(null)
 const monthlyIncidents = ref<MonthlyIncidents | null>(null)
 const showExpiringDialog = ref(false)
-
-const isAdmin = computed(() => authStore.user?.role === 'super_admin')
+// 数据更新时间（每次加载刷新）
+const lastUpdated = ref('')
 
 function formatMoney(amount: number): string {
   if (amount >= 10000) {
@@ -61,6 +59,58 @@ function formatMoney(amount: number): string {
   }
   return `¥${amount.toLocaleString()}`
 }
+
+// ==================== 可用性卡片（消费 all_failed / last_month_available 标记） ====================
+
+const availabilityValueText = computed(() => {
+  const a = managerStats.value?.availability
+  if (!a || a.current == null) return t('manager.notDetected')
+  return `${a.current}%`
+})
+
+const availabilityTrendText = computed(() => {
+  const a = managerStats.value?.availability
+  if (!a) return ''
+  if (a.current == null) return t('manager.noProbeData')
+  if (a.all_failed) return t('manager.allProbeFailed')
+  if (a.trend === 'up') return t('manager.vsLastMonthUp')
+  if (a.trend === 'down') return t('manager.vsLastMonthDown')
+  if (a.trend === 'stable') return t('manager.vsLastMonthStable')
+  // trend=null：上月无探测数据时明确提示，避免误读为"持平"
+  return a.last_month_available ? '—' : t('manager.lastMonthNoData')
+})
+
+const availabilityTrendColor = computed(() => {
+  const a = managerStats.value?.availability
+  if (!a) return 'var(--text-muted)'
+  if (a.all_failed) return 'var(--accent-danger)'
+  if (a.trend === 'up') return 'var(--accent-success)'
+  if (a.trend === 'down') return 'var(--accent-danger)'
+  return 'var(--text-muted)'
+})
+
+const availabilityValueColor = computed(() => {
+  const a = managerStats.value?.availability
+  if (a?.all_failed) return 'var(--accent-danger)'
+  return 'var(--text-primary)'
+})
+
+// ==================== 费用卡片（消费 in_contract / expired_unrenewed 拆分） ====================
+
+const costMainText = computed(() => formatMoney(managerStats.value?.circuit_cost.in_contract ?? 0))
+
+const costExpiredText = computed(() => {
+  const expired = managerStats.value?.circuit_cost.expired_unrenewed ?? 0
+  return expired > 0 ? `${t('manager.costExpiredUnrenewed')} ${formatMoney(expired)}` : ''
+})
+
+const costTrendText = computed(() => {
+  const trend = managerStats.value?.circuit_cost.trend
+  if (trend === 'up') return t('manager.costTrendUp')
+  if (trend === 'down') return t('manager.costTrendDown')
+  // 无月租历史：不显示假同比
+  return t('manager.costTrendNoData')
+})
 
 function getCircuitTypeColor(type: string): string {
   // 已知类型固定颜色
@@ -92,24 +142,12 @@ function getCircuitTypeColor(type: string): string {
   return presetColors[index]
 }
 
-function getTrendIcon(trend: string | null) {
-  if (trend === 'up') return ArrowUp
-  if (trend === 'down') return ArrowDown
-  return null
-}
-
-function getTrendColor(trend: string | null): string {
-  return trend === 'up' ? '#67C23A' : trend === 'down' ? '#F56C6C' : '#909399'
-}
-
-
-
 function getSeverityBorderColor(severity: string): string {
   switch (severity) {
-    case 'high': return '#F56C6C'
-    case 'medium': return '#E6A23C'
-    case 'low': return '#67C23A'
-    default: return '#909399'
+    case 'high': return 'var(--accent-danger)'
+    case 'medium': return 'var(--accent-warning)'
+    case 'low': return 'var(--accent-success)'
+    default: return 'var(--text-muted)'
   }
 }
 
@@ -117,19 +155,32 @@ function navigateTo(url: string) {
   router.push(url)
 }
 
+// 趋势图中实际有数据的类型（图与下方 breakdown 共用，保证两者一致）
+const costByType = computed(() => (costTrendData.value?.by_type ?? {}) as Record<string, number[]>)
+
+const chartTypes = computed(() => {
+  const byType = costByType.value
+  return Object.keys(byType).filter(typeKey => (byType[typeKey] || []).some(v => v > 0))
+})
+
+function costLastValue(type: string): number {
+  const arr = costByType.value[type] || []
+  return arr[arr.length - 1] || 0
+}
+
 function initCostChart() {
   if (!costTrendData.value) return
-  
+
   const chartDom = document.getElementById('cost-trend-chart')
   if (!chartDom) return
-  
+
   const myChart = echarts.init(chartDom)
-  
+
   const months = costTrendData.value.months.map(m => m.slice(5) + '月')
-  
+
   const series = [
     {
-      name: '总费用',
+      name: t('manager.costTotal'),
       type: 'line',
       data: costTrendData.value.total_costs,
       smooth: true,
@@ -138,19 +189,18 @@ function initCostChart() {
     }
   ]
 
-  const byType = costTrendData.value?.by_type as Record<string, number[]> | undefined
-  // 动态获取所有存在费用数据的类型（支持新增类型）
-  const allTypes = byType ? Object.keys(byType) : []
-  allTypes.forEach(typeKey => {
-    const typeData = byType?.[typeKey]
-    if (typeData && typeData.some(v => v > 0)) {
+  // 类型线用虚线细线：与总费用实线在视觉上区分（构成 vs 总量）
+  // 注：echarts 为 canvas 绘制，不支持 CSS 变量，色值保留硬编码
+  chartTypes.value.forEach(typeKey => {
+    const typeData = (costTrendData.value?.by_type as Record<string, number[]>)?.[typeKey]
+    if (typeData) {
       const color = getCircuitTypeColor(typeKey)
       series.push({
         name: typeKey,
         type: 'line',
         data: typeData,
         smooth: true,
-        lineStyle: { width: 2, color } as any,
+        lineStyle: { width: 2, type: 'dashed' } as any,
         itemStyle: { color }
       })
     }
@@ -231,7 +281,7 @@ function initLifecycleChart() {
       noteEl.style.color = '#909399'
       noteEl.style.fontSize = '12px'
       noteEl.style.marginTop = '8px'
-      noteEl.innerText = `※ ${unsetCount} 台设备未录入采购日期，不计入年龄分布统计` 
+      noteEl.innerText = t('manager.uncountedNote', { n: unsetCount })
       noteContainer.appendChild(noteEl)
     }
   }
@@ -319,6 +369,8 @@ async function loadData() {
     if (lifecycle) lifecycleData.value = lifecycle
     if (incidents) monthlyIncidents.value = incidents
 
+    lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+
     setTimeout(() => {
       initCostChart()
       initLifecycleChart()
@@ -347,11 +399,11 @@ async function handleGenerateReport() {
   try {
     const now = new Date()
     await generateMonthlyReport(now.getFullYear(), now.getMonth() + 1)
-    ElMessage.success('月报生成成功')
+    ElMessage.success(t('manager.reportGenerated'))
     await fetchReports()
   } catch (error: any) {
     console.error('Failed to generate report:', error)
-    ElMessage.error(error.response?.data?.detail || '月报生成失败')
+    ElMessage.error(error.response?.data?.detail || t('manager.reportGenerateFailed'))
   } finally {
     generatingReport.value = false
   }
@@ -370,7 +422,7 @@ async function handleDownloadReport(item: ReportItem) {
     window.URL.revokeObjectURL(url)
   } catch (error) {
     console.error('Failed to download report:', error)
-    ElMessage.error('下载失败')
+    ElMessage.error(t('manager.downloadFailed'))
   }
 }
 
@@ -391,7 +443,7 @@ function getOldDevicesWarning(): string | null {
   if (!lifecycleData.value) return null
   const oldCount = lifecycleData.value.age_distribution.find(d => (d.range && (d.range.includes('5年以上') || d.range.includes('> 5年'))))?.count || 0
   if (oldCount > 0) {
-    return `当前有 ${oldCount} 台设备使用年限超过5年，建议制定更换计划`
+    return t('manager.oldDevicesWarning', { n: oldCount })
   }
   return null
 }
@@ -405,27 +457,27 @@ function getExpiringDisplayCount(): number {
 function getExpiringIconStyle(): Record<string, string> {
   const stats = managerStats.value?.expiring_soon
   if (!stats || stats.total_count === 0) {
-    return { background: '#f6ffed', color: '#52c41a' }
+    return { background: '#f6ffed', color: 'var(--accent-success)' }
   }
   if (stats.urgent_count > 0) {
-    return { background: '#fff2f0', color: '#F56C6C' }
+    return { background: '#fff2f0', color: 'var(--accent-danger)' }
   }
-  return { background: '#fff7e6', color: '#E6A23C' }
+  return { background: '#fff7e6', color: 'var(--accent-warning)' }
 }
 
 function getExpiringTrendColor(): string {
   const stats = managerStats.value?.expiring_soon
-  if (!stats || stats.total_count === 0) return '#67C23A'
-  if (stats.urgent_count > 0) return '#F56C6C'
-  return '#E6A23C'
+  if (!stats || stats.total_count === 0) return 'var(--accent-success)'
+  if (stats.urgent_count > 0) return 'var(--accent-danger)'
+  return 'var(--accent-warning)'
 }
 
 function getExpiringTrendText(): string {
   const stats = managerStats.value?.expiring_soon
-  if (!stats || stats.total_count === 0) return '无到期事项 ✓'
+  if (!stats || stats.total_count === 0) return t('manager.noExpiring')
   const parts = []
-  if (stats.urgent_count > 0) parts.push(`🔴${stats.urgent_count}项紧急`)
-  if (stats.warning_count > 0) parts.push(`🟡${stats.warning_count}项即将到期`)
+  if (stats.urgent_count > 0) parts.push(`🔴${t('manager.urgentItems', { n: stats.urgent_count })}`)
+  if (stats.warning_count > 0) parts.push(`🟡${t('manager.warningItems', { n: stats.warning_count })}`)
   return parts.join(' ')
 }
 
@@ -437,57 +489,55 @@ onMounted(() => {
 <template>
   <div class="manager-dashboard" v-loading="loading">
     <div class="page-header">
-      <h1>管理看板</h1>
+      <h1>{{ t('manager.title') }}</h1>
+      <span v-if="lastUpdated" class="data-updated">{{ t('dashboard.updatedAt', { time: lastUpdated }) }}</span>
     </div>
 
     <!-- 第一行：四个核心指标卡片 -->
     <div class="overview-cards">
       <!-- 本月网络可用性 -->
       <div class="overview-card" @click="navigateTo('/circuits')">
-        <div class="card-icon" style="background: #e6f7ff; color: #409EFF">
+        <div class="card-icon" style="background: #e6f7ff; color: var(--accent-primary)">
           <el-icon><TrendCharts /></el-icon>
         </div>
         <div class="card-content">
-          <div class="card-label">本月网络可用性</div>
-          <div class="card-value">
-            {{ managerStats?.availability.current != null ? managerStats?.availability.current + '%' : '暂无数据' }}
-            <el-icon v-if="getTrendIcon(managerStats?.availability.trend || null)" :style="{ color: getTrendColor(managerStats?.availability.trend || null) }">
-              <component :is="getTrendIcon(managerStats?.availability.trend || null)" />
-            </el-icon>
+          <div class="card-label">{{ t('manager.availability') }}</div>
+          <div class="card-value" :style="{ color: availabilityValueColor }">
+            {{ availabilityValueText }}
           </div>
-          <div class="card-trend" :style="{ color: getTrendColor(managerStats?.availability.trend || null) }">
-            {{ managerStats?.availability.trend === 'up' ? '较上月 ↑' : managerStats?.availability.trend === 'down' ? '较上月 ↓' : '与上月持平' }}
+          <div class="card-trend" :style="{ color: availabilityTrendColor }">
+            {{ availabilityTrendText }}
           </div>
         </div>
       </div>
 
-      <!-- 专线月租费用 -->
+      <!-- 专线月租费用（合同内为主值，已到期未续约为副行） -->
       <div class="overview-card" @click="navigateTo('/circuits')">
-        <div class="card-icon" style="background: #f6ffed; color: #52c41a">
+        <div class="card-icon" style="background: #f6ffed; color: var(--accent-success)">
           <el-icon><Money /></el-icon>
         </div>
         <div class="card-content">
-          <div class="card-label">专线月租费用</div>
-          <div class="card-value">{{ formatMoney(managerStats?.circuit_cost.current || 0) }}</div>
-          <div class="card-trend" :style="{ color: getTrendColor(managerStats?.circuit_cost.trend === 'up' ? 'down' : managerStats?.circuit_cost.trend || null) }">
-            {{ managerStats?.circuit_cost.trend === 'up' ? '同比 ↑' : managerStats?.circuit_cost.trend === 'down' ? '同比 ↓' : '较稳定' }}
+          <div class="card-label">{{ t('manager.circuitCost') }}</div>
+          <div class="card-value">{{ costMainText }}</div>
+          <div class="card-trend" :style="{ color: 'var(--text-muted)' }">
+            <template v-if="costExpiredText">{{ costExpiredText }} · </template>{{ costTrendText }}
           </div>
         </div>
       </div>
 
       <!-- 未解决故障 -->
       <div class="overview-card" :class="{ 'has-alert': (managerStats?.open_incidents.count || 0) > 0 }" @click="navigateTo('/alerts?tab=circuit')">
-        <div class="card-icon" :style="{ background: (managerStats?.open_incidents.count || 0) > 0 ? '#fff2f0' : '#f6ffed', color: (managerStats?.open_incidents.count || 0) > 0 ? '#F56C6C' : '#52c41a' }">
+        <div class="card-icon" :style="{ background: (managerStats?.open_incidents.count || 0) > 0 ? '#fff2f0' : '#f6ffed', color: (managerStats?.open_incidents.count || 0) > 0 ? 'var(--accent-danger)' : 'var(--accent-success)' }">
           <el-icon><Warning /></el-icon>
         </div>
         <div class="card-content">
-          <div class="card-label">未解决故障</div>
-          <div class="card-value" :style="{ color: (managerStats?.open_incidents.count || 0) > 0 ? '#F56C6C' : '#67C23A' }">
+          <div class="card-label">{{ t('manager.openIncidents') }}</div>
+          <div class="card-value" :style="{ color: (managerStats?.open_incidents.count || 0) > 0 ? 'var(--accent-danger)' : 'var(--accent-success)' }">
             {{ managerStats?.open_incidents.count || 0 }}
-            <span class="unit">条</span>
+            <span class="unit">{{ t('common.countUnit') }}</span>
           </div>
           <div class="card-trend">
-            {{ (managerStats?.open_incidents.count || 0) > 0 ? `最长持续 ${managerStats?.open_incidents.max_duration_hours}h` : '无故障 ✓' }}
+            {{ (managerStats?.open_incidents.count || 0) > 0 ? `${t('manager.maxDuration', { h: managerStats?.open_incidents.max_duration_hours })}` : t('manager.noIncident') }}
           </div>
         </div>
       </div>
@@ -498,10 +548,10 @@ onMounted(() => {
           <el-icon><Clock /></el-icon>
         </div>
         <div class="card-content">
-          <div class="card-label">即将到期事项</div>
-          <div class="card-value" :style="{ color: (managerStats?.expiring_soon.urgent_count || 0) > 0 ? '#F56C6C' : (managerStats?.expiring_soon.warning_count || 0) > 0 ? '#E6A23C' : '#67C23A' }">
+          <div class="card-label">{{ t('manager.expiringItems') }}</div>
+          <div class="card-value" :style="{ color: (managerStats?.expiring_soon.urgent_count || 0) > 0 ? 'var(--accent-danger)' : (managerStats?.expiring_soon.warning_count || 0) > 0 ? 'var(--accent-warning)' : 'var(--accent-success)' }">
             {{ getExpiringDisplayCount() }}
-            <span class="unit">项</span>
+            <span class="unit">{{ t('common.itemUnit') }}</span>
           </div>
           <div class="card-trend" :style="{ color: getExpiringTrendColor() }">
             {{ getExpiringTrendText() }}
@@ -511,12 +561,12 @@ onMounted(() => {
     </div>
 
     <!-- 🔴🟡 到期预警详情弹窗 -->
-    <el-dialog v-model="showExpiringDialog" title="到期事项预警" width="600px" :close-on-click-modal="false">
+    <el-dialog v-model="showExpiringDialog" :title="t('manager.expiringDialogTitle')" width="600px" :close-on-click-modal="false">
       <div class="expiring-dialog-body">
         <!-- 🔴 紧急 -->
         <div v-if="(managerStats?.expiring_soon.urgent_items?.length || 0) > 0" class="expiring-section">
           <div class="expiring-section-title urgent">
-            🔴 紧急（30天内）
+            🔴 {{ t('manager.urgent30') }}
           </div>
           <div v-for="item in managerStats?.expiring_soon.urgent_items" :key="item.name" class="expiring-item urgent-item">
             <div class="expiring-item-main">
@@ -524,15 +574,15 @@ onMounted(() => {
               <span class="expiring-item-type">{{ item.type }}</span>
             </div>
             <div class="expiring-item-meta">
-              <span class="expiring-item-date">{{ item.expire_date }} 到期</span>
-              <span class="expiring-item-days">还有 {{ item.days_left }} 天</span>
+              <span class="expiring-item-date">{{ t('manager.expireAt', { date: item.expire_date }) }}</span>
+              <span class="expiring-item-days">{{ t('manager.daysLeft', { n: item.days_left }) }}</span>
             </div>
           </div>
         </div>
         <!-- 🟡 即将到期 -->
         <div v-if="(managerStats?.expiring_soon.warning_items?.length || 0) > 0" class="expiring-section">
           <div class="expiring-section-title warning">
-            🟡 即将到期（31-60天）
+            🟡 {{ t('manager.warning3160') }}
           </div>
           <div v-for="item in managerStats?.expiring_soon.warning_items" :key="item.name" class="expiring-item warning-item">
             <div class="expiring-item-main">
@@ -540,14 +590,14 @@ onMounted(() => {
               <span class="expiring-item-type">{{ item.type }}</span>
             </div>
             <div class="expiring-item-meta">
-              <span class="expiring-item-date">{{ item.expire_date }} 到期</span>
-              <span class="expiring-item-days">还有 {{ item.days_left }} 天</span>
+              <span class="expiring-item-date">{{ t('manager.expireAt', { date: item.expire_date }) }}</span>
+              <span class="expiring-item-days">{{ t('manager.daysLeft', { n: item.days_left }) }}</span>
             </div>
           </div>
         </div>
         <div v-if="(managerStats?.expiring_soon.total_count || 0) === 0" class="expiring-empty">
           <el-icon><CircleCheck /></el-icon>
-          <span>暂无到期事项，一切正常 ✓</span>
+          <span>{{ t('manager.expiringEmpty') }}</span>
         </div>
       </div>
     </el-dialog>
@@ -557,18 +607,18 @@ onMounted(() => {
       <!-- 左侧：IT风险看板 -->
       <div class="panel risk-panel">
         <div class="panel-header">
-          <h3>IT 风险看板</h3>
-          <el-button link type="primary" @click="navigateTo('/alerts')">查看全部</el-button>
+          <h3>{{ t('manager.riskBoard') }}</h3>
+          <el-button link type="primary" @click="navigateTo('/alerts')">{{ t('manager.viewAll') }}</el-button>
         </div>
         <div class="risk-content">
           <!-- 高风险 -->
           <div v-if="getSeverityRisks('high').length > 0" class="risk-section">
             <div class="risk-header">
               <span class="risk-dot high"></span>
-              <span class="risk-title">高风险</span>
+              <span class="risk-title">{{ t('manager.riskHigh') }}</span>
               <span class="risk-count">{{ risksData?.high_count }}</span>
             </div>
-            <div v-for="risk in getSeverityRisks('high')" :key="risk.title" class="risk-item" :style="{ borderLeftColor: getSeverityBorderColor('high') }">
+            <div v-for="risk in getSeverityRisks('high')" :key="risk.title" class="risk-item clickable" :style="{ borderLeftColor: getSeverityBorderColor('high') }" @click="navigateTo(risk.action_url)" :title="t('manager.riskClickHint')">
               <div class="risk-item-title">{{ risk.title }}</div>
               <div class="risk-item-desc">{{ risk.description }}</div>
             </div>
@@ -578,10 +628,10 @@ onMounted(() => {
           <div v-if="getSeverityRisks('medium').length > 0" class="risk-section">
             <div class="risk-header">
               <span class="risk-dot medium"></span>
-              <span class="risk-title">中风险</span>
+              <span class="risk-title">{{ t('manager.riskMedium') }}</span>
               <span class="risk-count">{{ risksData?.medium_count }}</span>
             </div>
-            <div v-for="risk in getSeverityRisks('medium')" :key="risk.title" class="risk-item" :style="{ borderLeftColor: getSeverityBorderColor('medium') }">
+            <div v-for="risk in getSeverityRisks('medium')" :key="risk.title" class="risk-item clickable" :style="{ borderLeftColor: getSeverityBorderColor('medium') }" @click="navigateTo(risk.action_url)" :title="t('manager.riskClickHint')">
               <div class="risk-item-title">{{ risk.title }}</div>
               <div class="risk-item-desc">{{ risk.description }}</div>
             </div>
@@ -591,10 +641,10 @@ onMounted(() => {
           <div v-if="getSeverityRisks('low').length > 0" class="risk-section">
             <div class="risk-header">
               <span class="risk-dot low"></span>
-              <span class="risk-title">低风险</span>
+              <span class="risk-title">{{ t('manager.riskLow') }}</span>
               <span class="risk-count">{{ risksData?.low_count }}</span>
             </div>
-            <div v-for="risk in getSeverityRisks('low')" :key="risk.title" class="risk-item" :style="{ borderLeftColor: getSeverityBorderColor('low') }">
+            <div v-for="risk in getSeverityRisks('low')" :key="risk.title" class="risk-item clickable" :style="{ borderLeftColor: getSeverityBorderColor('low') }" @click="navigateTo(risk.action_url)" :title="t('manager.riskClickHint')">
               <div class="risk-item-title">{{ risk.title }}</div>
               <div class="risk-item-desc">{{ risk.description }}</div>
             </div>
@@ -603,7 +653,7 @@ onMounted(() => {
           <!-- 无风险 -->
           <div v-if="!risksData || risksData.risks.length === 0" class="no-risk">
             <el-icon><CircleCheck /></el-icon>
-            <span>暂无风险项</span>
+            <span>{{ t('manager.noRisk') }}</span>
           </div>
         </div>
       </div>
@@ -611,15 +661,16 @@ onMounted(() => {
       <!-- 右侧：专线费用趋势 -->
       <div class="panel chart-panel">
         <div class="panel-header">
-          <h3>专线费用趋势（近12个月）</h3>
+          <h3>{{ t('manager.costTrendTitle') }}</h3>
         </div>
         <div id="cost-trend-chart" class="chart-container"></div>
         <div class="cost-breakdown">
-          <div v-for="(costs, type) in costTrendData?.by_type" :key="type" class="cost-item">
+          <div v-for="type in chartTypes" :key="type" class="cost-item">
             <span class="cost-label" :style="{ color: getCircuitTypeColor(type) }">{{ type }}</span>
-            <span class="cost-value" :style="{ color: getCircuitTypeColor(type) }">¥{{ costs[costs.length - 1]?.toLocaleString() || 0 }}</span>
+            <span class="cost-value" :style="{ color: getCircuitTypeColor(type) }">{{ formatMoney(costLastValue(type)) }}</span>
           </div>
         </div>
+        <div class="cost-note">{{ t('manager.costBreakdownNote') }}</div>
       </div>
     </div>
 
@@ -628,45 +679,45 @@ onMounted(() => {
       <!-- 左侧：本月故障汇总 -->
       <div class="panel">
         <div class="panel-header">
-          <h3>本月故障记录</h3>
+          <h3>{{ t('manager.incidentTitle') }}</h3>
           <span class="incident-summary" v-if="monthlyIncidents">
-            本月共 {{ monthlyIncidents.total }} 次
+            {{ t('manager.incidentTotal', { n: monthlyIncidents.total }) }}
             <template v-if="monthlyIncidents.avg_recovery_hours > 0">
-              | 平均恢复 {{ monthlyIncidents.avg_recovery_hours }}h
+              | {{ t('manager.avgRecovery', { h: monthlyIncidents.avg_recovery_hours }) }}
             </template>
           </span>
         </div>
         <div class="incident-content">
           <el-table class="dashboard-incidents-table" :data="monthlyIncidents?.incidents || []" style="width: 100%">
-            <el-table-column prop="title" label="故障标题" min-width="100" />
-            <el-table-column prop="circuit_name" label="专线" min-width="70" />
-            <el-table-column prop="severity" label="严重程度" min-width="60">
+            <el-table-column prop="title" :label="t('manager.incidentColTitle')" min-width="100" />
+            <el-table-column prop="circuit_name" :label="t('manager.incidentColCircuit')" min-width="70" />
+            <el-table-column prop="severity" :label="t('manager.incidentColSeverity')" min-width="60">
               <template #default="{ row }">
                 <el-tag :type="row.severity === 'critical' ? 'danger' : row.severity === 'major' ? 'warning' : 'info'" size="small">
                   {{ row.severity }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="started_at" label="开始时间" min-width="90" />
-            <el-table-column prop="duration_hours" label="持续时长" min-width="60">
+            <el-table-column prop="started_at" :label="t('manager.incidentColStart')" min-width="90" />
+            <el-table-column prop="duration_hours" :label="t('manager.incidentColDuration')" min-width="60">
               <template #default="{ row }">{{ row.duration_hours }}h</template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" min-width="55">
+            <el-table-column prop="status" :label="t('manager.incidentColStatus')" min-width="55">
               <template #default="{ row }">
                 <el-tag :type="row.status === 'open' ? 'danger' : 'success'" size="small">
-                  {{ row.status === 'open' ? '未解决' : '已解决' }}
+                  {{ row.status === 'open' ? t('manager.statusOpen') : t('manager.statusResolved') }}
                 </el-tag>
               </template>
             </el-table-column>
           </el-table>
           <div v-if="!monthlyIncidents?.incidents?.length" class="empty-table">
-            <span>暂无故障记录 ✓</span>
+            <span>{{ t('manager.incidentEmpty') }}</span>
           </div>
           <div v-if="monthlyIncidents && monthlyIncidents.total > 5" class="view-more">
-            <el-button link type="primary" @click="navigateTo('/circuits')">查看全部{{ monthlyIncidents.total }}条</el-button>
+            <el-button link type="primary" @click="navigateTo('/circuits')">{{ t('manager.viewAllIncidents', { n: monthlyIncidents.total }) }}</el-button>
           </div>
           <div v-if="monthlyIncidents?.max_duration" class="incident-footer">
-            <span>最长中断：{{ monthlyIncidents.max_duration.hours }}h（{{ monthlyIncidents.max_duration.circuit }}，{{ monthlyIncidents.max_duration.date }}）</span>
+            <span>{{ t('manager.maxIncident', { h: monthlyIncidents.max_duration.hours, circuit: monthlyIncidents.max_duration.circuit, date: monthlyIncidents.max_duration.date }) }}</span>
           </div>
         </div>
       </div>
@@ -674,7 +725,7 @@ onMounted(() => {
       <!-- 右侧：设备生命周期 -->
       <div class="panel">
         <div class="panel-header">
-          <h3>设备年龄分布</h3>
+          <h3>{{ t('manager.ageTitle') }}</h3>
         </div>
         <div class="lifecycle-content">
           <div id="lifecycle-chart" class="lifecycle-chart"></div>
@@ -686,46 +737,33 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 第四行：月报下载 + 待审批 -->
-    <div class="main-grid">
-      <!-- 左侧：月报下载 -->
+    <!-- 第四行：月报下载（待审批面板为静态占位已移除） -->
+    <div class="main-grid single">
+      <!-- 月报下载 -->
       <div class="panel">
         <div class="panel-header">
-          <h3>运营报告</h3>
+          <h3>{{ t('manager.reportTitle') }}</h3>
         </div>
         <div class="report-content">
           <div class="report-list">
             <div class="report-item" v-for="item in reports" :key="item.id">
               <el-icon><Document /></el-icon>
-              <span class="report-name">{{ item.year }}年{{ item.month }}月运营报告</span>
+              <span class="report-name">{{ t('manager.reportName', { year: item.year, month: item.month }) }}</span>
               <span class="report-meta">{{ formatFileSize(item.file_size) }} · {{ item.generated_at }}</span>
               <el-button type="primary" plain size="small" @click="handleDownloadReport(item)">
                 <el-icon><Download /></el-icon>
-                下载PDF
+                {{ t('manager.downloadPdf') }}
               </el-button>
             </div>
             <div v-if="reports.length === 0" class="report-empty">
-              暂无已生成的月报，请点击下方按钮生成
+              {{ t('manager.reportEmpty') }}
             </div>
           </div>
           <div class="report-actions">
             <el-button type="primary" @click="handleGenerateReport" :loading="generatingReport">
               <el-icon><Document /></el-icon>
-              生成本月报告
+              {{ t('manager.generateReport') }}
             </el-button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 右侧：待审批 -->
-      <div class="panel" v-if="isAdmin">
-        <div class="panel-header">
-          <h3>待我审批</h3>
-        </div>
-        <div class="approval-content">
-          <div class="no-approval">
-            <el-icon><CircleCheck /></el-icon>
-            <span>暂无待审批事项</span>
           </div>
         </div>
       </div>
@@ -745,7 +783,7 @@ onMounted(() => {
 .page-header h1 {
   font-size: 24px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -771,7 +809,14 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .cost-breakdown {
+  .cost-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  text-align: right;
+}
+
+.cost-breakdown {
     flex-wrap: wrap;
     gap: 12px;
   }
@@ -862,7 +907,7 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 20px;
   display: flex;
@@ -895,14 +940,14 @@ onMounted(() => {
 
 .card-label {
   font-size: 14px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
 .card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--text-primary);
   line-height: 1.2;
   margin-bottom: 4px;
   display: flex;
@@ -913,12 +958,12 @@ onMounted(() => {
 .card-value .unit {
   font-size: 16px;
   font-weight: normal;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 .card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--text-muted);
 }
 
 .main-grid {
@@ -928,6 +973,10 @@ onMounted(() => {
   margin-bottom: 20px;
 }
 
+.main-grid.single {
+  grid-template-columns: 1fr;
+}
+
 @media (max-width: 1200px) {
   .main-grid {
     grid-template-columns: 1fr;
@@ -935,7 +984,7 @@ onMounted(() => {
 }
 
 .panel {
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -952,13 +1001,18 @@ onMounted(() => {
 .panel-header h3 {
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
   margin: 0;
+}
+
+.data-updated {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .incident-summary {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 /* 风险看板 */
@@ -986,27 +1040,36 @@ onMounted(() => {
   border-radius: 50%;
 }
 
-.risk-dot.high { background: #F56C6C; }
-.risk-dot.medium { background: #E6A23C; }
-.risk-dot.low { background: #67C23A; }
+.risk-dot.high { background: var(--accent-danger); }
+.risk-dot.medium { background: var(--accent-warning); }
+.risk-dot.low { background: var(--accent-success); }
 
 .risk-title {
   font-weight: 600;
   font-size: 14px;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .risk-count {
   font-size: 12px;
-  color: #8c8c8c;
-  background: #f5f5f5;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
   padding: 2px 8px;
   border-radius: 10px;
 }
 
+.risk-item.clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.risk-item.clickable:hover {
+  background: var(--bg-hover);
+}
+
 .risk-item {
   padding: 10px 14px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   border-radius: 6px;
   border-left: 3px solid;
 }
@@ -1014,13 +1077,13 @@ onMounted(() => {
 .risk-item-title {
   font-size: 13px;
   font-weight: 500;
-  color: #262626;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .risk-item-desc {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 .no-risk {
@@ -1029,7 +1092,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   padding: 40px;
-  color: #67C23A;
+  color: var(--accent-success);
   font-size: 14px;
   gap: 8px;
 }
@@ -1046,7 +1109,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-around;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-light);
   margin-top: 16px;
 }
 
@@ -1059,13 +1122,13 @@ onMounted(() => {
 
 .cost-label {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
 }
 
 .cost-value {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 /* 故障表格 */
@@ -1078,7 +1141,7 @@ onMounted(() => {
 .empty-table {
   text-align: center;
   padding: 40px;
-  color: #67C23A;
+  color: var(--accent-success);
   font-size: 14px;
 }
 
@@ -1088,9 +1151,9 @@ onMounted(() => {
 
 .incident-footer {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-light);
 }
 
 /* 到期预警弹窗 */
@@ -1117,12 +1180,12 @@ onMounted(() => {
 
 .expiring-section-title.urgent {
   background: #fff2f0;
-  color: #F56C6C;
+  color: var(--accent-danger);
 }
 
 .expiring-section-title.warning {
   background: #fff7e6;
-  color: #E6A23C;
+  color: var(--accent-warning);
 }
 
 .expiring-item {
@@ -1140,12 +1203,12 @@ onMounted(() => {
 
 .urgent-item {
   background: #fff2f0;
-  border-left: 3px solid #F56C6C;
+  border-left: 3px solid var(--accent-danger);
 }
 
 .warning-item {
   background: #fffbe6;
-  border-left: 3px solid #E6A23C;
+  border-left: 3px solid var(--accent-warning);
 }
 
 .expiring-item-main {
@@ -1157,12 +1220,12 @@ onMounted(() => {
 .expiring-item-name {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .expiring-item-type {
   font-size: 11px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   background: rgba(0,0,0,0.04);
   padding: 2px 8px;
   border-radius: 4px;
@@ -1182,7 +1245,7 @@ onMounted(() => {
 .expiring-item-days {
   font-size: 13px;
   font-weight: 500;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .expiring-empty {
@@ -1192,7 +1255,7 @@ onMounted(() => {
   justify-content: center;
   padding: 40px;
   gap: 8px;
-  color: #67C23A;
+  color: var(--accent-success);
   font-size: 14px;
 }
 
@@ -1218,7 +1281,7 @@ onMounted(() => {
   padding: 12px 16px;
   background: #fff2f0;
   border-radius: 6px;
-  color: #F56C6C;
+  color: var(--accent-danger);
   font-size: 13px;
 }
 
@@ -1240,7 +1303,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  background: #fafafa;
+  background: var(--bg-secondary);
   border-radius: 6px;
 }
 
@@ -1252,19 +1315,19 @@ onMounted(() => {
 .report-name {
   flex: 1;
   font-size: 14px;
-  color: #262626;
+  color: var(--text-primary);
 }
 
 .report-meta {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   margin-right: 16px;
 }
 
 .report-empty {
   text-align: center;
   padding: 32px;
-  color: #8c8c8c;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -1286,7 +1349,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  color: #67C23A;
+  color: var(--accent-success);
   font-size: 14px;
 }
 
