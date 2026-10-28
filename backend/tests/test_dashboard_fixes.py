@@ -279,7 +279,7 @@ async def test_expired_circuit_risk_first(client, db_session):
     assert first["severity"] == "high"
     assert "已逾期未续约" in first["title"]
     assert first["count"] == 2
-    assert first["action_url"] == "/circuits"
+    assert first["action_url"] == "/circuits?filter=expired"
 
 
 # ==================== recent-logs 字段 ====================
