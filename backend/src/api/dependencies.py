@@ -175,7 +175,7 @@ async def get_ws_user(
     同时执行 IP 白名单检查（HTTP middleware 不覆盖 WebSocket，
     故在统一的 WS 鉴权入口拦截；仅用直连 IP，不采信代理头）。
     """
-    from .utils.ip_whitelist import check_ws_ip_allowed
+    from ..utils.ip_whitelist import check_ws_ip_allowed
     if not await check_ws_ip_allowed(websocket):
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION, reason="IP 不在白名单中"
