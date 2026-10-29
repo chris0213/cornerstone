@@ -181,7 +181,9 @@ async def backup_device_config(
         "port": credential.port or 22,
     }
     
-    config = backup_config(device_info)
+    # netmiko 同步阻塞，放入线程执行，避免拖慢设备时卡死整个事件循环
+    import asyncio
+    config = await asyncio.to_thread(backup_config, device_info)
     if config is None:
         raise HTTPException(status_code=500, detail="Failed to backup device config")
     

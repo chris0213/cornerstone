@@ -1,6 +1,7 @@
 import hashlib
 import difflib
 import os
+import time
 import asyncio
 import logging
 from typing import Dict, List, Tuple, Optional
@@ -312,13 +313,16 @@ async def collect_device_config(device: Dict, credential: Dict) -> CollectResult
     """
     使用Netmiko SSH连接设备采集配置
     device: {id, ip_address, vendor}
-    credential: {username, password, port, protocol, enable_password, 
+    credential: {username, password, port, protocol, enable_password,
                  jump_host, jump_port, jump_username, jump_password,
                  auth_type, private_key}
+
+    稳定性：netmiko 为同步阻塞库，整段放入 to_thread 执行，
+    避免慢设备（连接超时 30s + 读取超时 60s）卡死整个事件循环。
     """
     import time
     start_time = time.time()
-    
+
     try:
         # 1. Ping检测设备可达性
         ip_address = device.get("ip_address", "")
@@ -328,11 +332,27 @@ async def collect_device_config(device: Dict, credential: Dict) -> CollectResult
                 error_message="设备不可达",
                 duration_ms=int((time.time() - start_time) * 1000)
             )
-        
-        # 2. 构造Netmiko连接参数
+
+        # 2. 阻塞段放入线程执行
+        return await asyncio.to_thread(_collect_device_config_sync, device, credential, start_time)
+    except Exception as e:
+        logger.error(f"设备 {device.get('ip_address', '')} 采集配置发生错误: {str(e)}")
+        return CollectResult(
+            success=False,
+            error_message=f"采集异常: {str(e)}",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+
+
+def _collect_device_config_sync(device: Dict, credential: Dict, start_time: float) -> CollectResult:
+    """采集配置的同步实现（仅供 collect_device_config 在线程中调用）"""
+    ssh_config_path = None
+    key_file_path = None
+    try:
+        # 构造Netmiko连接参数
         vendor = device.get("vendor", "huawei_vrp").lower()
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
-        
+
         # 创建临时SSH配置文件以支持旧设备的密钥交换算法
         import tempfile
         ssh_config_content = f"""
@@ -344,7 +364,7 @@ Host {device.get("ip_address")}
         with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
             f.write(ssh_config_content)
             ssh_config_path = f.name
-        
+
         # 构建基础连接参数
         conn_params: Dict = {
             "device_type": device_type,
@@ -357,11 +377,11 @@ Host {device.get("ip_address")}
             "allow_agent": False,
             "ssh_config_file": ssh_config_path,
         }
-        
+
         # 处理enable密码
         if credential.get("enable_password"):
             conn_params["secret"] = credential.get("enable_password")
-        
+
         # 处理SSH密钥认证
         if credential.get("auth_type") == "key" and credential.get("private_key"):
             conn_params["use_keys"] = True
@@ -372,70 +392,59 @@ Host {device.get("ip_address")}
             with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
                 f.write(credential["private_key"])
                 conn_params["key_file"] = f.name
-        
-        # 3. 使用Netmiko连接设备
+                key_file_path = f.name
+
+        # 使用Netmiko连接设备
         from netmiko import Netmiko
         from netmiko.exceptions import NetMikoAuthenticationException, NetMikoTimeoutException
-        
-        try:
-            with Netmiko(**conn_params) as ssh:
-                # 进入enable模式（如果需要）
-                if credential.get("enable_password"):
-                    ssh.enable()
-                
-                # 发送采集命令
-                command = BACKUP_COMMANDS.get(vendor, "display current-configuration")
-                output = ssh.send_command(command)
-                
-                # 清理临时文件
-                if "key_file" in conn_params and conn_params["key_file"]:
-                    os.unlink(conn_params["key_file"])
-                os.unlink(ssh_config_path)
-                
-                return CollectResult(
-                    success=True,
-                    config_content=output,
-                    duration_ms=int((time.time() - start_time) * 1000)
-                )
-        except NetMikoAuthenticationException:
-            logger.error(f"设备 {ip_address} 认证失败")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
+
+        with Netmiko(**conn_params) as ssh:
+            # 进入enable模式（如果需要）
+            if credential.get("enable_password"):
+                ssh.enable()
+
+            # 发送采集命令
+            command = BACKUP_COMMANDS.get(vendor, "display current-configuration")
+            output = ssh.send_command(command)
+
             return CollectResult(
-                success=False,
-                error_message="认证失败",
+                success=True,
+                config_content=output,
                 duration_ms=int((time.time() - start_time) * 1000)
             )
-        except NetMikoTimeoutException:
-            logger.error(f"设备 {ip_address} 连接超时")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
-            return CollectResult(
-                success=False,
-                error_message="连接超时",
-                duration_ms=int((time.time() - start_time) * 1000)
-            )
-        except Exception as e:
-            logger.error(f"设备 {ip_address} 配置应用失败: {str(e)}")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
-            return CollectResult(
-                success=False,
-                error_message=str(e),
-                duration_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    except Exception as e:
-        logger.error(f"设备 {ip_address} 还原配置发生错误: {str(e)}")
-        os.unlink(ssh_config_path)
+    except NetMikoAuthenticationException:
+        logger.error(f"设备 {device.get('ip_address', '')} 认证失败")
         return CollectResult(
             success=False,
-            error_message=f"采集异常: {str(e)}",
+            error_message="认证失败",
             duration_ms=int((time.time() - start_time) * 1000)
         )
+    except NetMikoTimeoutException:
+        logger.error(f"设备 {device.get('ip_address', '')} 连接超时")
+        return CollectResult(
+            success=False,
+            error_message="连接超时",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    except Exception as e:
+        logger.error(f"设备 {device.get('ip_address', '')} 采集失败: {str(e)}")
+        return CollectResult(
+            success=False,
+            error_message=str(e),
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    finally:
+        # 统一清理临时文件（finally 保证任何路径都不泄漏；容忍已删除）
+        if key_file_path:
+            try:
+                os.unlink(key_file_path)
+            except FileNotFoundError:
+                pass
+        if ssh_config_path:
+            try:
+                os.unlink(ssh_config_path)
+            except FileNotFoundError:
+                pass
 
 def calculate_hash(content: str) -> str:
     """计算内容的SHA256哈希"""
@@ -479,11 +488,18 @@ def save_config_to_file(device_id: int, backup_id: int, content: str) -> str:
     """
     将配置内容保存到文件
     返回文件路径
+
+    稳定性：backup_id<=0（尚无记录 ID）时用毫秒时间戳命名，
+    避免同一设备的大备份都写 0.txt 互相覆盖、多条 DB 记录指向同一文件。
     """
     base_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backups', str(device_id))
     os.makedirs(base_path, exist_ok=True)
-    
-    file_path = os.path.join(base_path, f"{backup_id}.txt")
+
+    if backup_id and backup_id > 0:
+        file_name = f"{backup_id}.txt"
+    else:
+        file_name = f"t{int(time.time() * 1000)}.txt"
+    file_path = os.path.join(base_path, file_name)
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
@@ -494,24 +510,55 @@ def load_config_from_file(file_path: str) -> str:
     with open(file_path, 'r', encoding='utf-8') as f:
         return f.read()
 
+# 还原前危险命令黑名单（不区分大小写、按行首命令词匹配）。
+# 目的：即使备份文件被人工篡改或粘入越权内容，也杜绝 reload/reboot/擦除类操作，
+# 这是防止"还原导致设备重启"的最后防线。
+DANGEROUS_CONFIG_PATTERNS = (
+    "reload", "reboot", "erase", "write erase", "format",
+    "delete flash", "delete /force", "boot system", "factory-reset",
+    "restore default", "reset saved-configuration",
+)
+
+
+def filter_dangerous_config_lines(config_content: str) -> tuple[List[str], List[str]]:
+    """过滤还原内容中的危险命令行。
+
+    返回 (安全配置行列表, 被拦截的行列表)。注释/空行在过滤前已剔除。
+    """
+    kept: List[str] = []
+    blocked: List[str] = []
+    for line in config_content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('!') or stripped.startswith('#'):
+            continue
+        lowered = stripped.lower()
+        if any(lowered.startswith(p) for p in DANGEROUS_CONFIG_PATTERNS):
+            blocked.append(stripped)
+            continue
+        kept.append(stripped)
+    return kept, blocked
+
+
 async def apply_config_to_device(device: Dict, credential: Dict, config_content: str) -> CollectResult:
     """
     使用Netmiko SSH连接设备并应用配置
     device: {id, ip_address, vendor}
-    credential: {username, password, port, protocol, enable_password, 
+    credential: {username, password, port, protocol, enable_password,
                  jump_host, jump_port, jump_username, jump_password,
                  auth_type, private_key}
     config_content: 要应用的配置内容
+
+    稳定性：netmiko 为同步阻塞库，SSH 交互段放入 to_thread 执行，
+    还原最长可能持续数分钟，绝不能阻塞事件循环。
     """
     import time
-    
+
     start_time = time.time()
     ip_address = device.get("ip_address", "")
-    vendor = device.get("vendor", "huawei_vrp").lower()
-    
-    logger.info(f"开始还原配置到设备 {ip_address}, 厂商: {vendor}")
+
+    logger.info(f"开始还原配置到设备 {ip_address}, 厂商: {device.get('vendor', 'huawei_vrp')}")
     logger.info(f"配置内容长度: {len(config_content)} 字符")
-    
+
     try:
         # 1. Ping检测设备可达性
         logger.info(f"正在Ping设备 {ip_address}...")
@@ -523,11 +570,52 @@ async def apply_config_to_device(device: Dict, credential: Dict, config_content:
                 duration_ms=int((time.time() - start_time) * 1000)
             )
         logger.info(f"设备 {ip_address} Ping成功")
-        
-        # 2. 构造Netmiko连接参数
-        vendor = device.get("vendor", "huawei_vrp").lower()
+
+        # 2. 危险命令过滤（防重启/擦除的最后防线）
+        config_lines, blocked_lines = filter_dangerous_config_lines(config_content)
+        if blocked_lines:
+            logger.warning(
+                f"还原内容包含 {len(blocked_lines)} 条危险命令已拦截，不做任何下发: {blocked_lines}"
+            )
+            return CollectResult(
+                success=False,
+                error_message=f"还原内容包含危险命令已拦截: {'; '.join(blocked_lines[:5])}",
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        if not config_lines:
+            return CollectResult(
+                success=False,
+                error_message="还原内容没有有效配置行",
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        logger.info(f"危险命令过滤完成，待下发 {len(config_lines)} 行")
+
+        # 3. SSH 交互段放入线程执行
+        return await asyncio.to_thread(_apply_config_to_device_sync, device, credential, config_lines, start_time)
+    except Exception as e:
+        logger.error(f"设备 {ip_address} 还原配置发生错误: {str(e)}")
+        return CollectResult(
+            success=False,
+            error_message=f"应用配置异常: {str(e)}",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+
+
+def _apply_config_to_device_sync(device: Dict, credential: Dict,
+                                 config_lines: List[str], start_time: float) -> CollectResult:
+    """还原配置的同步实现（仅供 apply_config_to_device 在线程中调用）。
+
+    config_lines 已经过危险命令过滤，这里直接逐行合并下发。
+    """
+    ip_address = device.get("ip_address", "")
+    vendor = device.get("vendor", "huawei_vrp").lower()
+
+    ssh_config_path = None
+    key_file_path = None
+    try:
+        # 构造Netmiko连接参数
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
-        
+
         # 创建临时SSH配置文件以支持旧设备的密钥交换算法
         import tempfile
         ssh_config_content = f"""
@@ -539,7 +627,7 @@ Host {device.get("ip_address")}
         with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
             f.write(ssh_config_content)
             ssh_config_path = f.name
-        
+
         # 构建基础连接参数
         conn_params: Dict = {
             "device_type": device_type,
@@ -552,11 +640,11 @@ Host {device.get("ip_address")}
             "allow_agent": False,
             "ssh_config_file": ssh_config_path,
         }
-        
+
         # 处理enable密码
         if credential.get("enable_password"):
             conn_params["secret"] = credential.get("enable_password")
-        
+
         # 处理SSH密钥认证
         if credential.get("auth_type") == "key" and credential.get("private_key"):
             conn_params["use_keys"] = True
@@ -567,147 +655,130 @@ Host {device.get("ip_address")}
             with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
                 f.write(credential["private_key"])
                 conn_params["key_file"] = f.name
-        
-        # 3. 获取厂商配置命令
+                key_file_path = f.name
+
+        # 获取厂商配置命令
         config_cmds = CONFIG_COMMANDS.get(vendor, CONFIG_COMMANDS["huawei_vrp"])
         logger.info(f"厂商配置命令: enter_config={config_cmds['enter_config']}, save={config_cmds['save']}, exit_config={config_cmds['exit_config']}")
-        
-        # 4. 使用Netmiko连接设备
+
+        # 使用Netmiko连接设备
         from netmiko import Netmiko
         from netmiko.exceptions import NetMikoAuthenticationException, NetMikoTimeoutException
-        
+
         logger.info(f"正在使用Netmiko连接设备 {ip_address}...")
-        try:
-            with Netmiko(**conn_params) as ssh:
-                logger.info(f"成功连接到设备 {ip_address}")
-                
-                # 进入 enable 模式（如果需要）
-                if credential.get("enable_password"):
-                    logger.info("进入 enable 模式...")
-                    ssh.enable()
-                    logger.info("已进入 enable 模式")
-                
-                # 进入配置模式
-                if config_cmds["enter_config"]:
-                    logger.info(f"进入配置模式：{config_cmds['enter_config']}")
-                    # 使用更宽松的提示符匹配
-                    output = ssh.send_command(config_cmds["enter_config"], expect_string=r"[\[~\]].*")
-                    logger.info(f"进入配置模式输出：{output.strip()[:100]}")
-                    logger.info("已进入配置模式")
-                
-                # 批量发送配置（使用 send_config_set 方法）
-                config_lines = [line.strip() for line in config_content.splitlines() 
-                               if line.strip() and not line.startswith('!') and not line.startswith('#')]
-                logger.info(f"开始发送配置，共 {len(config_lines)} 行")
-                
-                try:
-                    # 使用 send_config_set 批量发送配置，禁用自动进入/退出配置模式
-                    output = ssh.send_config_set(
-                        config_lines,
-                        delay_factor=0.1,
-                        max_loops=1000,
-                        strip_prompt=False,
-                        strip_command=False,
-                        enter_config_mode=False,   # 我们已经手动进入了配置模式
-                        exit_config_mode=False     # 暂时不退出，保存后再退出
-                    )
-                    logger.info(f"配置发送完成，共 {len(config_lines)} 行")
-                except Exception as e:
-                    logger.error(f"批量发送配置失败：{str(e)}")
-                    raise
-                
-                # 保存配置
-                if config_cmds["save"]:
-                    logger.info(f"保存配置：{config_cmds['save']}")
-                    # 使用 send_command_timing 处理交互式命令（更可靠）
-                    output = ssh.send_command_timing(config_cmds["save"])
-                    logger.info(f"保存命令输出：{output.strip()[:500]}")
-                    
-                    # 发送确认 'y'
-                    if config_cmds["confirm_save"]:
-                        logger.info(f"发送确认：{config_cmds['confirm_save']}")
-                        # 使用 send_command_timing，不等待特定提示符
-                        output2 = ssh.send_command_timing(config_cmds["confirm_save"], delay_factor=2)
-                        logger.info(f"确认输出：{output2.strip()[:500]}")
-                        
-                        # 处理文件名输入提示（H3C 设备会提示输入文件名）
-                        if "input the file name" in output2.lower() or "press the enter key" in output2.lower():
-                            logger.info("检测到文件名输入提示，按回车使用默认文件名")
-                            output3 = ssh.send_command_timing("\n", delay_factor=3)
-                            logger.info(f"文件名确认输出：{output3.strip()[:300]}")
-                            
-                            # 处理覆盖确认（H3C 设备会提示是否覆盖现有文件）
-                            if "overwrite" in output3.lower() and "[y/n]" in output3.lower():
-                                logger.info("检测到覆盖确认提示，发送确认：y")
-                                output4 = ssh.send_command_timing("y", delay_factor=3)
-                                logger.info(f"覆盖确认输出：{output4.strip()[:300]}")
-                                
-                        elif ".cfg" in output2.lower():
-                            # 如果包含 .cfg 但不包含输入提示，也发送回车
-                            logger.info("检测到文件名提示，按回车使用默认文件名")
-                            output3 = ssh.send_command_timing("\n", delay_factor=3)
-                            logger.info(f"文件名确认输出：{output3.strip()[:300]}")
-                            
-                            # 处理覆盖确认
-                            if "overwrite" in output3.lower() and "[y/n]" in output3.lower():
-                                logger.info("检测到覆盖确认提示，发送确认：y")
-                                output4 = ssh.send_command_timing("y", delay_factor=3)
-                                logger.info(f"覆盖确认输出：{output4.strip()[:300]}")
-                        
-                        logger.info("保存确认完成")
-                
-                # 退出配置模式
-                if config_cmds["exit_config"]:
-                    logger.info(f"退出配置模式: {config_cmds['exit_config']}")
-                    ssh.send_command(config_cmds["exit_config"])
-                    logger.info("已退出配置模式")
-                
-                # 清理临时文件
-                if "key_file" in conn_params and conn_params["key_file"]:
-                    os.unlink(conn_params["key_file"])
-                os.unlink(ssh_config_path)
-                
-                return CollectResult(
-                    success=True,
-                    config_content="配置应用成功",
-                    duration_ms=int((time.time() - start_time) * 1000)
-                )
-        except NetMikoAuthenticationException:
-            logger.error(f"设备 {ip_address} 认证失败")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
+        with Netmiko(**conn_params) as ssh:
+            logger.info(f"成功连接到设备 {ip_address}")
+
+            # 进入 enable 模式（如果需要）
+            if credential.get("enable_password"):
+                logger.info("进入 enable 模式...")
+                ssh.enable()
+                logger.info("已进入 enable 模式")
+
+            # 进入配置模式（使用 netmiko 默认提示符检测，原 expect_string
+            # r"[\[~\]].*" 无法匹配 Cisco "(config)#" 提示符，会一直卡到超时）
+            if config_cmds["enter_config"]:
+                logger.info(f"进入配置模式：{config_cmds['enter_config']}")
+                output = ssh.send_command(config_cmds["enter_config"])
+                logger.info(f"进入配置模式输出：{output.strip()[:100]}")
+                logger.info("已进入配置模式")
+
+            # 批量发送配置（使用 send_config_set 方法）
+            logger.info(f"开始发送配置，共 {len(config_lines)} 行")
+
+            # 使用 send_config_set 批量发送配置，禁用自动进入/退出配置模式
+            output = ssh.send_config_set(
+                config_lines,
+                delay_factor=0.1,
+                max_loops=1000,
+                strip_prompt=False,
+                strip_command=False,
+                enter_config_mode=False,   # 我们已经手动进入了配置模式
+                exit_config_mode=False     # 暂时不退出，保存后再退出
+            )
+            logger.info(f"配置发送完成，共 {len(config_lines)} 行")
+
+            # 保存配置
+            if config_cmds["save"]:
+                logger.info(f"保存配置：{config_cmds['save']}")
+                # 使用 send_command_timing 处理交互式命令（更可靠）
+                output = ssh.send_command_timing(config_cmds["save"])
+                logger.info(f"保存命令输出：{output.strip()[:500]}")
+
+                # 发送确认 'y'
+                if config_cmds["confirm_save"]:
+                    logger.info(f"发送确认：{config_cmds['confirm_save']}")
+                    # 使用 send_command_timing，不等待特定提示符
+                    output2 = ssh.send_command_timing(config_cmds["confirm_save"], delay_factor=2)
+                    logger.info(f"确认输出：{output2.strip()[:500]}")
+
+                    # 处理文件名输入提示（H3C 设备会提示输入文件名）
+                    if "input the file name" in output2.lower() or "press the enter key" in output2.lower():
+                        logger.info("检测到文件名输入提示，按回车使用默认文件名")
+                        output3 = ssh.send_command_timing("\n", delay_factor=3)
+                        logger.info(f"文件名确认输出：{output3.strip()[:300]}")
+
+                        # 处理覆盖确认（H3C 设备会提示是否覆盖现有文件）
+                        if "overwrite" in output3.lower() and "[y/n]" in output3.lower():
+                            logger.info("检测到覆盖确认提示，发送确认：y")
+                            output4 = ssh.send_command_timing("y", delay_factor=3)
+                            logger.info(f"覆盖确认输出：{output4.strip()[:300]}")
+
+                    elif ".cfg" in output2.lower():
+                        # 如果包含 .cfg 但不包含输入提示，也发送回车
+                        logger.info("检测到文件名提示，按回车使用默认文件名")
+                        output3 = ssh.send_command_timing("\n", delay_factor=3)
+                        logger.info(f"文件名确认输出：{output3.strip()[:300]}")
+
+                        # 处理覆盖确认
+                        if "overwrite" in output3.lower() and "[y/n]" in output3.lower():
+                            logger.info("检测到覆盖确认提示，发送确认：y")
+                            output4 = ssh.send_command_timing("y", delay_factor=3)
+                            logger.info(f"覆盖确认输出：{output4.strip()[:300]}")
+
+                    logger.info("保存确认完成")
+
+            # 退出配置模式
+            if config_cmds["exit_config"]:
+                logger.info(f"退出配置模式: {config_cmds['exit_config']}")
+                ssh.send_command(config_cmds["exit_config"])
+                logger.info("已退出配置模式")
+
             return CollectResult(
-                success=False,
-                error_message="认证失败",
+                success=True,
+                config_content="配置应用成功",
                 duration_ms=int((time.time() - start_time) * 1000)
             )
-        except NetMikoTimeoutException:
-            logger.error(f"设备 {ip_address} 连接超时")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
-            return CollectResult(
-                success=False,
-                error_message="连接超时",
-                duration_ms=int((time.time() - start_time) * 1000)
-            )
-        except Exception as e:
-            logger.error(f"设备 {ip_address} 配置应用失败: {str(e)}")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
-            return CollectResult(
-                success=False,
-                error_message=str(e),
-                duration_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    except Exception as e:
-        logger.error(f"设备 {ip_address} 还原配置发生错误: {str(e)}")
-        os.unlink(ssh_config_path)
+    except NetMikoAuthenticationException:
+        logger.error(f"设备 {ip_address} 认证失败")
         return CollectResult(
             success=False,
-            error_message=f"应用配置异常: {str(e)}",
+            error_message="认证失败",
             duration_ms=int((time.time() - start_time) * 1000)
         )
+    except NetMikoTimeoutException:
+        logger.error(f"设备 {ip_address} 连接超时")
+        return CollectResult(
+            success=False,
+            error_message="连接超时",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    except Exception as e:
+        logger.error(f"设备 {ip_address} 配置应用失败: {str(e)}")
+        return CollectResult(
+            success=False,
+            error_message=str(e),
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    finally:
+        # 统一清理临时文件（finally 保证任何路径都不泄漏；容忍已删除）
+        if key_file_path:
+            try:
+                os.unlink(key_file_path)
+            except FileNotFoundError:
+                pass
+        if ssh_config_path:
+            try:
+                os.unlink(ssh_config_path)
+            except FileNotFoundError:
+                pass

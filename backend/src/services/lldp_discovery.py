@@ -230,7 +230,9 @@ async def run_full_discovery(
             except Exception:
                 pass
 
-    result = await db.execute(select(Device).where(Device.status != "offline"))
+    # 只对"在用"设备做 SSH 采集：停用/维修/报废设备可能已断电或改接，
+    # 登录只会产生失败连接（并可能触发设备侧账号锁定）
+    result = await db.execute(select(Device).where(Device.status == "active"))
     devices = result.scalars().all()
     if not devices:
         raise Exception("没有可用设备")

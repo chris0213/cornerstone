@@ -20,7 +20,7 @@ from ..services.backup_collector import collect_device_config, detect_config_cha
 from ..utils.crypto import encrypt_password, decrypt_password
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user, require_permission, PageParams, pagination
+from .dependencies import get_current_active_user, require_permission, require_super_admin, PageParams, pagination
 
 router = APIRouter()
 
@@ -535,7 +535,15 @@ async def trigger_backup(
     device = result.scalar_one_or_none()
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
-    
+
+    # 解析管理IP（Device 模型只有 mgmt_ip_id，没有 ip_address 字段）
+    device_ip = None
+    if device.mgmt_ip_id:
+        mgmt_ip = await db.get(IPAddress, device.mgmt_ip_id)
+        device_ip = mgmt_ip.address if mgmt_ip else None
+    if not device_ip:
+        raise HTTPException(status_code=400, detail="设备未配置管理IP，无法备份")
+
     # 获取凭证（优先设备凭证，然后找共享凭证）
     result = await db.execute(select(Credential).where(Credential.device_id == device_id))
     credential = result.scalar_one_or_none()
@@ -570,7 +578,7 @@ async def trigger_backup(
         # 执行采集
         device_dict = {
             "id": device.id,
-            "ip_address": device.ip_address,
+            "ip_address": device_ip,
             "vendor": device.vendor,
         }
         
@@ -673,7 +681,15 @@ async def trigger_batch_backup(
             device = result.scalar_one_or_none()
             if not device:
                 continue
-            
+
+            # 解析管理IP（Device 模型只有 mgmt_ip_id，没有 ip_address 字段）
+            device_ip = None
+            if device.mgmt_ip_id:
+                mgmt_ip = await db.get(IPAddress, device.mgmt_ip_id)
+                device_ip = mgmt_ip.address if mgmt_ip else None
+            if not device_ip:
+                continue
+
             # 获取凭证
             result = await db.execute(select(Credential).where(Credential.device_id == device_id))
             credential = result.scalar_one_or_none()
@@ -712,7 +728,7 @@ async def trigger_batch_backup(
             # 执行采集
             device_dict = {
                 "id": device.id,
-                "ip_address": device.ip_address,
+                "ip_address": device_ip,
                 "vendor": device.vendor,
             }
             
@@ -786,29 +802,49 @@ async def restore_backup(
     backup_id: int,
     ip_address: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_super_admin)
 ):
     """
-    将指定备份版本的配置还原到设备
+    将指定备份版本的配置还原到设备。
+
+    稳定性加固：
+    1. 仅超级管理员可执行（还原是直接向运行设备推配置的高危操作）；
+    2. 目标 IP 必须是该设备登记的管理 IP，防止把 A 设备配置刷到 B 设备；
+    3. 还原前自动触发一次当前配置的新备份，失败可回退。
     """
     import logging
     logger = logging.getLogger("cornerstone")
     logger.info(f"========== 开始还原备份 {backup_id} ==========")
-    
+
     # 获取备份记录
     result = await db.execute(select(Backup).where(Backup.id == backup_id))
     backup = result.scalar_one_or_none()
-    
+
     if not backup:
         raise HTTPException(status_code=404, detail="Backup not found")
-    
+
     # 获取设备
     result = await db.execute(select(Device).where(Device.id == backup.device_id))
     device = result.scalar_one_or_none()
-    
+
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
-    
+
+    # 目标 IP 归属校验：只允许还原到该设备登记的管理 IP（Device 只有 mgmt_ip_id）
+    if not device.mgmt_ip_id:
+        raise HTTPException(status_code=400, detail="设备未配置管理IP，无法还原")
+    mgmt_ip = await db.get(IPAddress, device.mgmt_ip_id)
+    if not mgmt_ip:
+        raise HTTPException(status_code=400, detail="管理IP记录不存在，无法还原")
+    if ip_address.strip() != mgmt_ip.address:
+        logger.warning(
+            f"还原目标 IP 不匹配已拒绝: 传入={ip_address}, 设备管理IP={mgmt_ip.address}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"还原目标 IP 必须是设备登记的管理 IP {mgmt_ip.address}，已拒绝还原到 {ip_address}"
+        )
+
     # 获取凭证（优先设备凭证，然后找共享凭证）
     result = await db.execute(select(Credential).where(Credential.device_id == backup.device_id))
     credential = result.scalar_one_or_none()
@@ -843,10 +879,39 @@ async def restore_backup(
         "jump_password": decrypt_password(credential.jump_password),
     }
     
+    # 还原前自动备份当前配置（失败可回退；失败不阻断还原但记录日志）
+    try:
+        pre_result = await collect_device_config(
+            {"id": device.id, "ip_address": mgmt_ip.address, "vendor": device.vendor or "huawei_vrp"},
+            credential_dict,
+        )
+        if pre_result.success:
+            latest = await db.execute(
+                select(Backup).where(Backup.device_id == device.id).order_by(desc(Backup.version)).limit(1)
+            )
+            latest = latest.scalar_one_or_none()
+            pre_backup = Backup(
+                device_id=device.id,
+                version=(latest.version if latest else 0) + 1,
+                content=pre_result.config_content,
+                content_hash=calculate_hash(pre_result.config_content),
+                trigger="pre_restore",
+                operator=current_user.username,
+                status="success",
+                size=len(pre_result.config_content),
+            )
+            db.add(pre_backup)
+            await db.commit()
+            logger.info(f"还原前自动备份完成 device={device.id} backup={pre_backup.id}")
+        else:
+            logger.warning(f"还原前自动备份失败（继续还原）: {pre_result.error_message}")
+    except Exception as e:
+        logger.warning(f"还原前自动备份异常（继续还原）: {e}")
+
     # 构建设备信息
     device_dict = {
         "id": device.id,
-        "ip_address": ip_address,
+        "ip_address": mgmt_ip.address,
         "vendor": device.vendor or "huawei_vrp",
     }
     

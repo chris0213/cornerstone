@@ -212,16 +212,28 @@ async def _auto_recover_alerts(db: AsyncSession, device_id: int) -> int:
     return recovered
 
 
+# 监控并发上限：每台设备一轮 = 1 个 ping 子进程（最坏约 20s），
+# 不限流时设备一多会瞬间拉起数百个并发子进程，导致 CPU/fd 飙升
+MONITOR_CONCURRENCY = 50
+
+
 async def run_monitoring_task(db: AsyncSession) -> None:
     """运行监控任务"""
-    # 获取所有正常状态的设备
-    query = select(Device).where(Device.status != "offline")
+    # 获取所有在用状态的设备（生命周期四态：在用/停用/维修/报废，只监控在用）
+    query = select(Device).where(Device.status == "active")
     result = await db.execute(query)
     devices = result.scalars().all()
-    
+
+    # 限流并发监控，防止 CPU/进程数瞬时飙升
+    semaphore = asyncio.Semaphore(MONITOR_CONCURRENCY)
+
+    async def monitor_with_semaphore(device):
+        async with semaphore:
+            await monitor_device(db, device)
+
     # 并行监控所有设备
-    tasks = [monitor_device(db, device) for device in devices]
-    await asyncio.gather(*tasks)
+    tasks = [monitor_with_semaphore(device) for device in devices]
+    await asyncio.gather(*tasks, return_exceptions=True)
     
     # 所有设备监控完成后统一提交事务
     await db.commit()
