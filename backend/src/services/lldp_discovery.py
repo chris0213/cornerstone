@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, List, Tuple, Callable, Awaitable
+from typing import Optional, List, Tuple, Callable, Awaitable, Dict
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,6 +102,87 @@ async def get_device_credential(db: AsyncSession, device: Device) -> Optional[Cr
     query = select(Credential).where(Credential.device_id.is_(None)).limit(1)
     result = await db.execute(query)
     return result.scalar_one_or_none()
+
+
+async def prefetch_device_credentials(db: AsyncSession, devices: List[Device]) -> Dict[int, Credential]:
+    """
+    批量预载设备凭证映射 {device_id: Credential}，消除逐台设备的 N+1 查询
+    匹配规则与 get_device_credential 一致：设备专用凭证优先，其次全局凭证（取第一条）
+    """
+    result = await db.execute(select(Credential))
+    all_creds = result.scalars().all()
+    global_cred = next((c for c in all_creds if c.device_id is None), None)
+    cred_by_device: Dict[int, Credential] = {c.device_id: c for c in all_creds if c.device_id is not None}
+    for device in devices:
+        if device.id not in cred_by_device and global_cred is not None:
+            cred_by_device[device.id] = global_cred
+    return cred_by_device
+
+
+async def load_device_lookup(db: AsyncSession) -> "DeviceLookup":
+    """
+    一次性预载全部设备（含管理IP映射）到内存查找表，供邻居名称匹配使用，
+    消除每邻居一次的全表查询（N+1）
+    """
+    result = await db.execute(select(Device))
+    all_devices = result.scalars().all()
+    ip_result = await db.execute(select(IPAddress))
+    ip_map = {ip.id: ip.address for ip in ip_result.scalars().all()}
+
+    lookup = DeviceLookup()
+    by_name = {}
+    by_ip = {}
+    for dev in all_devices:
+        by_name[dev.name] = dev
+        mgmt_ip = ip_map.get(dev.mgmt_ip_id)
+        if mgmt_ip:
+            by_ip[mgmt_ip] = dev
+    # 后缀匹配按名称长度降序：长名称优先，避免短名误命中
+    suffix_candidates = sorted(
+        ((len(d.name or ""), d) for d in all_devices),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    lookup.by_name = by_name
+    lookup.by_ip = by_ip
+    lookup.suffix_candidates = suffix_candidates
+    return lookup
+
+
+class DeviceLookup:
+    """
+    设备内存查找表（一次预载，多次查询）
+    匹配顺序与 find_device_by_name_or_ip 一致：精确名称 → 管理IP → 后缀匹配
+    """
+    by_name: Dict[str, Device] = {}
+    by_ip: Dict[str, Device] = {}
+    # [(名称长度, Device)] 按长度降序
+    suffix_candidates: List[Tuple[int, Device]] = []
+
+    def match(self, name_or_ip: str) -> Optional[Device]:
+        """按「精确名称 → 管理IP → 后缀」顺序匹配邻居名，找不到返回 None"""
+        if not name_or_ip:
+            return None
+        name_or_ip = name_or_ip.strip()
+        if not name_or_ip:
+            return None
+
+        # 1. 精确名称匹配
+        device = self.by_name.get(name_or_ip)
+        if device:
+            return device
+
+        # 2. 管理 IP 匹配（部分设备 LLDP 上报 Chassis ID 为管理地址）
+        device = self.by_ip.get(name_or_ip)
+        if device:
+            return device
+
+        # 3. 后缀匹配：邻居名以设备名开头（名称过短的设备名容易误命中，要求>=3字符）
+        for _, dev in self.suffix_candidates:
+            if len(dev.name or "") >= 3 and name_or_ip.startswith(dev.name):
+                logger.info(f"设备名称匹配（后缀匹配）: {name_or_ip} -> {dev.name}")
+                return dev
+
+        return None
 
 
 async def find_device_by_name_or_ip(db: AsyncSession, name_or_ip: str) -> Optional[Device]:
@@ -251,6 +332,9 @@ async def run_full_discovery(
     ip_map = {ip.id: ip.address for ip in ip_result.scalars().all()}
 
     # 构建采集任务（每个设备：主凭证优先，兜底凭证截断到 MAX_CREDENTIAL_ATTEMPTS）
+    # 批量预载凭证映射，消除逐台设备 2 次查询的 N+1
+    cred_by_device = await prefetch_device_credentials(db, devices_with_ip)
+
     semaphore = asyncio.Semaphore(DISCOVERY_CONCURRENCY)
 
     async def collect(device: Device, primary: Credential) -> Tuple[Device, Optional[list], Optional[str]]:
@@ -270,7 +354,7 @@ async def run_full_discovery(
 
     tasks = []
     for device in devices_with_ip:
-        credential = await get_device_credential(db, device)
+        credential = cred_by_device.get(device.id)
         if not credential:
             logger.warning(f"设备 {device.name} 没有配置凭证，跳过")
             continue
@@ -299,6 +383,10 @@ async def run_full_discovery(
         "failed_devices": [],       # 最多保留5条明细
     }
 
+    # 一次性预载设备查找表：匹配在采集全部完成后统一进行，
+    # 消除每邻居一次全表查询的 N+1（邻居数量可达数百）
+    device_lookup = await load_device_lookup(db)
+
     all_links = []
     await progress("匹配邻居与链路", len(tasks), len(tasks), "")
     for device, neighbors, err in collected:
@@ -310,7 +398,7 @@ async def run_full_discovery(
 
         stats["devices_ok"] += 1
         for neighbor in neighbors:
-            target_device = await find_device_by_name_or_ip(db, neighbor.get('remote_device'))
+            target_device = device_lookup.match(neighbor.get('remote_device'))
             if target_device and target_device.id != device.id:
                 all_links.append({
                     "source_device_id": device.id,

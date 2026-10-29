@@ -12,11 +12,15 @@ from ..database import async_session
 from ..models.setting import Setting
 from ..models.audit_log import AuditLog
 from ..models.ai_chat_log import AIChatLog
+from ..models.link_monitor import LinkMonitor
 import json
 
 logger = logging.getLogger(__name__)
 
 LOG_SETTINGS_KEY = "log_settings"
+
+# 链路监控数据保留天数：每设备每轮监控插一行，不清理会无限膨胀
+LINK_MONITOR_RETENTION_DAYS = 30
 
 
 async def cleanup_expired_logs():
@@ -86,6 +90,15 @@ async def cleanup_expired_logs():
             )
             deleted_count += ai_log_result.rowcount
             logger.info(f"删除了 {ai_log_result.rowcount} 条过期 AI 聊天日志")
+
+            # 删除过期链路监控数据（保留 30 天）：监控任务每设备每轮插一行，
+            # 不清理会导致 link_monitor 表无限膨胀拖慢监控写入
+            monitor_cutoff = datetime.now() - timedelta(days=LINK_MONITOR_RETENTION_DAYS)
+            monitor_result = await db.execute(
+                delete(LinkMonitor).where(LinkMonitor.created_at < monitor_cutoff)
+            )
+            deleted_count += monitor_result.rowcount
+            logger.info(f"删除了 {monitor_result.rowcount} 条过期链路监控数据")
 
             await db.commit()
             

@@ -1,6 +1,7 @@
 """IP地址扫描服务"""
 import asyncio
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import AsyncGenerator, Optional, List, Dict
 from ipaddress import IPv4Network
@@ -10,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 # 默认 TCP 探测端口组（服务器/网络设备/办公设备全覆盖）
 DEFAULT_TCP_PORTS = [22, 80, 443, 8080, 445, 139, 161, 3389, 5060]
+
+# 主机名解析专用线程池：DNS 解析（gethostbyaddr）可能慢至数秒且 to_thread 无法中断，
+# 用独立小池隔离，避免慢 DNS 占满默认线程池，饿死 ping/ARP 等其他阻塞操作
+_dns_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dns-resolve")
 
 
 def parse_custom_ports(raw: Optional[str]) -> Optional[List[int]]:
@@ -133,10 +138,16 @@ async def _probe_arp(ip: str, timeout: float) -> tuple[bool, Optional[str]]:
 
 
 async def _probe_hostname(ip: str, timeout: float) -> Optional[str]:
-    """尝试获取主机名"""
+    """尝试获取主机名
+    用专用线程池执行 DNS 反查：gethostbyaddr 无法真正超时中断，
+    慢 DNS 只会占用本专用池（最多 4 线程），不影响默认线程池上的其他操作；
+    超时后放弃本次解析，线程内的查询自然结束后自行释放。
+    """
     try:
-        hostname = await asyncio.to_thread(
-            socket.gethostbyaddr, ip
+        loop = asyncio.get_running_loop()
+        hostname = await asyncio.wait_for(
+            loop.run_in_executor(_dns_executor, socket.gethostbyaddr, ip),
+            timeout=timeout,
         )
         return hostname[0] if hostname else None
     except Exception:
@@ -284,14 +295,17 @@ async def scan_prefix(
             
             return progress_info, result_info
     
-    # 并发扫描所有IP
-    tasks = [scan_ip(ip) for ip in all_ips]
-    
-    # 收集并yield结果
-    for task in asyncio.as_completed(tasks):
-        progress_info, result_info = await task
-        yield progress_info
-        yield result_info
+    # 并发扫描所有 IP（分批物化：每批只创建 SCAN_BATCH_SIZE 个协程对象，
+    # 批内全部完成后才物化下一批，避免 /16 网段一次创建 6.5 万个协程打爆内存；
+    # 批大小远大于 max_concurrent，信号量并发能力不受影响）
+    SCAN_BATCH_SIZE = 512
+    for batch_start in range(0, total, SCAN_BATCH_SIZE):
+        batch = all_ips[batch_start:batch_start + SCAN_BATCH_SIZE]
+        tasks = [scan_ip(ip) for ip in batch]
+        for task in asyncio.as_completed(tasks):
+            progress_info, result_info = await task
+            yield progress_info
+            yield result_info
     
     # 扫描完成
     duration = (datetime.now() - start_time).total_seconds()
@@ -308,6 +322,17 @@ async def scan_prefix(
 
 # 扫描任务存储（内存中）
 scan_tasks: Dict[str, dict] = {}
+
+# 按 prefix_id 的扫描互斥锁注册表：手动扫描（API）与定时扫描（调度器）共用，
+# 保证同一子网同一时刻只有一路扫描在跑，避免重复探测打爆网络与重复写库
+prefix_scan_locks: Dict[int, asyncio.Lock] = {}
+
+
+def get_prefix_scan_lock(prefix_id: int) -> asyncio.Lock:
+    """获取（必要时创建）指定子网的扫描互斥锁"""
+    if prefix_id not in prefix_scan_locks:
+        prefix_scan_locks[prefix_id] = asyncio.Lock()
+    return prefix_scan_locks[prefix_id]
 
 
 def get_scan_task(task_id: str):

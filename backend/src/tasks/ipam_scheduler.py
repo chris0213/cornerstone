@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import async_session
 from ..models import Prefix, IPAddress
-from ..services.scanner import scan_prefix, parse_custom_ports
+from ..services.scanner import scan_prefix, parse_custom_ports, get_prefix_scan_lock
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,18 @@ def init_ipam_scheduler(app_scheduler: AsyncIOScheduler):
 
 async def _run_prefix_scan(prefix_id: int):
     """单个 prefix 的扫描执行体（被 APScheduler 定时调用）"""
+    # 与手动扫描（API）共享同一把锁：同一子网同时只允许一路扫描，
+    # 手动扫描进行中时定时任务跳过本轮，避免重复探测与重复写库
+    lock = get_prefix_scan_lock(prefix_id)
+    if lock.locked():
+        logger.info(f"[ipam-scan] prefix_id={prefix_id} 已有扫描进行中（可能为手动触发），跳过本轮定时扫描")
+        return
+    async with lock:
+        await _run_prefix_scan_locked(prefix_id)
+
+
+async def _run_prefix_scan_locked(prefix_id: int):
+    """持锁执行扫描（仅被 _run_prefix_scan 调用）"""
     logger.info(f"[ipam-scan] 定时扫描 prefix_id={prefix_id} 开始")
     try:
         async with async_session() as db:

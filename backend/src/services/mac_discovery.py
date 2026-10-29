@@ -8,7 +8,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime
-from typing import Optional, Tuple, Callable, Awaitable
+from typing import Optional, List, Tuple, Callable, Awaitable, Dict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from src.services.lldp_discovery import (
     DISCOVERY_CONCURRENCY,
     get_all_credentials,
     get_device_credential,
+    prefetch_device_credentials,
     build_device_info,
     get_netmiko_device_type,
     update_or_create_device_links,
@@ -228,6 +229,64 @@ async def resolve_endpoint_device(db: AsyncSession, mac_norm: str, ip: Optional[
     return None
 
 
+class EndpointLookup:
+    """
+    终端解析内存查找表（一次预载，多次查询）
+    解析顺序与 resolve_endpoint_device 一致：管理IP → IPAM 关联业务设备 → MAC 变体
+    """
+
+    def __init__(self, db: AsyncSession):
+        self._db = db
+        self.by_mgmt_ip: Dict[str, Device] = {}
+        self.device_by_id: Dict[int, Device] = {}
+        # ip -> device_id（IPAM 中已关联业务设备的 IP）
+        self.ip_to_device_id: Dict[str, int] = {}
+        # MAC 各书写变体 -> [(ip_address_id, ...)]；值存 device_id 列表（含重复无妨）
+        self.mac_to_device_ids: Dict[str, List[int]] = {}
+
+    async def load(self):
+        """预载全部设备、IPAM 记录到内存"""
+        device_result = await self._db.execute(select(Device))
+        for dev in device_result.scalars().all():
+            self.device_by_id[dev.id] = dev
+        ip_result = await self._db.execute(select(IPAddress))
+        for ip_row in ip_result.scalars().all():
+            # 1. 管理IP 映射
+            for dev in self.device_by_id.values():
+                if dev.mgmt_ip_id == ip_row.id:
+                    self.by_mgmt_ip[ip_row.address] = dev
+                    break
+            # 2. IPAM 关联业务设备
+            if ip_row.device_id is not None and ip_row.device_id in self.device_by_id:
+                self.ip_to_device_id[ip_row.address] = ip_row.device_id
+            # 3. MAC 变体映射（IPAM 扫描填充的 mac_address，多种书写格式）
+            if ip_row.device_id is not None and ip_row.mac_address:
+                normalized = normalize_mac(ip_row.mac_address)
+                if normalized:
+                    for variant in mac_variants(normalized):
+                        self.mac_to_device_ids.setdefault(variant, []).append(ip_row.device_id)
+        return self
+
+    def match(self, mac_norm: str, ip: Optional[str]) -> Optional[Device]:
+        """按 resolve_endpoint_device 同序匹配，找不到返回 None"""
+        if ip:
+            device = self.by_mgmt_ip.get(ip)
+            if device:
+                return device
+            device_id = self.ip_to_device_id.get(ip)
+            if device_id is not None:
+                device = self.device_by_id.get(device_id)
+                if device:
+                    return device
+        if mac_norm:
+            for variant in mac_variants(mac_norm):
+                for device_id in self.mac_to_device_ids.get(variant, []):
+                    device = self.device_by_id.get(device_id)
+                    if device:
+                        return device
+        return None
+
+
 async def upsert_unknown_endpoints(db: AsyncSession, records: list) -> int:
     """未知接入记录落库：按（接入设备+端口+MAC）去重，重复发现仅刷新 last_seen_at"""
     now = datetime.now()
@@ -310,6 +369,9 @@ async def run_mac_discovery(
         if link.target_device_id and link.target_interface:
             known_ifaces.setdefault(link.target_device_id, set()).add(intf_tail(link.target_interface))
 
+    # 批量预载凭证映射，消除逐台设备 2 次查询的 N+1
+    cred_by_device = await prefetch_device_credentials(db, devices_with_ip)
+
     semaphore = asyncio.Semaphore(DISCOVERY_CONCURRENCY)
 
     async def collect(device: Device, credential) -> Tuple[Device, Optional[dict], Optional[str]]:
@@ -329,7 +391,7 @@ async def run_mac_discovery(
 
     tasks = []
     for device in devices_with_ip:
-        credential = await get_device_credential(db, device)
+        credential = cred_by_device.get(device.id)
         if not credential:
             logger.warning(f"设备 {device.name} 没有配置凭证，跳过")
             continue
@@ -358,6 +420,10 @@ async def run_mac_discovery(
         "failed_devices": [],            # 最多保留5条明细
     }
 
+    # 一次性预载终端解析查找表：匹配在采集全部完成后统一进行，
+    # 消除每 MAC 一次查询的 N+1（MAC 表项可达数千）
+    endpoint_lookup = await EndpointLookup(db).load()
+
     all_links = []
     pending_unknown = []
     await progress("匹配终端与资产", len(tasks), len(tasks), "")
@@ -383,7 +449,7 @@ async def run_mac_discovery(
                 continue  # MAC 过多，视为 trunk/上联口
             for mac in macs:
                 ip = data["arp_map"].get(mac)
-                target = await resolve_endpoint_device(db, mac, ip)
+                target = endpoint_lookup.match(normalize_mac(mac), ip)
                 if target and target.id != device.id:
                     all_links.append({
                         "source_device_id": device.id,

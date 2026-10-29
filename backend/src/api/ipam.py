@@ -17,7 +17,7 @@ from ..schemas import (
     IPAddressCreate, IPAddressUpdate, IPAddressResponse, IPExpiringResponse
 )
 from .dependencies import get_current_active_user, PageParams, pagination
-from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task, parse_custom_ports
+from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task, parse_custom_ports, get_prefix_scan_lock
 
 router = APIRouter()
 
@@ -30,8 +30,41 @@ class ScanManager:
     def __init__(self):
         self.active_tasks = {}
 
+    # 僵尸任务判定：创建后超过该时长仍未被 WS 消费（生成器从未启动），
+    # 视为客户端已放弃，释放锁并移除，避免永久阻塞该子网的后续扫描
+    UNCONSUMED_STALE_SECONDS = 600
+    # 消费中超时兜底：正常 /16 全量扫描最坏几分钟内完成，超过视为异常残留
+    CONSUMED_STALE_SECONDS = 2 * 3600
+
+    def _reap_stale_tasks(self, prefix_id: int):
+        """清理指定子网的僵尸扫描任务（start_scan 前调用）"""
+        now = datetime.now()
+        for tid, info in list(self.active_tasks.items()):
+            if info["prefix_id"] != prefix_id:
+                continue
+            age = (now - info["started_at"]).total_seconds()
+            consumed = info.get("consumed_at") is not None
+            stale = age > self.CONSUMED_STALE_SECONDS or (
+                not consumed and age > self.UNCONSUMED_STALE_SECONDS
+            )
+            if stale:
+                stale_lock = info.get("scan_lock")
+                if stale_lock is not None and stale_lock.locked():
+                    stale_lock.release()
+                self.active_tasks.pop(tid, None)
+                logger.warning(f"[scan] 清理僵尸扫描任务 task_id={tid} network={info['network']} age={age:.0f}s")
+
     async def start_scan(self, prefix_id: int, db: AsyncSession):
         """启动子网扫描任务"""
+        # 先清掉同子网的僵尸任务（持有锁但已无人消费），再检查互斥
+        self._reap_stale_tasks(prefix_id)
+
+        # 与定时扫描（调度器）共享同一把锁：同一子网同时只允许一路扫描，
+        # 抢不到锁说明已有扫描（手动或定时）在跑，直接拒绝避免重复探测
+        lock = get_prefix_scan_lock(prefix_id)
+        if lock.locked():
+            raise HTTPException(status_code=409, detail="该子网已有扫描任务进行中，请稍后再试")
+
         # 获取子网信息
         result = await db.execute(select(Prefix).where(Prefix.id == prefix_id))
         prefix = result.scalar_one_or_none()
@@ -61,6 +94,11 @@ class ScanManager:
         # 创建扫描生成器（惰性——这里还没开始探测任何 IP）
         scanner = scan_prefix(prefix.network, ip_list, tcp_ports=tcp_ports)
 
+        # 独占扫描通道：锁在 finally（get_scan_results 结束清理任务时）释放。
+        # 扫描生成器是惰性的，真正开始消费在 get_scan_results；这里先占住，
+        # 保证从 start_scan 到消费开始之间定时任务也不会插入
+        await lock.acquire()
+
         # 关键：不存 HTTP 请求注入的 db session（请求结束即关闭），
         # 让 _save_scan_result 在消费时自己开独立 session
         self.active_tasks[task_id] = {
@@ -68,6 +106,7 @@ class ScanManager:
             "prefix_id": prefix_id,
             "network": prefix.network,
             "started_at": datetime.now(),
+            "scan_lock": lock,
         }
 
         logger.info(f"[scan] task created task_id={task_id} network={prefix.network}")
@@ -135,6 +174,10 @@ class ScanManager:
 
         logger.info(f"[scan] task start streaming task_id={task_id} network={network}")
 
+        # 标记已进入消费：僵尸清理（UNCONSUMED_STALE_SECONDS）只针对从未启动的任务
+        if task_info.get("consumed_at") is None:
+            task_info["consumed_at"] = datetime.now()
+
         try:
             # 手动驱动 async generator — async for 无法 catch 到 generator
             # 体里的异常（被惰性执行机制吞成 StopAsyncIteration），
@@ -167,8 +210,11 @@ class ScanManager:
             logger.exception(f"[scan] task error task_id={task_id} network={network}: {e}")
             yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
         finally:
-            # 扫描完成（或中途报错）都清理任务
+            # 扫描完成（或中途报错）都清理任务，并释放子网扫描锁
             self.active_tasks.pop(task_id, None)
+            lock = task_info.get("scan_lock")
+            if lock is not None and lock.locked():
+                lock.release()
 
 
 scan_manager = ScanManager()
