@@ -17,7 +17,11 @@ from src.models.ip_address import IPAddress
 from src.models.discovery import DiscoveryUnknownEndpoint
 from src.schemas import DeviceLinkCreate, DeviceLinkUpdate, DeviceLinkResponse
 
-router = APIRouter(tags=["topology"])
+# 整个 topology 路由统一要求登录（含拓扑图、连接关系、发现任务、未知接入等全部接口）
+router = APIRouter(
+    tags=["topology"],
+    dependencies=[Depends(get_current_active_user)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -589,7 +593,6 @@ async def get_site_devices(
 @router.post("/discover-lldp")
 async def discover_lldp_neighbors(
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """启动 LLDP/CDP 邻居发现后台任务，返回 task_id（进度经 /discovery-tasks/{id} 轮询）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -630,7 +633,6 @@ async def discover_lldp_neighbors(
 @router.post("/discover-mac")
 async def discover_mac_endpoints(
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """启动 MAC/ARP 表发现后台任务（发现交换机下挂服务器等不开 LLDP 的终端）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -665,7 +667,6 @@ async def discover_mac_endpoints(
 @router.get("/discovery-tasks/{task_id}")
 async def read_discovery_task(
     task_id: str,
-    current_user: dict = Depends(get_current_active_user),
 ):
     """轮询发现任务进度与结果"""
     from src.services.discovery_task_manager import manager

@@ -85,10 +85,16 @@ async def test_run_discovery_task_failure():
 
 
 async def test_discover_requires_auth(client, db_session):
-    """三个 discover 接口未带 token 必须返回 401"""
+    """topology 全部接口（含只读）未带 token 必须返回 401"""
+    # 发现类
     assert (await client.post("/api/v1/topology/discover-lldp")).status_code == 401
     assert (await client.post("/api/v1/topology/discover-mac")).status_code == 401
     assert (await client.get("/api/v1/topology/discovery-tasks/whatever")).status_code == 401
+    # 只读接口（router 级统一鉴权）
+    assert (await client.get("/api/v1/topology/site-graph")).status_code == 401
+    assert (await client.get("/api/v1/topology/device-graph")).status_code == 401
+    assert (await client.get("/api/v1/topology/device-links")).status_code == 401
+    assert (await client.get("/api/v1/topology/unknown-endpoints")).status_code == 401
 
 
 async def test_discover_lldp_runs_on_main_loop(client, db_session, monkeypatch):
