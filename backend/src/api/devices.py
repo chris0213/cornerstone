@@ -101,6 +101,50 @@ async def delete_device(
     await db.execute(delete(Device).where(Device.id == device_id))
     await db.commit()
 
+@router.post("/{device_id}/probe")
+async def probe_device(
+    device_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user),
+):
+    """单设备在线探测：对管理 IP 做一次 ARP/TCP/ICMP 探测并回写 is_online
+
+    不依赖网段扫描，用于设备页"未探测"状态的即时探测。
+    """
+    from ..services.scanner import probe_single_ip
+
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if not device.mgmt_ip_id:
+        raise HTTPException(status_code=400, detail="设备未配置管理IP，无法探测")
+
+    ip_result = await db.execute(select(IPAddress).where(IPAddress.id == device.mgmt_ip_id))
+    mgmt_ip = ip_result.scalar_one_or_none()
+    if not mgmt_ip:
+        raise HTTPException(status_code=400, detail="管理IP记录不存在，无法探测")
+
+    probe = await probe_single_ip(mgmt_ip.address)
+    # 回写探测结果，口径与网段扫描一致（在线才更新 MAC/端口）
+    mgmt_ip.is_online = probe["is_online"]
+    if probe["is_online"]:
+        mgmt_ip.mac_address = probe.get("mac_address") or mgmt_ip.mac_address
+        if probe.get("open_ports"):
+            import json as _json
+            mgmt_ip.open_ports = _json.dumps(probe["open_ports"])
+    await db.commit()
+
+    return {
+        "device_id": device.id,
+        "address": mgmt_ip.address,
+        "is_online": probe["is_online"],
+        "method": probe["method"],
+        "open_ports": probe.get("open_ports") or [],
+        "duration_ms": probe["duration_ms"],
+    }
+
+
 @router.post("/{device_id}/backup")
 async def backup_device_config(
     device_id: int,

@@ -3,14 +3,14 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Download, Upload, Edit, Delete, MagicStick } from '@element-plus/icons-vue'
+import { Download, Upload, Edit, Delete, MagicStick, Refresh } from '@element-plus/icons-vue'
 import { formatDate } from '../../lib/utils'
 import { applyKeywordFilter } from '../../lib/filters'
 import { confirmAndRun } from '../../lib/confirm'
 import { useCrudForm } from '../../lib/useCrudForm'
 import type { Device, IPAddress, Site } from '../../types/domain'
 import { getIPAddresses, getIPAddressesByIds, findIPAddressByAddress, createIPAddress } from '../../api/ipam'
-import { getDevices, createDevice, updateDevice, deleteDevice, type DeviceResponse } from '../../api/devices'
+import { getDevices, createDevice, updateDevice, deleteDevice, probeDevice, type DeviceResponse } from '../../api/devices'
 import { getDeviceLinks } from '../../api/topology'
 import { getSites, type SiteResponse } from '../../api/sites'
 import { useAppStore } from '../../store'
@@ -38,6 +38,36 @@ function getOnlineState(device: Pick<Device, 'mgmtIpId'>): OnlineState {
 const onlineCount = computed(() => devices.value.filter(d => getOnlineState(d) === 'online').length)
 const offlineCount = computed(() => devices.value.filter(d => getOnlineState(d) === 'offline').length)
 const notProbedCount = computed(() => devices.value.filter(d => getOnlineState(d) === 'notProbed').length)
+
+// 单设备在线探测：不依赖网段扫描，探测管理 IP 并回写 is_online
+const probingIds = ref<Set<number>>(new Set())
+
+async function handleProbe(device: DeviceResponse) {
+  const mgmtIpId = (device as any).mgmt_ip_id ?? (device as any).mgmtIpId
+  if (!mgmtIpId) {
+    ElMessage.warning(t('devices.probeNoIp'))
+    return
+  }
+  if (probingIds.value.has(device.id)) return
+  probingIds.value.add(device.id)
+  try {
+    const result = await probeDevice(device.id)
+    // 探测结果已由后端回写 IPAM，刷新本地 IP 缓存以驱动在线列更新
+    const ip = ipAddresses.value.find(addr => String(addr.id) === String(mgmtIpId))
+    if (ip) {
+      ;(ip as any).isOnline = result.is_online
+    }
+    ElMessage.success(
+      result.is_online
+        ? t('devices.probeOnline', { ip: result.address, method: result.method })
+        : t('devices.probeOffline', { ip: result.address })
+    )
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || t('devices.probeFailed'))
+  } finally {
+    probingIds.value.delete(device.id)
+  }
+}
 
 // 生命周期状态：显示映射（含中文存量值回退，不修改存量数据）
 const lifecycleText: Record<string, string> = {
@@ -977,11 +1007,19 @@ onMounted(async () => {
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="columnVisible.online" prop="onlineState" :label="t('devices.onlineState')" width="90" align="center" class-name="nowrap-col">
+        <el-table-column v-if="columnVisible.online" prop="onlineState" :label="t('devices.onlineState')" width="100" align="center" class-name="nowrap-col">
           <template #default="{ row }">
             <span v-if="getOnlineState(row) === 'online'" class="online-dot online-dot-on"></span>
             <span v-else-if="getOnlineState(row) === 'offline'" class="online-dot online-dot-off"></span>
-            <span v-else class="muted">{{ t('devices.notProbed') }}</span>
+            <el-tooltip v-else-if="row.mgmtIpId" :content="t('devices.probeTip')" placement="top">
+              <el-link type="primary" :underline="false" class="probe-link" @click="handleProbe(row)">
+                <span v-if="probingIds.has(row.id)" class="probing-spinner"></span>
+                {{ t('devices.probeNow') }}
+              </el-link>
+            </el-tooltip>
+            <el-tooltip v-else :content="t('devices.probeNoIpTip')" placement="top">
+              <span class="muted">{{ t('devices.notProbed') }}</span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column v-if="columnVisible.lifecycle" prop="status" :label="t('devices.lifecycle')" width="110" class-name="nowrap-col">
@@ -1017,6 +1055,10 @@ onMounted(async () => {
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item @click="handleProbe(row)">
+                      <el-icon><Refresh /></el-icon>
+                      {{ t('devices.probeNow') }}
+                    </el-dropdown-item>
                     <el-dropdown-item class="danger-item" @click="handleDelete(row)">
                       <el-icon><Delete /></el-icon>
                       {{ t('common.delete') }}
@@ -1519,6 +1561,28 @@ onMounted(async () => {
 .online-dot-off {
   background: #bfbfbf;
   box-shadow: 0 0 0 3px rgba(191, 191, 191, 0.15);
+}
+
+/* 单机探测链接与转圈 */
+.probe-link {
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.probing-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: probe-spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes probe-spin {
+  to { transform: rotate(360deg); }
 }
 
 .muted {

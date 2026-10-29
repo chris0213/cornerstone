@@ -75,3 +75,18 @@ export async function updateDevice(id: number, data: Partial<DeviceCreate>): Pro
 export async function deleteDevice(id: number): Promise<void> {
   await api.delete(`/devices/${id}`)
 }
+
+export interface ProbeResult {
+  device_id: number
+  address: string
+  is_online: boolean
+  method: string
+  open_ports: number[]
+  duration_ms: number
+}
+
+// 单设备在线探测（对管理 IP 做一次 ARP/TCP/ICMP 探测并回写 is_online）
+export async function probeDevice(id: number): Promise<ProbeResult> {
+  const response = await api.post(`/devices/${id}/probe`)
+  return response.data
+}
