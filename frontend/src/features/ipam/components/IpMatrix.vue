@@ -38,7 +38,10 @@ const cidrInfo = computed(() => {
   return { base, totalHosts: Math.max(2 ** (32 - mask) - 2, 1), valid: true }
 })
 
+// 大网络（>512 主机）：限高限宽滚动
 const isLargeNetwork = computed(() => cidrInfo.value.totalHosts > 512)
+// 超大网络（>4096 主机）：格子过小无法常显数字，退回悬停显示
+const isHugeNetwork = computed(() => cidrInfo.value.totalHosts > 4096)
 
 // 生成子网内所有主机地址（跳过网络地址，末尾广播地址自然落在范围外）
 const allIPs = computed(() => {
@@ -177,7 +180,7 @@ watch(() => props.scanningCurrentIp, async (ip) => {
                 :data-ip="ip.address"
                 class="ip-block" 
                 :class="[
-                  { 'ip-block-assigned': !!ip.data, 'ip-block-scanning': isCurrentScanning(ip.address), 'ip-block-small': isLargeNetwork },
+                  { 'ip-block-assigned': !!ip.data, 'ip-block-scanning': isCurrentScanning(ip.address), 'ip-block-small': isLargeNetwork, 'ip-block-hide-octet': isHugeNetwork },
                   getScanResultClass(ip.address),
                 ]"
                 :style="{ backgroundColor: getStatusColor(ip) }"
@@ -251,18 +254,23 @@ watch(() => props.scanningCurrentIp, async (ip) => {
   gap: 4px;
 }
 
-/* 大网络小格子（隐藏末段数字改为 hover 显示） */
+/* 大网络小格子（略小但仍常显末段数字） */
 .ip-block-small {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 3px;
 }
 
 .ip-block-small .ip-last-octet {
+  font-size: 9px;
+}
+
+/* 超大网络（>4096 主机）：格子过小，末段数字改为 hover 显示 */
+.ip-block-hide-octet .ip-last-octet {
   display: none;
 }
 
-.ip-block-small:hover .ip-last-octet {
+.ip-block-hide-octet:hover .ip-last-octet {
   display: block;
 }
 
