@@ -258,8 +258,13 @@ const handleScanPrefix = async (prefixId: string | number, network: string) => {
     }
   } catch (err: any) {
     console.error('启动扫描失败:', err)
-    const detail = err?.response?.data?.detail || err?.message || t('ipam.scanStartError')
-    ElMessage.error(t('ipam.scanStartFailed') + ': ' + detail)
+    if (err?.response?.status === 409) {
+      // 子网正在扫描中（手动与定时互斥），给出明确引导
+      ElMessage.warning(t('ipam.scanConflict'))
+    } else {
+      const detail = err?.response?.data?.detail || err?.message || t('ipam.scanStartError')
+      ElMessage.error(t('ipam.scanStartFailed') + ': ' + detail)
+    }
   } finally {
     scanningPrefixId.value = null
   }

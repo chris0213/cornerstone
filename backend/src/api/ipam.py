@@ -112,54 +112,63 @@ class ScanManager:
         logger.info(f"[scan] task created task_id={task_id} network={prefix.network}")
         return task_id
 
-    async def _save_scan_result(self, prefix_id: int, ip: str, is_online: bool, mac_address: str = None, open_ports: List[int] = None):
-        """保存扫描结果到数据库（自己开 session，不依赖 HTTP 请求注入的 session）"""
+    async def _flush_scan_results(self, prefix_id: int, results: List[dict]):
+        """批量保存扫描结果（一个 session、一次 commit 处理一批，替代逐条开关 session）"""
+        if not results:
+            return
         from ..database import async_session
         import json
 
         # open_ports 是 List[int]，DB 里 open_ports 是 String 列 → 序列化成 JSON 字符串存
-        ports_str = json.dumps(open_ports) if open_ports else None
+        for r in results:
+            r["ports_str"] = json.dumps(r["open_ports"]) if r["open_ports"] else None
 
         async with async_session() as db:
-            result = await db.execute(select(IPAddress).where(
-                IPAddress.prefix_id == prefix_id,
-                IPAddress.address == ip
-            ))
-            existing_ip = result.scalar_one_or_none()
+            addresses = [r["ip"] for r in results]
+            result = await db.execute(
+                select(IPAddress).where(
+                    IPAddress.prefix_id == prefix_id,
+                    IPAddress.address.in_(addresses)
+                )
+            )
+            existing_map = {ip.address: ip for ip in result.scalars().all()}
 
-            if existing_ip:
+            # 已有记录：逐条构造更新（状态翻译因行而异），同一 session 内执行
+            for r in results:
+                existing_ip = existing_map.get(r["ip"])
                 update_data = {
-                    "is_online": is_online,
-                    "mac_address": mac_address,
-                    "open_ports": ports_str,
+                    "is_online": r["is_online"],
+                    "mac_address": r["mac_address"],
+                    "open_ports": r["ports_str"],
                     "last_scanned_at": func.now(),
-                    "updated_at": func.now()
+                    "updated_at": func.now(),
                 }
-                # 如果状态是英文的，转换为中文
-                if existing_ip.status == "assigned":
-                    update_data["status"] = "已分配"
-                elif existing_ip.status == "reserved":
-                    update_data["status"] = "预留"
-                elif existing_ip.status == "available":
-                    update_data["status"] = "未分配"
-
-                stmt = update(IPAddress).where(IPAddress.id == existing_ip.id).values(**update_data)
-                await db.execute(stmt)
-            else:
-                # 创建新记录（仅当IP在线时）
-                if is_online:
-                    stmt = insert(IPAddress).values(
-                        prefix_id=prefix_id,
-                        address=ip,
-                        status="已分配",
-                        is_online=is_online,
-                        mac_address=mac_address,
-                        open_ports=ports_str,
-                        last_scanned_at=func.now(),
-                        created_at=func.now(),
-                        updated_at=func.now()
+                if existing_ip:
+                    # 如果状态是英文的，转换为中文
+                    if existing_ip.status == "assigned":
+                        update_data["status"] = "已分配"
+                    elif existing_ip.status == "reserved":
+                        update_data["status"] = "预留"
+                    elif existing_ip.status == "available":
+                        update_data["status"] = "未分配"
+                    await db.execute(
+                        update(IPAddress).where(IPAddress.id == existing_ip.id).values(**update_data)
                     )
-                    await db.execute(stmt)
+                elif r["is_online"]:
+                    # 新记录仅当 IP 在线时创建
+                    await db.execute(
+                        insert(IPAddress).values(
+                            prefix_id=prefix_id,
+                            address=r["ip"],
+                            status="已分配",
+                            is_online=r["is_online"],
+                            mac_address=r["mac_address"],
+                            open_ports=r["ports_str"],
+                            last_scanned_at=func.now(),
+                            created_at=func.now(),
+                            updated_at=func.now(),
+                        )
+                    )
             await db.commit()
 
     async def get_scan_results(self, task_id: str):
@@ -184,29 +193,49 @@ class ScanManager:
             # 手动 __anext__() 才能真正把异常抛到外层 try/except
             it = scanner.__aiter__()
             logger.info(f"[scan] calling scanner first __anext__() network={network}")
+
+            # 结果批量落库缓冲：攒满 SCAN_FLUSH_BATCH 条刷一次库（1 session + 1 commit），
+            # 替代逐条开关 session 的 N+1 写法；WS 推送不受缓冲影响（实时性不变）
+            SCAN_FLUSH_BATCH = 50
+            pending_results: List[dict] = []
+
+            async def flush_pending():
+                if not pending_results:
+                    return
+                try:
+                    await self._flush_scan_results(prefix_id, pending_results)
+                except Exception as e:
+                    # 批量保存失败不影响整个扫描（单批失败仅告警，与原逐条语义一致）
+                    logger.warning(f"[scan] batch save failed network={network}: {e}")
+                pending_results.clear()
+
+            logger.info(f"[scan] task start streaming task_id={task_id} network={network}")
             while True:
                 try:
                     result = await it.__anext__()
                 except StopAsyncIteration:
+                    await flush_pending()
                     logger.info(f"[scan] task done task_id={task_id} network={network}")
                     break
 
-                # 如果是扫描结果，保存到数据库
+                # 如果是扫描结果，先入缓冲批量保存
                 if result.get("type") == "result":
-                    try:
-                        await self._save_scan_result(
-                            prefix_id=prefix_id,
-                            ip=result.get("ip", ""),
-                            is_online=result.get("is_online", False),
-                            mac_address=result.get("mac_address"),
-                            open_ports=result.get("open_ports")
-                        )
-                    except Exception as e:
-                        # 单条保存失败不影响整个扫描
-                        logger.warning(f"[scan] save result failed ip={result.get('ip')}: {e}")
+                    pending_results.append({
+                        "ip": result.get("ip", ""),
+                        "is_online": result.get("is_online", False),
+                        "mac_address": result.get("mac_address"),
+                        "open_ports": result.get("open_ports"),
+                    })
+                    if len(pending_results) >= SCAN_FLUSH_BATCH:
+                        await flush_pending()
                 yield result
 
         except Exception as e:
+            # 中途报错也把已缓冲的结果刷入库，尽量保留已探测到的数据
+            try:
+                await flush_pending()
+            except Exception:
+                pass
             logger.exception(f"[scan] task error task_id={task_id} network={network}: {e}")
             yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
         finally:

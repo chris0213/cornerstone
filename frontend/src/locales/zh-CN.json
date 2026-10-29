@@ -1130,6 +1130,7 @@
     "scanCompleted": "扫描已完成",
     "scanStartFailed": "扫描启动失败",
     "scanStartError": "扫描启动出错",
+    "scanConflict": "该子网已有扫描任务进行中，请等待完成后再试",
     "noTaskId": "未获取到任务 ID",
     "pleaseLogin": "请先登录",
     "prefixExportFilePrefix": "子网导出",

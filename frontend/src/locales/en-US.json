@@ -976,6 +976,7 @@
     "scanCompleted": "Scan completed",
     "scanStartFailed": "Failed to start scan",
     "scanStartError": "Scan start error",
+    "scanConflict": "A scan is already running for this subnet. Please wait for it to finish.",
     "noTaskId": "No task ID received",
     "pleaseLogin": "Please log in first",
     "prefixExportFilePrefix": "Subnet Export",
