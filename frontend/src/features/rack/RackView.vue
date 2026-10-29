@@ -386,10 +386,12 @@ const detailVisible = ref(false)
 const detailDevice = ref<RackDevice | null>(null)
 const removeLoading = ref(false)
 
+// 生命周期四态（active=在用），在线/离线属探测体系不在此映射
 const deviceStatusMap: Record<string, { label: string; type: string }> = {
-  active: { label: '在线', type: 'success' },
-  alert: { label: '告警', type: 'warning' },
-  offline: { label: '离线', type: 'info' },
+  active: { label: '在用', type: 'success' },
+  inactive: { label: '停用', type: 'info' },
+  maintenance: { label: '维修中', type: 'warning' },
+  scrapped: { label: '已报废', type: 'info' },
 }
 
 // 设备块类型着色（与设备页 ICON_META 图标配色一致，避免用红色表示防火墙）

@@ -14,7 +14,6 @@ import { useI18n } from 'vue-i18n'
 import { menuConfig } from './config/menuConfig'
 import { 
   DataBoard, 
-  Location,
   Connection, 
   Bell, 
   Setting, 
@@ -23,9 +22,22 @@ import {
   ArrowDown, 
   ArrowUp,
   User,
-  TrendCharts,
   Search,
-  ChatDotRound
+  ChatDotRound,
+  OfficeBuilding,
+  Grid,
+  Monitor,
+  Share,
+  Box,
+  Tickets,
+  Reading,
+  Avatar,
+  Key,
+  Lock,
+  Message,
+  MagicStick,
+  Memo,
+  Operation
 } from '@element-plus/icons-vue'
 const { t } = useI18n()
 const route = useRoute()
@@ -152,15 +164,26 @@ interface MenuItem {
 
 const iconMap: Record<string, any> = {
   DataBoard,
-  Location,
+  OfficeBuilding,
   Connection,
-  Files,
+  Grid,
+  Monitor,
+  Share,
+  Box,
   Bell,
-  Setting,
+  Tickets,
+  Reading,
+  Memo,
   User,
-  SwitchButton,
-  TrendCharts,
-  Search,
+  Avatar,
+  Key,
+  Setting,
+  Lock,
+  Message,
+  MagicStick,
+  ChatDotRound,
+  Operation,
+  Files,
 }
 
 const menuItems = computed((): Array<{ group: string; items: MenuItem[] }> => {
@@ -188,26 +211,36 @@ const menuItems = computed((): Array<{ group: string; items: MenuItem[] }> => {
   }))
 })
 
+// 菜单图标：按功能一对一分配，避免重复
+// 资源管理：场所/专线/网络；运营中心：设备/拓扑/备份/告警/变更/知识库/报表；系统：管理/安全/AI/日志
 function getIconForItem(nameKey: string): string {
   const iconMap: Record<string, string> = {
+    // 概览
     'dashboard.title': 'DataBoard',
-    'sites.title': 'Location',
-    'circuits.title': 'Connection',
-    'ipam.title': 'Files',
-    'devices.title': 'DataBoard',
-    'topology.title': 'Connection',
-    'backups.title': 'Files',
-    'alerts.title': 'Bell',
-    'inspection.title': 'TrendCharts',
-    'system.userManagement': 'User',
-    'system.roleManagement': 'Setting',
-    'system.ssoSettings': 'Connection',
-    'system.settings': 'Setting',
-    'system.notifications': 'Bell',
-    'system.aiSettings': 'SwitchButton',
-    'system.security': 'Shield',
-    'system.logsSettings': 'Files',
-    'system.logs': 'Files',
+    // 资源管理
+    'sites.title': 'OfficeBuilding',   // 场所：办公楼
+    'circuits.title': 'Connection',    // 专线：连接
+    'ipam.title': 'Grid',              // IP 地址管理：网格
+    // 运营中心
+    'devices.title': 'Monitor',        // 设备：显示器
+    'topology.title': 'Share',         // 拓扑：节点连线
+    'backups.title': 'Box',            // 备份：箱子
+    'alerts.title': 'Bell',            // 告警：铃铛
+    'changes.title': 'Tickets',        // 变更记录：工单
+    'knowledge.title': 'Reading',      // 知识库：阅读
+    'reports.title': 'Memo',           // 报表：文档记录
+    // 系统管理
+    'system.userManagement': 'User',       // 用户：人像
+    'system.roleManagement': 'Avatar',     // 角色：身份
+    'system.ssoSettings': 'Key',           // 单点登录：密钥
+    // 系统设置
+    'system.settings': 'Setting',          // 系统设置：齿轮
+    'system.security': 'Lock',             // 安全：锁
+    'system.notifications': 'Message',     // 通知配置：消息
+    'system.aiSettings': 'MagicStick',     // AI 设置：魔法棒
+    'system.aiChatLogs': 'ChatDotRound',   // AI 对话记录：对话气泡
+    'system.logsSettings': 'Operation',    // 日志采集配置：操作
+    'system.logs': 'Files',                // 系统日志：文件
   }
   return iconMap[nameKey] || 'DataBoard'
 }

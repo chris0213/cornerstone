@@ -103,10 +103,6 @@ export const useAppStore = defineStore('app', {
       return state.circuits.filter((c) => c.status === '正常').length
     },
 
-    onlineDevicesCount: (state): number => {
-      return state.devices.filter((d) => d.status === '在线').length
-    },
-
     todaySuccessfulBackups: (state): number => {
       const today = new Date().toISOString().split('T')[0]
       return state.backups.filter((b) => b.createdAt.startsWith(today) && b.status === '成功').length

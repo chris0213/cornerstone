@@ -937,9 +937,9 @@ def _build_summary_content(stats: dict) -> tuple[str, str, float]:
     alert_stats = stats["alert_stats"]
     circuit_stats = stats["circuit_stats"]
 
-    device_online = device_stats.get("active", 0) or device_stats.get("online", 0)
-    device_offline = device_stats.get("offline", 0)
-    device_alert = device_stats.get("alert", 0)
+    # 生命周期口径：active=在用；在线/离线属探测体系，不再从 status 读取
+    device_active = device_stats.get("active", 0) or device_stats.get("在线", 0)
+    device_inactive = device_stats.get("inactive", 0) or device_stats.get("停用", 0)
 
     critical_alerts = alert_stats.get("critical", 0)
     warning_alerts = alert_stats.get("warning", 0)
@@ -953,8 +953,8 @@ def _build_summary_content(stats: dict) -> tuple[str, str, float]:
 
     # 紧急问题
     urgent_items = []
-    if device_offline and device_offline > 0:
-        urgent_items.append(f"- {device_offline} 台设备离线")
+    if device_inactive and device_inactive > 0:
+        urgent_items.append(f"- {device_inactive} 台设备停用")
     if circuit_offline and circuit_offline > 0:
         urgent_items.append(f"- {circuit_offline} 条专线断开")
     if critical_alerts and critical_alerts > 0:
@@ -986,8 +986,8 @@ def _build_summary_content(stats: dict) -> tuple[str, str, float]:
 
     # 正常状态
     ok_items = []
-    if device_online and device_online > 0:
-        ok_items.append(f"- {device_online} 台设备运行正常")
+    if device_active and device_active > 0:
+        ok_items.append(f"- {device_active} 台设备在用")
     if circuit_online and circuit_online > 0:
         ok_items.append(f"- {circuit_online} 条专线状态正常")
 
@@ -1001,8 +1001,8 @@ def _build_summary_content(stats: dict) -> tuple[str, str, float]:
 
     # 建议
     suggestions = []
-    if device_offline and device_offline > 0:
-        suggestions.append("优先处理设备离线问题")
+    if device_inactive and device_inactive > 0:
+        suggestions.append("复核停用设备是否需要维修或报废")
     if critical_alerts and critical_alerts > 0:
         suggestions.append("立即处理严重告警")
     if stats["warranty_expiring"] > 0:

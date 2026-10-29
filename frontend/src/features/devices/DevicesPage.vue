@@ -70,16 +70,15 @@ async function handleProbe(device: DeviceResponse) {
 }
 
 // 生命周期状态：显示映射（含中文存量值回退，不修改存量数据）
+// 注意：在线/离线属于探测体系（管理 IP 的 is_online），不是生命周期，
+// 历史上混入 status 的存量值仅做展示回退，不再提供新写入入口
 const lifecycleText: Record<string, string> = {
   active: t('devices.active'),
   inactive: t('devices.inactive'),
   maintenance: t('devices.maintenance'),
   scrapped: t('devices.scrapped'),
-  alert: t('devices.alert'),
-  online: t('devices.onlineState'),
-  offline: t('devices.offline'),
-  '在线': t('devices.onlineState'),
-  '离线': t('devices.offline'),
+  '在线': t('devices.active'),
+  '离线': t('devices.inactive'),
   '维修': t('devices.maintenance'),
   '报废': t('devices.scrapped'),
 }
@@ -94,11 +93,9 @@ function lifecycleTagType(status: string): string {
     case '在线':
       return 'success'
     case 'maintenance':
-    case 'alert':
     case '维修':
       return 'warning'
     case 'inactive':
-    case 'offline':
     case 'scrapped':
     case '离线':
     case '报废':
@@ -1182,14 +1179,11 @@ onMounted(async () => {
             <el-form-item :label="t('devices.lifecycle')">
               <el-select v-model="form.status" style="width: 100%">
                 <!-- 选中回显取 label 属性（插槽文本不参与回显），必须用 :label -->
+                <!-- 只保留生命周期四态；在线/离线/alert 属探测与告警体系，不再提供选择 -->
                 <el-option :label="t('devices.active')" value="active" />
                 <el-option :label="t('devices.inactive')" value="inactive" />
                 <el-option :label="t('devices.maintenance')" value="maintenance" />
                 <el-option :label="t('devices.scrapped')" value="scrapped" />
-                <!-- 测试数据混有探测/告警状态，保留兼容选项 -->
-                <el-option :label="t('devices.alert')" value="alert" />
-                <el-option :label="t('devices.onlineState')" value="online" />
-                <el-option :label="t('devices.offline')" value="offline" />
               </el-select>
             </el-form-item>
           </el-col>
