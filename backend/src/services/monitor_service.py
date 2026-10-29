@@ -4,7 +4,7 @@ import platform
 import asyncio
 from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from src.models.device import Device
 from src.models.link_monitor import LinkMonitor
@@ -237,3 +237,24 @@ async def run_monitoring_task(db: AsyncSession) -> None:
     
     # 所有设备监控完成后统一提交事务
     await db.commit()
+
+
+def latest_snapshot_subquery():
+    """构造「每设备最新一条监控快照」子查询。
+
+    返回 (subquery, onclause)：subquery 按 device_id 分组取 max(created_at)，
+    消费方用 (device_id, created_at) 回连 LinkMonitor 即得到每设备最新一行。
+    「最新快照」是 /monitor/summary、/monitor/devices、拓扑节点状态、
+    仪表盘在线数与健康度的统一口径：设备当前是否在线/异常只看最新一轮探测。
+    """
+    subquery = (
+        select(
+            LinkMonitor.device_id,
+            func.max(LinkMonitor.created_at).label("latest_time")
+        )
+        .group_by(LinkMonitor.device_id)
+        .subquery()
+    )
+    onclause = (LinkMonitor.device_id == subquery.c.device_id) & \
+               (LinkMonitor.created_at == subquery.c.latest_time)
+    return subquery, onclause

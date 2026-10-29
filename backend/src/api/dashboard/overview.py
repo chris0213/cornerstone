@@ -16,6 +16,7 @@ from src.models.audit_log import AuditLog
 from src.models.site import Site
 from src.models.link_monitor import LinkMonitor
 from src.models.alert import AlertRecord
+from src.services.monitor_service import latest_snapshot_subquery
 
 router = APIRouter()
 
@@ -46,13 +47,19 @@ async def get_dashboard_stats(
         start_time = None
     
     # 1~5、8：简单 count 合并为一条查询（标量子查询），避免逐项串行往返
+    # 在线口径 = 每设备最新一轮探测为 normal（快照口径，修复此前"30 天内曾经在线"的高估）
+    snapshot_subquery, snapshot_onclause = latest_snapshot_subquery()
+    online_subquery = (
+        select(func.count(func.distinct(LinkMonitor.device_id)))
+        .join(snapshot_subquery, snapshot_onclause)
+        .where(LinkMonitor.status == 'normal')
+        .scalar_subquery()
+    )
     counts = (await db.execute(
         select(
             select(func.count(Site.id)).scalar_subquery().label("total_sites"),
             select(func.count(Device.id)).scalar_subquery().label("total_devices"),
-            select(func.count(func.distinct(LinkMonitor.device_id)))
-            .where(LinkMonitor.status == 'normal')
-            .scalar_subquery().label("online_devices"),
+            online_subquery.label("online_devices"),
             # IP 占用口径与 IPAM 页 prefix.ipCount 一致：已分配+预留（兼容中文存量），且归属子网
             select(func.count(IPAddress.id))
             .where(IPAddress.status.in_(IP_OCCUPIED_STATUSES),
@@ -103,12 +110,14 @@ async def get_dashboard_stats(
     # 基于设备监控状态计算健康度
     health_score = 100
     
-    # 获取设备监控状态分布
+    # 获取设备监控状态分布（最新快照口径：健康度反映设备当前状态，
+    # 修复此前全表累计口径下"最近宕机被历史正常数据稀释"的问题）
     health_query = (
         select(
             LinkMonitor.status,
             func.count(LinkMonitor.id).label("count")
         )
+        .join(snapshot_subquery, snapshot_onclause)
         .group_by(LinkMonitor.status)
     )
     health_result = await db.execute(health_query)

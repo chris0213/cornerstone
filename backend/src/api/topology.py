@@ -186,25 +186,27 @@ async def get_device_graph(
     result = await db.execute(query)
     device_ip_site_pairs = result.all()
     
-    # 获取最新的监控数据
+    # 获取最新的监控数据（每设备最新一条快照，避免全表拉取后在内存去重）
+    from src.services.monitor_service import latest_snapshot_subquery
+    snapshot_subquery, snapshot_onclause = latest_snapshot_subquery()
     monitor_query = select(
         LinkMonitor.device_id,
         LinkMonitor.latency,
         LinkMonitor.packet_loss,
         LinkMonitor.status
-    ).order_by(LinkMonitor.created_at.desc())
+    ).join(snapshot_subquery, snapshot_onclause)
     monitor_result = await db.execute(monitor_query)
     monitor_data = monitor_result.all()
-    
-    # 构建监控数据字典（按device_id分组，取最新的）
-    monitor_dict = {}
-    for device_id, latency, packet_loss, status in monitor_data:
-        if device_id not in monitor_dict:
-            monitor_dict[device_id] = {
-                "latency": latency,
-                "packet_loss": packet_loss,
-                "monitor_status": status
-            }
+
+    # 构建监控数据字典
+    monitor_dict = {
+        device_id: {
+            "latency": latency,
+            "packet_loss": packet_loss,
+            "monitor_status": status
+        }
+        for device_id, latency, packet_loss, status in monitor_data
+    }
     
     # 获取所有专线（不限制站点，因为可能有跨站点的专线连接）
     circuit_query = select(Circuit)
