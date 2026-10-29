@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db, async_session
 from src.api.dependencies import PageParams, pagination
+from src.api.dependencies import get_current_active_user
 from src.models.site import Site
 from src.models.circuit import Circuit
 from src.models.device import Device
@@ -587,7 +588,8 @@ async def get_site_devices(
 
 @router.post("/discover-lldp")
 async def discover_lldp_neighbors(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user),
 ):
     """启动 LLDP/CDP 邻居发现后台任务，返回 task_id（进度经 /discovery-tasks/{id} 轮询）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -627,7 +629,8 @@ async def discover_lldp_neighbors(
 
 @router.post("/discover-mac")
 async def discover_mac_endpoints(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user),
 ):
     """启动 MAC/ARP 表发现后台任务（发现交换机下挂服务器等不开 LLDP 的终端）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -662,6 +665,7 @@ async def discover_mac_endpoints(
 @router.get("/discovery-tasks/{task_id}")
 async def read_discovery_task(
     task_id: str,
+    current_user: dict = Depends(get_current_active_user),
 ):
     """轮询发现任务进度与结果"""
     from src.services.discovery_task_manager import manager

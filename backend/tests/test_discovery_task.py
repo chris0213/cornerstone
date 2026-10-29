@@ -23,6 +23,31 @@ from src.utils.crypto import encrypt_password
 pytestmark = pytest.mark.asyncio
 
 
+async def _login(client, username: str, password: str = "Passw0rd!") -> dict:
+    resp = await client.post(
+        "/api/v1/auth/token",
+        data={"username": username, "password": password},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+async def _make_engineer(db_session, username: str, password: str = "Passw0rd!") -> User:
+    role = (await db_session.execute(select(Role).where(Role.name == "engineer"))).scalar_one()
+    user = User(
+        username=username,
+        display_name=username,
+        email=f"{username}@example.com",
+        hashed_password=pwd_context.hash(password),
+        role_id=role.id,
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    return user
+
+
 class _FakeDB:
     async def __aenter__(self):
         return self
@@ -59,8 +84,18 @@ async def test_run_discovery_task_failure():
     assert "boom" in task.error
 
 
+async def test_discover_requires_auth(client, db_session):
+    """三个 discover 接口未带 token 必须返回 401"""
+    assert (await client.post("/api/v1/topology/discover-lldp")).status_code == 401
+    assert (await client.post("/api/v1/topology/discover-mac")).status_code == 401
+    assert (await client.get("/api/v1/topology/discovery-tasks/whatever")).status_code == 401
+
+
 async def test_discover_lldp_runs_on_main_loop(client, db_session, monkeypatch):
     """e2e：发现任务在主 loop 运行并正常完成（旧实现必触发 cross-loop 错误）"""
+    await _make_engineer(db_session, "qa_discovery_eng")
+    headers = await _login(client, "qa_discovery_eng")
+
     # 造设备 + 管理 IP + 凭证
     ip = IPAddress(address="10.95.0.1", status="已分配", usage="管理IP")
     db_session.add(ip)
@@ -95,7 +130,7 @@ async def test_discover_lldp_runs_on_main_loop(client, db_session, monkeypatch):
 
     monkeypatch.setattr(topo_mod, "async_session", test_session_factory)
 
-    resp = await client.post("/api/v1/topology/discover-lldp")
+    resp = await client.post("/api/v1/topology/discover-lldp", headers=headers)
     assert resp.status_code == 200, resp.text
     task_id = resp.json()["task_id"]
 
@@ -103,7 +138,7 @@ async def test_discover_lldp_runs_on_main_loop(client, db_session, monkeypatch):
     from src.services.discovery_task_manager import manager
     info = None
     for _ in range(200):
-        info = (await client.get(f"/api/v1/topology/discovery-tasks/{task_id}")).json()
+        info = (await client.get(f"/api/v1/topology/discovery-tasks/{task_id}", headers=headers)).json()
         if info["status"] in ("completed", "failed"):
             break
         await asyncio.sleep(0.02)
