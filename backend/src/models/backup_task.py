@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class BackupTask(Base):
     __tablename__ = "backup_tasks"
@@ -22,7 +22,7 @@ class BackupTask(Base):
     retention_days = Column(Integer, default=90)  # 保留最近N天
     notify_on_change = Column(Boolean, default=True)  # 配置变更时是否告警
     notify_on_fail = Column(Boolean, default=True)  # 备份失败时是否告警
-    last_run_at = Column(DateTime(timezone=True))
+    last_run_at = Column(UTCDateTime)
     last_run_status = Column(String(20))  # success / partial_fail / failed
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())

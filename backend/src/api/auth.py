@@ -39,6 +39,7 @@ from ..config import settings
 from ..services.permission_service import get_user_permissions
 from ..services.sso_service import sso_service, SSOException
 from .dependencies import get_current_active_user
+from src.utils.timeutil import utc_now
 
 router = APIRouter()
 
@@ -180,7 +181,7 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
         }
     )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now()
     session = UserSession(
         user_id=user.id,
         jti=jti,
@@ -344,7 +345,7 @@ async def change_password(
     hashed_password = get_password_hash(body.new_password)
     stmt = update(User).where(User.id == current_user.id).values(
         hashed_password=hashed_password,
-        updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        updated_at=utc_now()
     )
     await db.execute(stmt)
     
@@ -464,7 +465,7 @@ async def refresh_token(
 
     from datetime import timezone
     client_ip = get_client_ip_from_request(request)
-    session_expire = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7)
+    session_expire = utc_now() + timedelta(days=7)
     new_session = UserSession(
         user_id=user.id,
         jti=jti,

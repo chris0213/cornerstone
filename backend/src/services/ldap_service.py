@@ -12,6 +12,7 @@ from ..models import User, Role, SystemConfig
 from ..utils.security import create_access_token, create_refresh_token, generate_jti, get_password_hash
 from ..utils.crypto import decrypt_password
 from ..services.permission_service import get_user_permissions
+from src.utils.timeutil import utc_now
 
 
 class LDAPException(Exception):
@@ -330,7 +331,7 @@ class LDAPAuthService:
                 mobile=ldap_user['phone'],
                 is_ldap_user=True,
                 is_active=True,
-                updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
+                updated_at=utc_now()
             )
             await db.execute(stmt)
             await db.commit()
@@ -424,7 +425,7 @@ class LDAPAuthService:
         
         # 创建用户会话记录
         from ..models import UserSession
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = utc_now()
         session = UserSession(
             user_id=user.id,
             jti=jti,

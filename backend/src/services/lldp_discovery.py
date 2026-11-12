@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 import asyncio
 import logging
 from typing import Optional, List, Tuple, Callable, Awaitable, Dict
@@ -276,7 +277,7 @@ async def update_or_create_device_links(db: AsyncSession, links_data: List[dict]
                 link.target_interface = target_interface
             link.link_type = link_data['link_type']
             link.confidence = link_data['confidence']
-            link.verified_at = datetime.now()
+            link.verified_at = utc_now()
             updated += 1
         else:
             db.add(DeviceLink(
@@ -286,7 +287,7 @@ async def update_or_create_device_links(db: AsyncSession, links_data: List[dict]
                 target_interface=target_interface,
                 link_type=link_data['link_type'],
                 confidence=link_data['confidence'],
-                discovered_at=datetime.now(),
+                discovered_at=utc_now(),
             ))
             created += 1
 

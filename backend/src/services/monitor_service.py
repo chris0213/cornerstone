@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 import logging
 import subprocess
 import platform
@@ -204,7 +205,7 @@ async def _auto_recover_alerts(db: AsyncSession, device_id: int) -> int:
     recovered = 0
     for alert in active_alerts:
         alert.status = "resolved"
-        alert.resolved_at = datetime.now()
+        alert.resolved_at = utc_now()
         recovered += 1
 
     if recovered:

@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class Rack(Base):
@@ -17,7 +17,7 @@ class Rack(Base):
     total_u = Column(Integer, default=42)
     status = Column(String(20), default="active")
     description = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
 
     devices = relationship("Device", back_populates="rack", cascade="all, delete-orphan")

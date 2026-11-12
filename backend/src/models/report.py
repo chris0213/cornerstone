@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class MonthlyReport(Base):
@@ -16,4 +16,4 @@ class MonthlyReport(Base):
     status = Column(String(20), default="done")  # generating / done / failed
     error_message = Column(Text, default="")
     generated_by = Column(String(100), default="")
-    generated_at = Column(DateTime(timezone=True), server_default=func.now())
+    generated_at = Column(UTCDateTime, server_default=func.now())

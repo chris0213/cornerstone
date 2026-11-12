@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class Site(Base):
     __tablename__ = "sites"
@@ -15,5 +15,5 @@ class Site(Base):
     contact_phone = Column(String(20))
     status = Column(String(20), default="online")  # online, alert, offline
     alert_count = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())

@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -710,7 +711,7 @@ async def test_notification(
     try:
         await sender()
         notification.status = "sent"
-        notification.sent_at = datetime.now()
+        notification.sent_at = utc_now()
         message = f"{channel} 测试通知发送成功"
         success = True
     except Exception as e:
@@ -813,7 +814,7 @@ async def cleanup_logs(
     current_user = Depends(require_super_admin)
 ):
     """手动触发清理过期日志（仅 super_admin）"""
-    start_time = datetime.now()
+    start_time = utc_now()
     
     # 获取日志保留设置
     result = await db.execute(select(Setting).filter(Setting.key == LOG_SETTINGS_KEY))
@@ -831,8 +832,8 @@ async def cleanup_logs(
             pass
     
     # 计算截止日期
-    audit_cutoff = datetime.now() - timedelta(days=log_retention_days)
-    login_cutoff = datetime.now() - timedelta(days=login_log_retention_days)
+    audit_cutoff = utc_now() - timedelta(days=log_retention_days)
+    login_cutoff = utc_now() - timedelta(days=login_log_retention_days)
     
     # 删除过期审计日志
     deleted_count = 0
@@ -858,7 +859,7 @@ async def cleanup_logs(
     
     await db.commit()
     
-    end_time = datetime.now()
+    end_time = utc_now()
     duration_ms = int((end_time - start_time).total_seconds() * 1000)
     
     # 记录清理操作到审计日志
@@ -1143,4 +1144,3 @@ async def preview_ip(
     if is_ip_in_networks(ip, networks):
         return IPPreviewResponse(ip=ip, allowed=True, reason="命中白名单网段")
     return IPPreviewResponse(ip=ip, allowed=False, reason="不在白名单任何网段内")
-

@@ -16,6 +16,7 @@ from ..utils.security import get_password_hash, validate_password
 from ..utils.ip_whitelist import get_client_ip_from_request
 from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
 from .permissions import role_conflict, _audit
+from src.utils.timeutil import utc_now
 
 router = APIRouter()
 
@@ -415,7 +416,7 @@ async def reset_password(
     
     stmt = update(User).where(User.id == user_id).values(
         hashed_password=hashed_password,
-        updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        updated_at=utc_now()
     ).returning(User)
     result = await db.execute(stmt)
     

@@ -1,5 +1,6 @@
 """仪表盘 API - report"""
 from datetime import datetime
+from src.utils.timeutil import BJT, utc_now
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, and_, or_
@@ -29,12 +30,12 @@ async def download_monthly_report(
     """下载运营月报（PDF）"""
     require_manager_or_admin(current_user)
     
-    now = datetime.now()
+    now = utc_now()
     if not month:
-        month = now.strftime("%Y-%m")
+        month = now.astimezone(BJT).strftime("%Y-%m")
     year, mon = [int(x) for x in month.split("-")]
-    month_start = datetime(year, mon, 1)
-    next_month = datetime(year + (1 if mon == 12 else 0), 1 if mon == 12 else mon + 1, 1)
+    month_start = datetime(year, mon, 1, tzinfo=BJT)
+    next_month = datetime(year + (1 if mon == 12 else 0), 1 if mon == 12 else mon + 1, 1, tzinfo=BJT)
     
     # ===== 查询数据 =====
     # 专线总费用
@@ -121,7 +122,7 @@ async def download_monthly_report(
     
     # 标题
     elements.append(Paragraph(f"{month} 运营月报", title_style))
-    elements.append(Paragraph(f"生成时间：{now.strftime('%Y-%m-%d %H:%M')}", subtitle_style))
+    elements.append(Paragraph(f"生成时间：{now.astimezone(BJT).strftime('%Y-%m-%d %H:%M')}", subtitle_style))
     elements.append(Spacer(1, 4*mm))
     
     # 分隔线
@@ -170,7 +171,7 @@ async def download_monthly_report(
             sev_color = colors.HexColor('#F56C6C') if inc.severity == 'high' else (
                 colors.HexColor('#E6A23C') if inc.severity == 'medium' else colors.HexColor('#67C23A')
             )
-            started = inc.started_at.strftime('%m-%d %H:%M') if inc.started_at else '-'
+            started = inc.started_at.astimezone(BJT).strftime('%m-%d %H:%M') if inc.started_at else '-'
             status_label = '已恢复' if inc.status == 'resolved' else '处理中'
             detail_rows.append([
                 Paragraph(inc.title or '-', normal_style),

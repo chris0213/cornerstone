@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class VlanGroup(Base):
     """VLAN组/域，如「上海办公网」"""
@@ -11,8 +11,8 @@ class VlanGroup(Base):
     name = Column(String(100), nullable=False)  # 组名
     site_id = Column(Integer, ForeignKey("sites.id"))  # 关联站点（可为空，表示全局）
     description = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
 
 class Vlan(Base):
     """VLAN记录"""
@@ -25,5 +25,5 @@ class Vlan(Base):
     site_id = Column(Integer, ForeignKey("sites.id"))  # 关联站点（可为空，表示全局）
     status = Column(String(20), default="active")  # active / reserved / deprecated
     description = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())

@@ -91,7 +91,10 @@ async def get_rack(
         raise HTTPException(status_code=404, detail="Rack not found")
 
     devices_result = await db.execute(
-        select(Device).where(Device.rack_id == rack_id).order_by(Device.u_position.desc())
+        # 未填写 U 位的设备（NULL）排在最后，避免空值排在机柜顶部
+        select(Device)
+        .where(Device.rack_id == rack_id)
+        .order_by(Device.u_position.desc().nulls_last())
     )
     devices = devices_result.scalars().all()
 

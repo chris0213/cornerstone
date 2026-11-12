@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class Circuit(Base):
     __tablename__ = "circuits"
@@ -13,14 +13,14 @@ class Circuit(Base):
     site_id = Column(Integer, ForeignKey("sites.id"))
     bandwidth = Column(Integer)  # Mbps
     monthly_cost = Column(Float)
-    contract_start = Column(DateTime(timezone=True))
-    contract_end = Column(DateTime(timezone=True), index=True)
+    contract_start = Column(UTCDateTime)
+    contract_end = Column(UTCDateTime, index=True)
     circuit_no = Column(String(50))
     support_phone = Column(String(20))
     public_ip = Column(String(50))
     status = Column(String(20), default="正常")
     note = Column(String(500))
     updated_by = Column(String(50))
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(UTCDateTime, server_default=func.now())
     # 拓扑图中专线连接的目标设备ID
     connected_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)

@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class DiscoveryUnknownEndpoint(Base):
@@ -17,5 +17,5 @@ class DiscoveryUnknownEndpoint(Base):
     local_interface = Column(String(100), nullable=False)  # 接入端口
     mac_address = Column(String(32), nullable=False, index=True)  # 终端 MAC（归一化12位）
     ip_address = Column(String(50), nullable=True)  # 通过 ARP 关联到的 IP（可能为空）
-    first_seen_at = Column(DateTime)
-    last_seen_at = Column(DateTime)
+    first_seen_at = Column(UTCDateTime)
+    last_seen_at = Column(UTCDateTime)

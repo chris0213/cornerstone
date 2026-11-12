@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class IPAddress(Base):
     __tablename__ = "ip_addresses"
@@ -16,12 +16,12 @@ class IPAddress(Base):
     usage = Column(String(100))
     owner = Column(String(50))
     status = Column(String(20), default="available", index=True)  # available, assigned, reserved
-    expire_at = Column(DateTime(timezone=True), nullable=True)  # 到期时间
+    expire_at = Column(UTCDateTime, nullable=True)  # 到期时间
     is_online = Column(Boolean, nullable=True)  # 是否在线
-    last_seen_at = Column(DateTime(timezone=True), nullable=True)  # 最后在线时间
+    last_seen_at = Column(UTCDateTime, nullable=True)  # 最后在线时间
     scan_method = Column(String(20), nullable=True)  # 探测方式: icmp/tcp/arp/none
     open_ports = Column(String(200), nullable=True)  # 响应的TCP端口
     mac_address = Column(String(50), nullable=True)  # ARP获取的MAC
-    last_scanned_at = Column(DateTime(timezone=True), nullable=True)  # 最后扫描时间
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_scanned_at = Column(UTCDateTime, nullable=True)  # 最后扫描时间
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())

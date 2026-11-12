@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from src.utils.timeutil import BJT, UTC, utc_now
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..api.dependencies import get_current_active_user
-from .dashboard.common import to_naive_bjt
 from ..models import InspectionDeviceResult, Backup, AuditLog, Device, Circuit
 from ..models.user import User
 
@@ -21,19 +21,17 @@ async def get_timeline_events(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    # 时间口径统一为 naive 北京挂钟：
-    # - 前端传本地挂钟字符串（无时区后缀）→ naive 原样；
-    # - 兼容旧调用方传 UTC aware ISO → to_naive_bjt 归一为北京挂钟；
-    # - 绑定值必须是「naive datetime 对象」而非字符串：
-    #   * SQLite：naive datetime 由驱动转为与列存储一致的 'YYYY-MM-DD HH:MM:SS' 格式比较；
-    #   * PG(asyncpg)：强类型协议，str 绑定会报
-    #     `operator does not exist: timestamp with time zone >= text`（生产实测 500）；
-    #     naive datetime → timestamp(无时区)，由 PG 按 session timezone 隐式转换。
-    # ⚠ PG 语义需在 PG 环境复测（生产 compose TZ=Asia/Shanghai）。
+    # 时间口径统一为 aware UTC：
+    # - 前端传本地挂钟字符串（无时区后缀）→ 视为北京时间，转 UTC；
+    # - 显式带时区的 ISO → 直接转 UTC；
+    # - 绑定 aware UTC，PG(timestamptz)/SQLite(UTC 挂钟) 语义一致，
+    #   不再依赖数据库 session timezone 做隐式解释。
     def _norm_bound_time(dt: datetime) -> datetime:
-        return to_naive_bjt(dt)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=BJT).astimezone(UTC)
+        return dt.astimezone(UTC)
 
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     if start_time is None:
         start_time = _norm_bound_time(now - timedelta(hours=24))
     else:

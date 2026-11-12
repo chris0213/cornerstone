@@ -10,6 +10,7 @@ from src.models.circuit import Circuit
 from src.models.circuit_incident import CircuitIncident
 from src.models.device import Device
 from src.models.setting import Setting
+from src.utils.timeutil import BJT as BEIJING_TZ
 
 REPORT_DIR = Path(__file__).parent.parent.parent.parent / "data" / "reports"
 COMPANY_INFO_KEY = "company_info"
@@ -33,7 +34,7 @@ class MonthlyReportData:
     it_department: str = "信息技术部"
     it_contact: str = ""
     it_contact_email: str = ""
-    generated_at: datetime = field(default_factory=datetime.now)
+    generated_at: datetime = field(default_factory=lambda: datetime.now(BEIJING_TZ))
 
     # 本月概况
     availability_pct: Optional[float] = None
@@ -92,14 +93,15 @@ async def get_brand_settings(db: AsyncSession) -> dict:
 
 async def collect_report_data(year: int, month: int, db: AsyncSession) -> MonthlyReportData:
     """从数据库收集月报所需数据"""
-    # naive datetime 直接范围比较，SQLite/PostgreSQL 均兼容
-    month_start = datetime(year, month, 1)
+    # 月报按北京时间自然月统计；边界用 aware BJT，绑定参数时统一转 UTC
+    month_start = datetime(year, month, 1, tzinfo=BEIJING_TZ)
     next_month = datetime(
-        year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1
+        year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1,
+        tzinfo=BEIJING_TZ,
     )
 
     # 用于展示的北京时间
-    beijing_tz = timezone(timedelta(hours=8))
+    beijing_tz = BEIJING_TZ
     bj_now = datetime.now(beijing_tz)
 
     # 品牌&公司信息
@@ -321,7 +323,8 @@ async def collect_report_data(year: int, month: int, db: AsyncSession) -> Monthl
         incidents=[{
             "title": i.title or "-",
             "severity": i.severity or "low",
-            "started_at": (i.started_at + timedelta(hours=8)).strftime("%m-%d %H:%M") if i.started_at else "-",
+            # PDF 正文按北京时间展示（离库统一 UTC → 展示层转换，无手工 +8）
+            "started_at": i.started_at.astimezone(BEIJING_TZ).strftime("%m-%d %H:%M") if i.started_at else "-",
             "duration": f"{(i.duration_minutes or 0)/60.0:.1f}" if i.duration_minutes else "-",
             "status": "已恢复" if i.status == "resolved" else "处理中"
         } for i in incidents_list],

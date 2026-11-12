@@ -3,8 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from src.models.user import User
-
-BJT = timezone(timedelta(hours=8))  # 北京时间
+from src.utils.timeutil import BJT, to_bjt
 
 # IP「业务占用」口径：已分配 + 预留（不含未分配），与 IPAM 页 prefix.ipCount 聚合一致；
 # 同时兼容英文枚举与 DB 存量中文值（扫描器/表单历史上写入过两种）
@@ -43,13 +42,11 @@ def calculate_usable_ips(network: str) -> int:
 
 
 def to_naive_bjt(dt: datetime) -> datetime:
-    """DB 时间转北京挂钟 naive（PG timestamptz 返回 aware UTC，SQLite 返回 naive）
+    """DB 时间 → 北京挂钟 naive（仅用于展示格式化）。
 
-    用于 naive 时间运算（如 now - db_value）以及显示日期，避免 aware/naive 混算抛 TypeError。
+    全库统一 UTC 后：naive 读值一律视为 UTC（SQLite），aware 先转 UTC 再转北京时间。
     """
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(BJT).replace(tzinfo=None)
+    return to_bjt(dt).replace(tzinfo=None)
 
 
 def require_manager_or_admin(current_user: User) -> None:

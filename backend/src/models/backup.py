@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class Backup(Base):
     __tablename__ = "backups"
@@ -22,4 +22,4 @@ class Backup(Base):
     duration_ms = Column(Integer)  # 采集耗时
     size = Column(Float)  # bytes
     note = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at = Column(UTCDateTime, server_default=func.now(), index=True)

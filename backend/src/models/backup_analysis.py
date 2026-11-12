@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class BackupAnalysis(Base):
@@ -17,4 +17,4 @@ class BackupAnalysis(Base):
     total_added = Column(Integer, default=0)
     total_removed = Column(Integer, default=0)
     model_used = Column(String(100), default="")            # 使用的模型名称
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())

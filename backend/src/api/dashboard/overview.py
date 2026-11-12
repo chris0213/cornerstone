@@ -17,6 +17,7 @@ from src.models.site import Site
 from src.models.link_monitor import LinkMonitor
 from src.models.alert import AlertRecord
 from src.services.monitor_service import latest_snapshot_subquery
+from src.utils.timeutil import utc_now
 
 router = APIRouter()
 
@@ -30,7 +31,7 @@ async def get_dashboard_stats(
     """获取仪表盘统计数据"""
     
     # 解析时间范围参数
-    now = datetime.now()
+    now = utc_now()
     start_time = None
     
     if time_range == "24h":

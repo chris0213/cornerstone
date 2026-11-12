@@ -2,6 +2,7 @@
 日志自动清理定时任务
 每天凌晨3点执行，清理过期日志
 """
+from src.utils.timeutil import bjt_now, utc_now
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -57,8 +58,8 @@ async def cleanup_expired_logs():
             logger.info(f"开始清理过期日志：审计日志保留{log_retention_days}天，登录日志保留{login_log_retention_days}天")
             
             # 计算截止日期
-            audit_cutoff = datetime.now() - timedelta(days=log_retention_days)
-            login_cutoff = datetime.now() - timedelta(days=login_log_retention_days)
+            audit_cutoff = utc_now() - timedelta(days=log_retention_days)
+            login_cutoff = utc_now() - timedelta(days=login_log_retention_days)
             
             deleted_count = 0
             
@@ -84,7 +85,7 @@ async def cleanup_expired_logs():
             logger.info(f"删除了 {login_result.rowcount} 条过期登录日志")
 
             # 删除过期 AI 聊天日志（保留 30 天，与模型注释一致）
-            ai_log_cutoff = datetime.now() - timedelta(days=30)
+            ai_log_cutoff = utc_now() - timedelta(days=30)
             ai_log_result = await db.execute(
                 delete(AIChatLog).where(AIChatLog.created_at < ai_log_cutoff)
             )
@@ -93,7 +94,7 @@ async def cleanup_expired_logs():
 
             # 删除过期链路监控数据（保留 30 天）：监控任务每设备每轮插一行，
             # 不清理会导致 link_monitor 表无限膨胀拖慢监控写入
-            monitor_cutoff = datetime.now() - timedelta(days=LINK_MONITOR_RETENTION_DAYS)
+            monitor_cutoff = utc_now() - timedelta(days=LINK_MONITOR_RETENTION_DAYS)
             monitor_result = await db.execute(
                 delete(LinkMonitor).where(LinkMonitor.created_at < monitor_cutoff)
             )
@@ -115,7 +116,8 @@ async def schedule_log_cleanup():
     使用简单的循环实现，每天凌晨3点执行
     """
     while True:
-        now = datetime.now()
+        # 调度按北京时间自然日 03:00 触发（业务口径），时间运算使用 aware BJT
+        now = bjt_now()
         # 计算下一个凌晨3点
         next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
         if now >= next_run:

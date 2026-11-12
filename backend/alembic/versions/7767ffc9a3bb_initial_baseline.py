@@ -41,6 +41,72 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_audit_logs_id'), 'audit_logs', ['id'], unique=False)
+    op.create_table('sites',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('location', sa.String(length=255), nullable=True),
+    sa.Column('city', sa.String(length=50), nullable=True),
+    sa.Column('room', sa.String(length=50), nullable=True),
+    sa.Column('contact', sa.String(length=100), nullable=True),
+    sa.Column('contact_phone', sa.String(length=20), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.Column('alert_count', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_sites_id'), 'sites', ['id'], unique=False)
+    op.create_table('prefixes',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('aggregate_id', sa.Integer(), nullable=True),
+    sa.Column('network', sa.String(length=50), nullable=False),
+    sa.Column('site_id', sa.Integer(), nullable=True),
+    sa.Column('vlan', sa.String(length=20), nullable=True),
+    sa.Column('usage', sa.String(length=100), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['aggregate_id'], ['aggregates.id'], ),
+    sa.ForeignKeyConstraint(['site_id'], ['sites.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_prefixes_id'), 'prefixes', ['id'], unique=False)
+    op.create_table('ip_addresses',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('address', sa.String(length=50), nullable=False),
+    sa.Column('prefix_id', sa.Integer(), nullable=True),
+    sa.Column('device_id', sa.Integer(), nullable=True),
+    sa.Column('usage', sa.String(length=100), nullable=True),
+    sa.Column('owner', sa.String(length=50), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.Column('expire_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('is_online', sa.Boolean(), nullable=True),
+    sa.Column('last_seen_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('scan_method', sa.String(length=20), nullable=True),
+    sa.Column('open_ports', sa.String(length=200), nullable=True),
+    sa.Column('mac_address', sa.String(length=50), nullable=True),
+    sa.Column('last_scanned_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['prefix_id'], ['prefixes.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_ip_addresses_id'), 'ip_addresses', ['id'], unique=False)
+    op.create_table('racks',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('site_id', sa.Integer(), nullable=True),
+    sa.Column('room', sa.String(length=50), nullable=True),
+    sa.Column('row_position', sa.Integer(), nullable=True),
+    sa.Column('total_u', sa.Integer(), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.Column('description', sa.String(length=500), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['site_id'], ['sites.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_racks_id'), 'racks', ['id'], unique=False)
+    op.create_index(op.f('ix_racks_site_id'), 'racks', ['site_id'], unique=False)
     op.create_table('devices',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(length=100), nullable=False),
@@ -69,28 +135,13 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_devices_id'), 'devices', ['id'], unique=False)
-    op.create_table('ip_addresses',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('address', sa.String(length=50), nullable=False),
-    sa.Column('prefix_id', sa.Integer(), nullable=True),
-    sa.Column('device_id', sa.Integer(), nullable=True),
-    sa.Column('usage', sa.String(length=100), nullable=True),
-    sa.Column('owner', sa.String(length=50), nullable=True),
-    sa.Column('status', sa.String(length=20), nullable=True),
-    sa.Column('expire_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('is_online', sa.Boolean(), nullable=True),
-    sa.Column('last_seen_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('scan_method', sa.String(length=20), nullable=True),
-    sa.Column('open_ports', sa.String(length=200), nullable=True),
-    sa.Column('mac_address', sa.String(length=50), nullable=True),
-    sa.Column('last_scanned_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-    sa.ForeignKeyConstraint(['device_id'], ['devices.id'], ),
-    sa.ForeignKeyConstraint(['prefix_id'], ['prefixes.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_ip_addresses_id'), 'ip_addresses', ['id'], unique=False)
+    # devices ↔ ip_addresses 互为外键（循环依赖），拆到两表建好后再补 ip_addresses.device_id
+    # SQLite 不支持 ALTER TABLE ADD CONSTRAINT，开发库跳过（SQLite 默认也不校验外键）
+    if op.get_context().dialect.name != "sqlite":
+        op.create_foreign_key(
+            'fk_ip_addresses_device_id_devices',
+            'ip_addresses', 'devices', ['device_id'], ['id'],
+        )
     op.create_table('monthly_reports',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('year', sa.Integer(), nullable=False),
@@ -133,21 +184,6 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_settings_id'), 'settings', ['id'], unique=False)
     op.create_index(op.f('ix_settings_key'), 'settings', ['key'], unique=True)
-    op.create_table('sites',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('name', sa.String(length=100), nullable=False),
-    sa.Column('location', sa.String(length=255), nullable=True),
-    sa.Column('city', sa.String(length=50), nullable=True),
-    sa.Column('room', sa.String(length=50), nullable=True),
-    sa.Column('contact', sa.String(length=100), nullable=True),
-    sa.Column('contact_phone', sa.String(length=20), nullable=True),
-    sa.Column('status', sa.String(length=20), nullable=True),
-    sa.Column('alert_count', sa.Integer(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_sites_id'), 'sites', ['id'], unique=False)
     op.create_table('system_configs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('key', sa.String(length=100), nullable=False),
@@ -300,36 +336,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_link_monitor_id'), 'link_monitor', ['id'], unique=False)
-    op.create_table('prefixes',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('aggregate_id', sa.Integer(), nullable=True),
-    sa.Column('network', sa.String(length=50), nullable=False),
-    sa.Column('site_id', sa.Integer(), nullable=True),
-    sa.Column('vlan', sa.String(length=20), nullable=True),
-    sa.Column('usage', sa.String(length=100), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-    sa.ForeignKeyConstraint(['aggregate_id'], ['aggregates.id'], ),
-    sa.ForeignKeyConstraint(['site_id'], ['sites.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_prefixes_id'), 'prefixes', ['id'], unique=False)
-    op.create_table('racks',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('name', sa.String(length=100), nullable=False),
-    sa.Column('site_id', sa.Integer(), nullable=True),
-    sa.Column('room', sa.String(length=50), nullable=True),
-    sa.Column('row_position', sa.Integer(), nullable=True),
-    sa.Column('total_u', sa.Integer(), nullable=True),
-    sa.Column('status', sa.String(length=20), nullable=True),
-    sa.Column('description', sa.String(length=500), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-    sa.ForeignKeyConstraint(['site_id'], ['sites.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_racks_id'), 'racks', ['id'], unique=False)
-    op.create_index(op.f('ix_racks_site_id'), 'racks', ['site_id'], unique=False)
     op.create_table('role_permissions',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('role_id', sa.Integer(), nullable=True),
@@ -596,7 +602,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_index(op.f('ix_inspection_device_results_id'), table_name='inspection_device_results')
+    # 先移除循环依赖的补充外键，否则 drop devices 会被 ip_addresses 的 FK 阻塞
+    if op.get_context().dialect.name != "sqlite":
+        op.drop_constraint('fk_ip_addresses_device_id_devices', 'ip_addresses', type_='foreignkey')
     op.drop_table('inspection_device_results')
     op.drop_index(op.f('ix_circuit_incident_logs_id'), table_name='circuit_incident_logs')
     op.drop_table('circuit_incident_logs')
@@ -628,10 +636,6 @@ def downgrade() -> None:
     op.drop_table('role_permissions')
     op.drop_index(op.f('ix_racks_site_id'), table_name='racks')
     op.drop_index(op.f('ix_racks_id'), table_name='racks')
-    op.drop_table('racks')
-    op.drop_index(op.f('ix_prefixes_id'), table_name='prefixes')
-    op.drop_table('prefixes')
-    op.drop_index(op.f('ix_link_monitor_id'), table_name='link_monitor')
     op.drop_table('link_monitor')
     op.drop_index(op.f('ix_inspection_tasks_id'), table_name='inspection_tasks')
     op.drop_table('inspection_tasks')
@@ -648,9 +652,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_system_configs_id'), table_name='system_configs')
     op.drop_table('system_configs')
     op.drop_index(op.f('ix_sites_id'), table_name='sites')
-    op.drop_table('sites')
-    op.drop_index(op.f('ix_settings_key'), table_name='settings')
-    op.drop_index(op.f('ix_settings_id'), table_name='settings')
     op.drop_table('settings')
     op.drop_index(op.f('ix_roles_id'), table_name='roles')
     op.drop_table('roles')
@@ -659,11 +660,19 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_monthly_reports_id'), table_name='monthly_reports')
     op.drop_table('monthly_reports')
     op.drop_index(op.f('ix_ip_addresses_id'), table_name='ip_addresses')
-    op.drop_table('ip_addresses')
-    op.drop_index(op.f('ix_devices_id'), table_name='devices')
     op.drop_table('devices')
     op.drop_index(op.f('ix_audit_logs_id'), table_name='audit_logs')
+    op.drop_table('racks')
+    op.drop_index(op.f('ix_prefixes_id'), table_name='prefixes')
+    op.drop_table('ip_addresses')
+    op.drop_index(op.f('ix_devices_id'), table_name='devices')
+    op.drop_table('prefixes')
+    op.drop_index(op.f('ix_link_monitor_id'), table_name='link_monitor')
+    op.drop_table('sites')
+    op.drop_index(op.f('ix_settings_key'), table_name='settings')
+    op.drop_index(op.f('ix_settings_id'), table_name='settings')
     op.drop_table('audit_logs')
     op.drop_index(op.f('ix_aggregates_id'), table_name='aggregates')
     op.drop_table('aggregates')
+    op.drop_index(op.f('ix_inspection_device_results_id'), table_name='inspection_device_results')
     # ### end Alembic commands ###

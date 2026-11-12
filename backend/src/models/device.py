@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class Device(Base):
     __tablename__ = "devices"
@@ -22,13 +22,13 @@ class Device(Base):
     u_position = Column(Integer)
     u_size = Column(Integer, default=1)
     status = Column(String(20), default="active")
-    purchase_date = Column(DateTime, index=True)
-    warranty_end = Column(DateTime, index=True)
+    purchase_date = Column(UTCDateTime, index=True)
+    warranty_end = Column(UTCDateTime, index=True)
     purchase_amount = Column(Float)
     owner = Column(String(50))
     note = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
     
     # 连接关系
     source_links = relationship("DeviceLink", foreign_keys="DeviceLink.source_device_id", back_populates="source_device")

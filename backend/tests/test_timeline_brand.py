@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from src.models import Device, InspectionDeviceResult, Role, User
 from src.services.permission_service import pwd_context
+from src.utils.timeutil import to_bjt, utc_now
 
 
 async def _login(client, username: str, password: str = "Passw0rd!") -> dict:
@@ -59,7 +60,7 @@ async def _get_events(client, headers, **params) -> list:
 async def test_state_change_only_on_transition(client, db_session):
     """T→F→F 三轮：只产生 1 条离线事件（变化点），F→F 快照不刷屏。"""
     dev = await _make_device(db_session, "状态变化设备")
-    now = datetime.now()
+    now = utc_now()
     await _make_scan(db_session, dev, True, now - timedelta(hours=3))
     await _make_scan(db_session, dev, False, now - timedelta(hours=2))
     await _make_scan(db_session, dev, False, now - timedelta(hours=1))
@@ -78,7 +79,7 @@ async def test_state_change_only_on_transition(client, db_session):
 async def test_recovery_event_once(client, db_session):
     """F→T：恰 1 条恢复事件。"""
     dev = await _make_device(db_session, "恢复设备")
-    now = datetime.now()
+    now = utc_now()
     await _make_scan(db_session, dev, False, now - timedelta(hours=2))
     await _make_scan(db_session, dev, True, now - timedelta(hours=1))
 
@@ -93,7 +94,7 @@ async def test_recovery_event_once(client, db_session):
 async def test_first_scan_no_event(client, db_session):
     """该设备首轮巡检（无上一轮可比）不产生离线/恢复事件。"""
     dev = await _make_device(db_session, "首轮设备")
-    now = datetime.now()
+    now = utc_now()
     await _make_scan(db_session, dev, False, now - timedelta(hours=1))
 
     headers = await _login(client, "admin", "admin123")
@@ -106,7 +107,7 @@ async def test_multi_device_independent_transitions(client, db_session):
     """多设备各自独立判定状态变化，互不串扰。"""
     dev_a = await _make_device(db_session, "设备A")
     dev_b = await _make_device(db_session, "设备B")
-    now = datetime.now()
+    now = utc_now()
     # A：T→F（1 条离线）；B：持续 F→F（0 条）
     await _make_scan(db_session, dev_a, True, now - timedelta(hours=2), ip="10.0.0.1")
     await _make_scan(db_session, dev_a, False, now - timedelta(hours=1), ip="10.0.0.1")
@@ -126,7 +127,7 @@ async def test_multi_device_independent_transitions(client, db_session):
 async def test_time_range_naive_and_aware_boundary(client, db_session):
     """时间口径：naive 本地字符串与 aware 北京时间两种入参均正确命中当天记录。"""
     dev = await _make_device(db_session, "时区设备")
-    now = datetime.now()
+    now = utc_now()
     # 两条记录构成 T→F 状态变化（首轮不产生事件，需有前轮）
     await _make_scan(db_session, dev, True, now - timedelta(hours=2))
     # 以 now-1h 为事件锚点（必在"当天0点 ~ now"窗内；0点整时 start==scan 仍命中）
@@ -134,21 +135,22 @@ async def test_time_range_naive_and_aware_boundary(client, db_session):
     await _make_scan(db_session, dev, False, scan_at)
 
     headers = await _login(client, "admin", "admin123")
-    day_start = scan_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 北京时间当天 0 点（aware），用于构造两种入参形态
+    day_start_bjt = to_bjt(scan_at).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # naive 本地挂钟（步骤 B 后前端的新传参格式）
+    # naive 本地挂钟（前端新传参格式）→ 后端按北京时间解释
     events = await _get_events(
         client, headers,
-        start_time=day_start.isoformat(),     # "YYYY-MM-DDT00:00:00" 无时区
-        end_time=now.isoformat(),
+        start_time=day_start_bjt.replace(tzinfo=None).isoformat(),
+        end_time=to_bjt(now).replace(tzinfo=None).isoformat(),
     )
     assert any(e["event_type"] == "device_offline" for e in events)
 
-    # aware 带北京时区（兼容旧调用方）——后端 to_naive_bjt 归一后同样命中
+    # aware 带北京时区（兼容旧调用方）→ 同样命中
     events = await _get_events(
         client, headers,
-        start_time=day_start.isoformat() + "+08:00",
-        end_time=now.isoformat() + "+08:00",
+        start_time=day_start_bjt.isoformat(),
+        end_time=to_bjt(now).isoformat(),
     )
     assert any(e["event_type"] == "device_offline" for e in events)
 

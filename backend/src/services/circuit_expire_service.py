@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 import logging
 """专线到期检查服务"""
 import asyncio
@@ -28,7 +29,7 @@ class CircuitExpireService:
         :param db: 数据库会话
         :param days_before: 提前多少天检查到期（默认30天）
         """
-        now = datetime.now()
+        now = utc_now()
         expire_threshold = now + timedelta(days=days_before)
         
         query = select(Circuit).where(
@@ -71,7 +72,7 @@ class CircuitExpireService:
         - 已处理（resolved）→ 默认不再重建（处理有效语义）；仅当阈值恶化
           （剩余天数比上次处理时更小，如 19 天 → 10 天）才视为新问题重建。
         """
-        now = datetime.now()
+        now = utc_now()
         days_remaining = (circuit.contract_end - now).days
 
         existing_query = select(AlertRecord).where(
@@ -182,7 +183,7 @@ class CircuitExpireService:
             try:
                 await CircuitExpireService._send_notification(db, channel, alert_record, config)
                 notification.status = "sent"
-                notification.sent_at = datetime.now()
+                notification.sent_at = utc_now()
             except Exception as e:
                 notification.status = "failed"
                 notification.error_message = str(e)[:500]

@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 import asyncio
 import logging
 from typing import List, Optional
@@ -487,7 +488,7 @@ async def create_device_link(
     
     # 创建连接关系
     db_link = DeviceLink(**link.model_dump())
-    db_link.discovered_at = datetime.now()
+    db_link.discovered_at = utc_now()
     db.add(db_link)
     await db.commit()
     await db.refresh(db_link)
@@ -695,7 +696,8 @@ async def read_unknown_endpoints(
     if device_id:
         query = query.where(DiscoveryUnknownEndpoint.device_id == device_id)
 
-    query = query.order_by(DiscoveryUnknownEndpoint.last_seen_at.desc())
+    # 未知终端按最近发现时间倒序；从未刷新过 last_seen_at 的记录排最后
+    query = query.order_by(DiscoveryUnknownEndpoint.last_seen_at.desc().nulls_last())
     result = await db.execute(query)
 
     endpoints = []
@@ -827,7 +829,7 @@ async def accept_unknown_endpoint(
             target_interface=None,
             link_type="mac_arp",
             confidence=90,
-            discovered_at=datetime.now(),
+            discovered_at=utc_now(),
             note=f"未知接入入库（MAC {endpoint.mac_address}）",
         ))
 

@@ -125,7 +125,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Refresh, Download, Delete, Timer } from '@element-plus/icons-vue'
-import { formatFileSize } from '@/lib/utils'
+import { formatFileSize, formatDateTime } from '@/lib/utils'
 import {
   listMonthlyReports,
   generateMonthlyReport,
@@ -205,8 +205,11 @@ async function handleDelete(item: ReportItem) {
 }
 
 function formatTime(time: string): string {
-  // 后端已输出 "YYYY-MM-DD HH:MM" 北京时间文本，直接展示，避免二次时区解析偏移
-  return time || ''
+  if (!time) return ''
+  // 兼容后端两种形态：已带时区的 ISO（新规范）→ 按本地时区格式化；
+  // 已是 "YYYY-MM-DD HH:MM" 文本（旧实现）→ 原样展示，避免二次偏移
+  const isIso = time.includes('T') || /[Zz]$/.test(time) || /[+-]\d{2}:?\d{2}$/.test(time)
+  return isIso ? formatDateTime(time) : time
 }
 
 onMounted(() => {

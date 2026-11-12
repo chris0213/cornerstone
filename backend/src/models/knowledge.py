@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Index
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class KnowledgeCategory(Base):
@@ -12,7 +12,7 @@ class KnowledgeCategory(Base):
     name = Column(String(50), nullable=False, unique=True, index=True)
     description = Column(String(200), default="")
     sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
 
 
 class KnowledgeArticle(Base):
@@ -33,6 +33,6 @@ class KnowledgeArticle(Base):
     updated_by = Column(String(50), default="")  # 最后修改人（用户名）
     is_published = Column(Boolean, default=True)  # 草稿/发布
     view_count = Column(Integer, default=0)
-    deleted_at = Column(DateTime(timezone=True), default=None)  # 软删除标记
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(UTCDateTime, default=None)  # 软删除标记
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, server_default=func.now(), onupdate=func.now())

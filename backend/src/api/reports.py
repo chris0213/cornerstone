@@ -71,7 +71,8 @@ async def list_monthly_reports(
             "file_size": r.file_size,
             "status": r.status,
             "generated_by": r.generated_by,
-            "generated_at": (r.generated_at + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M") if r.generated_at else "",
+            # 统一返回带时区 offset 的 ISO 时间（UTC），展示层由前端本地化
+            "generated_at": r.generated_at.isoformat() if r.generated_at else "",
             "filename": Path(r.file_path).name if r.file_path else "",
         }
         for r in reports

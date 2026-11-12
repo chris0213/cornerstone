@@ -15,6 +15,7 @@ from src.models.circuit_incident import CircuitIncident
 from src.api.auth import get_current_active_user
 from src.models.user import User
 from .common import require_manager_or_admin, to_naive_bjt, IP_OCCUPIED_STATUSES, calculate_usable_ips
+from src.utils.timeutil import BJT, ensure_utc, to_bjt, utc_now
 
 router = APIRouter()
 
@@ -29,14 +30,17 @@ async def get_manager_stats(
     """获取管理看板四个核心指标"""
     require_manager_or_admin(current_user)
     
-    now = datetime.now()
-    month_start = datetime(now.year, now.month, 1)
-    
+    now = utc_now()
+    # "本月"按北京时间的自然月划分（业务口径），边界为 aware BJT；
+    # UTCDateTime 会在绑定参数时统一转成 UTC，PG/SQLite 结果一致
+    now_bjt = to_bjt(now)
+    month_start = datetime(now_bjt.year, now_bjt.month, 1, tzinfo=BJT)
+
     # 上月时间范围（半开区间下界；上界即 month_start，见下方可用性统计）
-    if now.month == 1:
-        last_month_start = datetime(now.year - 1, 12, 1)
+    if now_bjt.month == 1:
+        last_month_start = datetime(now_bjt.year - 1, 12, 1, tzinfo=BJT)
     else:
-        last_month_start = datetime(now.year, now.month - 1, 1)
+        last_month_start = datetime(now_bjt.year, now_bjt.month - 1, 1, tzinfo=BJT)
     
     # 1. 网络可用性（本月链路探测记录中 normal 占比——快照口径，非时长加权）
     # 数据源为 LinkMonitor 链路探测快照：每轮探测每条链路各记一条，
@@ -130,8 +134,8 @@ async def get_manager_stats(
         )
         oldest = oldest_open_result.scalar_one_or_none()
         if oldest:
-            # PG timestamptz 返回 aware UTC，与 naive now 混算会抛 TypeError，先归一
-            max_duration_hours = round((now - to_naive_bjt(oldest)).total_seconds() / 3600, 1)
+            # 统一 aware UTC 计算，避免 aware/naive 混算抛 TypeError
+            max_duration_hours = round((now - ensure_utc(oldest)).total_seconds() / 3600, 1)
     
     # 4. 即将到期事项（两级预警）
     now_dt = now
@@ -152,7 +156,7 @@ async def get_manager_stats(
             "type": "专线合同",
             "name": c.name,
             "expire_date": to_naive_bjt(c.contract_end).strftime("%Y-%m-%d"),
-            "days_left": (to_naive_bjt(c.contract_end).date() - now_dt.date()).days,
+            "days_left": (to_naive_bjt(c.contract_end).date() - now_bjt.date()).days,
             "detail": c.provider or ""
         }
         for c in urgent_circuits_result.all()
@@ -172,7 +176,7 @@ async def get_manager_stats(
             "type": "设备保修",
             "name": d.name,
             "expire_date": d.warranty_end.strftime("%Y-%m-%d"),
-            "days_left": (d.warranty_end.date() - now_dt.date()).days,
+            "days_left": (d.warranty_end.date() - now_bjt.date()).days,
             "detail": d.model or ""
         }
         for d in urgent_warranties_result.all()
@@ -192,7 +196,7 @@ async def get_manager_stats(
             "type": "专线合同",
             "name": c.name,
             "expire_date": c.contract_end.strftime("%Y-%m-%d"),
-            "days_left": (c.contract_end.date() - now_dt.date()).days,
+            "days_left": (c.contract_end.date() - now_bjt.date()).days,
             "detail": c.provider or ""
         }
         for c in warning_circuits_result.all()
@@ -212,7 +216,7 @@ async def get_manager_stats(
             "type": "设备保修",
             "name": d.name,
             "expire_date": d.warranty_end.strftime("%Y-%m-%d"),
-            "days_left": (d.warranty_end.date() - now_dt.date()).days,
+            "days_left": (d.warranty_end.date() - now_bjt.date()).days,
             "detail": d.model or ""
         }
         for d in warning_warranties_result.all()
@@ -262,7 +266,7 @@ async def get_risks(
     """获取IT风险看板数据"""
     require_manager_or_admin(current_user)
     
-    now = datetime.now()
+    now = utc_now()
     thirty_days_later = now + timedelta(days=30)
     sixty_days_later = now + timedelta(days=60)
     five_years_ago = now - timedelta(days=365 * 5)

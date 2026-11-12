@@ -2,11 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Requ
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, update, desc, func
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import ipaddress
 import time
 
-BJT = timezone(timedelta(hours=8))  # 北京时间
 import json
 import uuid
 
@@ -20,6 +19,7 @@ from ..services.backup_collector import collect_device_config, detect_config_cha
 from ..utils.crypto import encrypt_password, decrypt_password
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
+from ..utils.timeutil import ensure_utc
 from .dependencies import get_current_active_user, require_permission, require_super_admin, PageParams, pagination
 
 router = APIRouter()
@@ -386,13 +386,9 @@ async def read_backups(
         backup = row[0]
         backup_dict = {c.name: getattr(backup, c.name) for c in backup.__table__.columns}
         backup_dict['device_name'] = row[1]
-        # 将 UTC 时间转换为北京时间后返回
+        # 统一返回带时区 offset 的 ISO 时间（UTC），展示层由前端本地化
         if backup_dict.get('created_at'):
-            dt = backup_dict['created_at']
-            if dt:
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(BJT)
-                backup_dict['created_at'] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            backup_dict['created_at'] = ensure_utc(backup_dict['created_at']).isoformat()
         backups.append(backup_dict)
     
     return backups

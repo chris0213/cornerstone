@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean, Float
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, JSONType, UTCDateTime
 
 
 class InspectionTask(Base):
@@ -26,7 +26,7 @@ class InspectionTask(Base):
     snmp_retries = Column(Integer, default=1)
     
     # TCP探测配置
-    tcp_ports = Column(JSON, default="[22, 80, 443, 445, 3389]")
+    tcp_ports = Column(JSONType, default=lambda: [22, 80, 443, 445, 3389], comment="TCP 探测端口列表")
     tcp_timeout_ms = Column(Integer, default=2000)
     
     # 并发控制
@@ -38,11 +38,11 @@ class InspectionTask(Base):
     alert_on_fingerprint_change = Column(Boolean, default=True)
     
     # 执行记录
-    last_run_at = Column(DateTime(timezone=True))
+    last_run_at = Column(UTCDateTime)
     last_run_status = Column(String(20))  # success / partial_fail / failed
     
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
 
 
 class InspectionResult(Base):
@@ -62,11 +62,11 @@ class InspectionResult(Base):
     change_count = Column(Integer, default=0)
     error_message = Column(String(500))
     
-    started_at = Column(DateTime(timezone=True))
-    finished_at = Column(DateTime(timezone=True))
+    started_at = Column(UTCDateTime)
+    finished_at = Column(UTCDateTime)
     duration_seconds = Column(Float)
 
-    ai_summary = Column(JSON, nullable=True, comment="AI异常二次研判结论")
+    ai_summary = Column(JSONType, nullable=True, comment="AI异常二次研判结论")
 
 
 class InspectionDeviceResult(Base):
@@ -79,7 +79,7 @@ class InspectionDeviceResult(Base):
     device_id = Column(Integer, ForeignKey("devices.id"))
     is_online = Column(Boolean)
     detection_method = Column(String(20))  # icmp / tcp / none
-    open_ports = Column(JSON)
+    open_ports = Column(JSONType)
     
     # SNMP采集结果（全量扫描）
     sys_descr = Column(String(500))
@@ -94,12 +94,12 @@ class InspectionDeviceResult(Base):
     # 变更检测
     is_new_device = Column(Boolean, default=False)
     has_fingerprint_change = Column(Boolean, default=False)
-    change_detail = Column(JSON)
+    change_detail = Column(JSONType)
     
     # 执行信息
     scan_duration_ms = Column(Integer)
     error_message = Column(String(500))
-    scanned_at = Column(DateTime(timezone=True))
+    scanned_at = Column(UTCDateTime)
 
 
 class DeviceFingerprint(Base):
@@ -114,6 +114,6 @@ class DeviceFingerprint(Base):
     sys_object_id = Column(String(100))
     sys_location = Column(String(200))
     vendor = Column(String(50))
-    last_seen_online = Column(DateTime(timezone=True))
-    last_full_scan_at = Column(DateTime(timezone=True))
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_seen_online = Column(UTCDateTime)
+    last_full_scan_at = Column(UTCDateTime)
+    updated_at = Column(UTCDateTime, onupdate=func.now())

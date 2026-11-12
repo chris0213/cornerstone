@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, Index
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, JSONType, UTCDateTime
 
 
 class CircuitIncident(Base):
@@ -15,17 +15,17 @@ class CircuitIncident(Base):
     title = Column(String(200), nullable=False)
     severity = Column(String(20), default="minor")
     status = Column(String(20), default="open")
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    resolved_at = Column(DateTime(timezone=True))
+    started_at = Column(UTCDateTime, nullable=False)
+    resolved_at = Column(UTCDateTime)
     duration_minutes = Column(Integer)
     symptom = Column(Text)
     root_cause = Column(Text)
     resolution = Column(Text)
-    affected_sites = Column(JSON)
+    affected_sites = Column(JSONType)
     reported_by = Column(String(50))
     ticket_no = Column(String(50))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
 
 
 class CircuitIncidentLog(Base):
@@ -35,4 +35,4 @@ class CircuitIncidentLog(Base):
     incident_id = Column(Integer, ForeignKey("circuit_incidents.id"))
     content = Column(Text, nullable=False)
     operator = Column(String(50))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())

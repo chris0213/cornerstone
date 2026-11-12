@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/auth'
 
 import { getDashboardStats, getPrefixesUsage, getRecentLogs, getDeviceTypes, getCircuitTypes, type DashboardStats, type PrefixUsage, type AuditLogItem, type DeviceTypeItem, type CircuitTypeItem } from '@/api/dashboard'
 import { applyKeywordFilter } from '@/lib/filters'
+import { formatDateTime } from '@/lib/utils'
 import EventTimeline from './EventTimeline.vue'
 import { useRouter } from 'vue-router'
 import { Plus, MapLocation, Connection, Clock, DataBoard, FolderOpened, Lightning } from '@element-plus/icons-vue'
@@ -156,15 +157,7 @@ const filteredLogs = computed(() =>
 
 // 格式化时间
 function formatTime(dateString: string) {
-  const date = new Date(dateString)
-  return date.toLocaleString(locale.value || t('common.locale'), {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  })
+  return formatDateTime(dateString, { seconds: false })
 }
 
 // 操作日志翻译映射

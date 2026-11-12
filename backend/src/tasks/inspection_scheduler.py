@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 from datetime import datetime
 from typing import Optional
 import logging
@@ -39,7 +40,7 @@ async def run_scheduled_inspection(task_id: int):
                 InspectionTask.__table__.update()
                 .where(InspectionTask.id == task_id)
                 .values({
-                    "last_run_at": datetime.now(),
+                    "last_run_at": utc_now(),
                     "last_run_status": "failed"
                 })
             )

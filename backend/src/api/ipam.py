@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,7 @@ class ScanManager:
 
     def _reap_stale_tasks(self, prefix_id: int):
         """清理指定子网的僵尸扫描任务（start_scan 前调用）"""
-        now = datetime.now()
+        now = utc_now()
         for tid, info in list(self.active_tasks.items()):
             if info["prefix_id"] != prefix_id:
                 continue
@@ -105,7 +106,7 @@ class ScanManager:
             "scanner": scanner,
             "prefix_id": prefix_id,
             "network": prefix.network,
-            "started_at": datetime.now(),
+            "started_at": utc_now(),
             "scan_lock": lock,
         }
 
@@ -185,7 +186,7 @@ class ScanManager:
 
         # 标记已进入消费：僵尸清理（UNCONSUMED_STALE_SECONDS）只针对从未启动的任务
         if task_info.get("consumed_at") is None:
-            task_info["consumed_at"] = datetime.now()
+            task_info["consumed_at"] = utc_now()
 
         try:
             # 手动驱动 async generator — async for 无法 catch 到 generator
@@ -566,7 +567,7 @@ async def get_expiring_addresses(
     current_user: dict = Depends(get_current_active_user)
 ):
     """获取即将到期的IP地址"""
-    now = datetime.now()
+    now = utc_now()
     expire_end = now + timedelta(days=days)
     
     result = await db.execute(

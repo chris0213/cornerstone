@@ -310,6 +310,7 @@ import {
   type UnknownEndpoint
 } from '@/api/topology'
 import { getDevices, type DeviceResponse } from '@/api/devices'
+import { formatDateTime } from '@/lib/utils'
 import { getCircuits, type CircuitResponse } from '@/api/circuits'
 import { getSites, type SiteResponse } from '@/api/sites'
 import { confirmAndRun } from '@/lib/confirm'
@@ -684,7 +685,7 @@ const formatMac = (mac: string) => {
 
 const formatTime = (time: string | null) => {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN', { hour12: false })
+  return formatDateTime(time)
 }
 
 const loadUnknownEndpoints = async () => {

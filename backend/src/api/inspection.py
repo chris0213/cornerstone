@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -207,7 +208,7 @@ async def run_inspection(
         )
         
         # 更新任务最后执行记录
-        task.last_run_at = datetime.now()
+        task.last_run_at = utc_now()
         task.last_run_status = inspection_result.status
         await db.commit()
 
@@ -304,9 +305,10 @@ async def get_device_fingerprints(
     if vendor:
         query = query.where(DeviceFingerprint.vendor == vendor)
     if ip:
-        query = query.where(DeviceFingerprint.ip_address.like(f"%{ip}%"))
+        query = query.where(DeviceFingerprint.ip_address.ilike(f"%{ip}%"))
     
-    query = query.order_by(DeviceFingerprint.last_seen_online.desc())
+    # 从未在线过的指纹（NULL）排在最后，避免空值占据"最近在线"榜首
+    query = query.order_by(DeviceFingerprint.last_seen_online.desc().nulls_last())
     
     result = await db.execute(query)
     return result.scalars().all()

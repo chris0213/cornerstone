@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, insert, update, func, and_
@@ -122,7 +123,7 @@ async def resolve_incident(
     if incident.status == "resolved":
         raise HTTPException(status_code=400, detail="Incident is already resolved")
     
-    now = datetime.now()
+    now = utc_now()
     duration_minutes = int((now - incident.started_at).total_seconds() / 60)
     
     update_data = resolve_data.model_dump(exclude_unset=True)
@@ -213,7 +214,7 @@ async def get_circuit_incident_stats(
     if circuit is None:
         raise HTTPException(status_code=404, detail="Circuit not found")
     
-    now = datetime.now()
+    now = utc_now()
     this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     current_count_result = await db.execute(

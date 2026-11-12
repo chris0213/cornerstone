@@ -82,6 +82,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MagicStick, Promotion, Clock } from '@element-plus/icons-vue'
 import api from '../api/axios'
+import { formatDateTime } from '../lib/utils'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -143,7 +144,7 @@ function buildRows(dataType: string, rows: any[]): AiRow[] {
       case 'audit_logs':
         return {
           title: [r.user, r.action].filter(Boolean).join(' · ') || '-',
-          sub: [r.resource, String(r.created_at ?? '').slice(0, 19)].filter(Boolean).join(' · '),
+          sub: [r.resource, r.created_at ? formatDateTime(r.created_at) : ''].filter(Boolean).join(' · '),
         }
       default:
         return { title: JSON.stringify(r).slice(0, 80) }

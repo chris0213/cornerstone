@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 
 class CircuitChange(Base):
@@ -16,4 +16,4 @@ class CircuitChange(Base):
     operator = Column(String(50))
     remark = Column(String(500))
     batch_id = Column(String(36), index=True, comment="操作批次ID：同一次请求的多字段变更共用")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())

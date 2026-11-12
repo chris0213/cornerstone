@@ -1,10 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, update, desc, func
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import json
-
-BJT = timezone(timedelta(hours=8))  # 北京时间
 
 from ..database import get_db
 from ..models import BackupTask, Backup, Credential, Device, Site
@@ -12,6 +10,7 @@ from ..tasks.backup_scheduler import add_task_to_scheduler, remove_task_from_sch
     run_backup_task, reload_tasks, running_tasks, scheduler
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
+from ..utils.timeutil import ensure_utc
 from .dependencies import get_current_active_user, require_permission
 
 router = APIRouter()
@@ -48,19 +47,11 @@ async def get_backup_tasks(
     for task in tasks:
         task_dict = {c.name: getattr(task, c.name) for c in task.__table__.columns}
         
-        # 将 UTC 时间转换为北京时间后返回
+        # 统一返回带时区 offset 的 ISO 时间（UTC），展示层由前端本地化
         if task_dict.get('last_run_at') is not None:
-            dt = task_dict['last_run_at']
-            if dt is not None:
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(BJT)
-                task_dict['last_run_at'] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            task_dict['last_run_at'] = ensure_utc(task_dict['last_run_at']).isoformat()
         if task_dict.get('created_at') is not None:
-            dt = task_dict['created_at']
-            if dt is not None:
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(BJT)
-                task_dict['created_at'] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            task_dict['created_at'] = ensure_utc(task_dict['created_at']).isoformat()
         
         # 获取凭证名称/协议/缺失标识
         if task.credential_id:
@@ -101,12 +92,10 @@ async def get_backup_tasks(
             task_dict["device_count"] = dev_result.scalar_one()
             task_dict["device_missing_ids"] = []
 
-        # 下次执行时间（北京时间，与其他接口时间口径一致）；未启用或未注册为 null
+        # 下次执行时间统一 ISO（UTC），由前端本地化展示；未启用或未注册为 null
         next_run = next_run_map.get(task.id) if task.is_enabled else None
         if next_run is not None:
-            if next_run.tzinfo is not None:
-                next_run = next_run.astimezone(BJT)
-            task_dict["next_run_at"] = next_run.strftime("%Y-%m-%d %H:%M:%S")
+            task_dict["next_run_at"] = ensure_utc(next_run).isoformat()
         else:
             task_dict["next_run_at"] = None
 
@@ -435,11 +424,8 @@ async def get_task_history(
     # 按日期分组统计
     history = {}
     for backup in backups:
-        # 将 UTC 时间转换为北京时间后格式化输出
-        dt = backup.created_at
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(BJT)
-        date_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        # 分组时间同样统一为带 offset 的 UTC ISO，避免手工 +8 偏移
+        date_str = ensure_utc(backup.created_at).isoformat()
         if date_str not in history:
             history[date_str] = {"success": 0, "failed": 0, "total": 0, "backups": []}
         history[date_str]["total"] += 1

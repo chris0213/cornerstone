@@ -23,12 +23,13 @@ export function snakeToCamel(obj: any): any {
 
 export function daysUntil(dateText: string | null | undefined): number {
   if (!dateText) return -999
+  const target = parseServerDate(dateText)
+  if (!target) return -999
+  // 与「本地时区的今天零点」比较，避免用 UTC 日期导致跨零点差一天
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  const dateStr = dateText.includes('T') ? dateText.split('T')[0] : dateText
-  const date = new Date(`${dateStr}T00:00:00+08:00`)
-  if (isNaN(date.getTime())) return -999
-  return Math.ceil((date.getTime() - today.getTime()) / 86400000)
+  const targetDay = new Date(target.getFullYear(), target.getMonth(), target.getDate())
+  return Math.round((targetDay.getTime() - today.getTime()) / 86400000)
 }
 
 import { getLocale } from '../i18n'
@@ -40,42 +41,54 @@ export function money(value: number | string | undefined | null): string {
   return num.toLocaleString(getLocale() || 'zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+/**
+ * 把后端返回的时间字符串解析为 Date（统一入口）
+ *
+ * 后端已统一返回带时区的 UTC，例如 `2026-11-12T10:03:28+00:00`：
+ * - 带 `Z` / `+08:00` / `-05:00` 等时区标记：按原样解析，得到绝对时刻
+ * - `YYYY-MM-DD HH:mm:ss` 之类无时区标记的旧格式：按后端存储约定当作 UTC 补 `Z`
+ * - 纯日期 `YYYY-MM-DD`：按本地零点解析（避免被当成 UTC 零点而偏移一天）
+ */
+export function parseServerDate(dateText: string | null | undefined): Date | null {
+  if (!dateText) return null
+  const text = String(dateText).trim()
+  if (!text) return null
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const [y, m, d] = text.split('-').map(Number)
+    const local = new Date(y, m - 1, d)
+    return isNaN(local.getTime()) ? null : local
+  }
+
+  let normalized = text.replace(' ', 'T')
+  const hasZone = /[Zz]$/.test(normalized) || /[+-]\d{2}:?\d{2}$/.test(normalized)
+  if (!hasZone) normalized += 'Z'
+
+  const date = new Date(normalized)
+  return isNaN(date.getTime()) ? null : date
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+
 export function formatDate(dateText: string | null | undefined): string {
   if (!dateText) return '—'
-  const date = new Date(dateText)
-  if (isNaN(date.getTime())) return dateText
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const date = parseServerDate(dateText)
+  if (!date) return dateText as string
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
 }
 
 /**
- * 统一日期时间格式化（年-月-日 时:分:秒，Asia/Shanghai 时区）
- * 兼容 ISO、PostgreSQL、无时区信息等后端时间格式
+ * 统一日期时间格式化（按浏览器本地时区显示）
+ * 传入带时区的后端时间后，自动换算为当前用户本地时间。
  */
 export function formatDateTime(
   dateText: string | null | undefined,
   options: { seconds?: boolean } = {}
 ): string {
   if (!dateText) return '-'
-  let date: Date
-  if (dateText.includes('+') || /[Zz]$/.test(dateText)) {
-    // 显式携带时区偏移或 Z 后缀：按原样解析
-    date = new Date(dateText.replace(' ', 'T'))
-  } else if (dateText.includes('T')) {
-    // ISO 格式但无时区后缀：后端存 UTC（与存储约定一致），补 Z 解析
-    date = new Date(dateText + 'Z')
-  } else if (dateText.includes('-') && dateText.indexOf('-') !== 4) {
-    // PostgreSQL 格式：2026-06-17 15:33:24.455473+08（此分支已并入上方 + 判断，保留兜底）
-    date = new Date(dateText.replace(' ', 'T'))
-  } else {
-    // 无时区信息的空格分隔格式，按 UTC 解释（与后端存储约定一致）
-    date = new Date(dateText.replace(' ', 'T') + 'Z')
-  }
-  if (isNaN(date.getTime())) return dateText
+  const date = parseServerDate(dateText)
+  if (!date) return dateText as string
   const fmt: Intl.DateTimeFormatOptions = {
-    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -85,6 +98,34 @@ export function formatDateTime(
   }
   if (options.seconds !== false) fmt.second = '2-digit'
   return date.toLocaleString(getLocale() || 'zh-CN', fmt)
+}
+
+/** HH:mm（本地时区） */
+export function formatTimeHM(dateText: string | null | undefined): string {
+  const date = parseServerDate(dateText)
+  if (!date) return '-'
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+/** HH:mm:ss（本地时区） */
+export function formatTimeHMS(dateText: string | null | undefined): string {
+  const date = parseServerDate(dateText)
+  if (!date) return '-'
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
+}
+
+/** MM-DD（本地时区） */
+export function formatMonthDay(dateText: string | null | undefined): string {
+  const date = parseServerDate(dateText)
+  if (!date) return '-'
+  return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+/** MM-DD HH:mm（本地时区） */
+export function formatMonthDayHM(dateText: string | null | undefined): string {
+  const date = parseServerDate(dateText)
+  if (!date) return '-'
+  return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
 
 /** 统一文件大小格式化：B / KB / MB / GB */

@@ -5,6 +5,7 @@
 改为后台任务：启动接口立即返回 task_id，前端轮询进度接口获取状态与统计。
 单进程部署场景下使用内存表即可（重启后任务丢失，前端轮询会得到 not_found 并复位）。
 """
+from src.utils.timeutil import utc_now
 import asyncio
 import logging
 import uuid
@@ -28,7 +29,7 @@ class DiscoveryTask:
         self.message = ""
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
-        self.created_at = datetime.now()
+        self.created_at = utc_now()
         self.finished_at: Optional[datetime] = None
         # 持有后台协程的 asyncio.Task 强引用（防 GC 提前回收；同类型任务互斥由此保证）
         self.asyncio_task: Optional[asyncio.Task] = None
@@ -126,4 +127,4 @@ async def run_discovery_task(task: DiscoveryTask, runner: Callable[..., Awaitabl
         task.status = "failed"
         task.phase = "失败"
         task.error = str(e)
-        task.finished_at = datetime.now()
+        task.finished_at = utc_now()

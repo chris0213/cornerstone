@@ -1,3 +1,4 @@
+from src.utils.timeutil import to_bjt, utc_now
 import asyncio
 import logging
 import socket
@@ -111,7 +112,7 @@ class InspectorService:
         - 所有异常静默捕获，不抛出，保证单IP失败不影响整体
         """
         result = ProbeResult()
-        start_time = datetime.now()
+        start_time = utc_now()
         
         async def icmp_ping():
             try:
@@ -151,7 +152,7 @@ class InspectorService:
         
         await asyncio.gather(*tasks)
         
-        duration = datetime.now() - start_time
+        duration = utc_now() - start_time
         result.duration_ms = int(duration.total_seconds() * 1000)
         
         return result
@@ -457,9 +458,9 @@ class InspectorService:
                     target_ip=device_result.ip_address,
                     alert_type="inspection_offline",
                     severity="warning",
-                    message=f"设备 {device_name}（{device_result.ip_address}）已离线，上次在线：{fingerprint.last_seen_online}",
+                    message=f"设备 {device_name}（{device_result.ip_address}）已离线，上次在线：{to_bjt(fingerprint.last_seen_online).strftime('%Y-%m-%d %H:%M:%S')}",
                     status="active",
-                    created_at=datetime.now()
+                    created_at=utc_now()
                 ))
         
         if device_result.is_new_device and task.alert_on_new_device:
@@ -472,7 +473,7 @@ class InspectorService:
                 severity="info",
                 message=f"发现未登记设备，IP：{device_result.ip_address}，系统描述：{sys_descr}",
                 status="active",
-                created_at=datetime.now()
+                created_at=utc_now()
             ))
         
         if device_result.has_fingerprint_change and task.alert_on_fingerprint_change:
@@ -487,7 +488,7 @@ class InspectorService:
                 severity="warning",
                 message=f"设备 {device_name}（{device_result.ip_address}）指纹变更：{field_names}",
                 status="active",
-                created_at=datetime.now()
+                created_at=utc_now()
             ))
         
         if alerts:
@@ -512,7 +513,7 @@ class InspectorService:
         5. 全量扫描时更新 device_fingerprints 表
         6. 更新 InspectionResult 为最终状态
         """
-        start_time = datetime.now()
+        start_time = utc_now()
         
         # 生成目标IP列表
         target_ips = await InspectorService.build_target_ips(task, db)
@@ -553,13 +554,13 @@ class InspectorService:
             nonlocal online_count, offline_count, new_device_count, change_count, scanned_count
             
             async with semaphore:
-                start = datetime.now()
+                start = utc_now()
                 device_result = InspectionDeviceResult(
                     result_id=inspection_result.id,
                     ip_address=ip,
                     is_online=False,
                     detection_method="none",
-                    scanned_at=datetime.now()
+                    scanned_at=utc_now()
                 )
                 
                 try:
@@ -600,7 +601,7 @@ class InspectorService:
                     device_result.error_message = str(e)
                 
                 # 计算扫描耗时
-                duration = datetime.now() - start
+                duration = utc_now() - start
                 device_result.scan_duration_ms = int(duration.total_seconds() * 1000)
                 
                 # 写入设备扫描结果
@@ -682,7 +683,7 @@ class InspectorService:
         await InspectorService.run_ai_secondary_analysis(inspection_result, db)
 
         # 更新巡检记录最终状态
-        end_time = datetime.now()
+        end_time = utc_now()
         duration_seconds = (end_time - start_time).total_seconds()
         
         if offline_count == 0:
@@ -807,7 +808,7 @@ class InspectorService:
             # 5. 写入 ai_summary（仅取 AIConfig 真实存在的模型字段名）
             summary = {
                 "analysis": analysis_text,
-                "generated_at": datetime.now().isoformat(),
+                "generated_at": utc_now().isoformat(),
             }
             model = getattr(ai_config, "model", None)
             if model:
@@ -840,8 +841,8 @@ class InspectorService:
             "sys_object_id": snmp_result.sys_object_id or "",
             "sys_location": snmp_result.sys_location or "",
             "vendor": snmp_result.vendor or "unknown",
-            "last_seen_online": datetime.now(),
-            "last_full_scan_at": datetime.now()
+            "last_seen_online": utc_now(),
+            "last_full_scan_at": utc_now()
         }
         
         if existing:

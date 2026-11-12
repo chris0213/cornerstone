@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     database_url: str
     database_url_sync: str
     
+    # 数据库连接池（仅 PostgreSQL 生效；SQLite 开发环境忽略）
+    # 单副本连接上限 ≈ db_pool_size + db_max_overflow；多副本部署时
+    # 副本数 × 该上限 + 其他客户端（迁移、监控）必须小于 PG max_connections。
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
+
     # Redis配置
     redis_url: str = "redis://localhost:6379/0"
     

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import type { AppState, Circuit, Site, Device, Prefix, IPAddress, Backup, User, AuditLog, VlanGroup, Vlan, Credential } from '../types/domain'
 import { seedState, STORE_KEY } from './seed'
-import { uid } from '../lib/utils'
+import { uid, formatDate } from '../lib/utils'
 
 function getEmptyState(): AppState {
   return {
@@ -104,13 +104,14 @@ export const useAppStore = defineStore('app', {
     },
 
     todaySuccessfulBackups: (state): number => {
-      const today = new Date().toISOString().split('T')[0]
-      return state.backups.filter((b) => b.createdAt.startsWith(today) && b.status === '成功').length
+      // 用本地日期比较，避免 UTC 日期与本地时间戳在 0–8 点错位
+      const today = formatDate(new Date().toISOString())
+      return state.backups.filter((b) => formatDate(b.createdAt) === today && b.status === '成功').length
     },
 
     todayFailedBackups: (state): number => {
-      const today = new Date().toISOString().split('T')[0]
-      return state.backups.filter((b) => b.createdAt.startsWith(today) && b.status === '失败').length
+      const today = formatDate(new Date().toISOString())
+      return state.backups.filter((b) => formatDate(b.createdAt) === today && b.status === '失败').length
     },
 
     ipTotal: (state): number => {

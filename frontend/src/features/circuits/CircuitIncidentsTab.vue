@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { formatMonthDayHM } from '@/lib/utils'
 import {
   getCircuitIncidents,
   createCircuitIncident,
@@ -75,13 +76,7 @@ function formatDuration(minutes: number | null): string {
 }
 
 function formatTime(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  return formatMonthDayHM(dateString)
 }
 
 async function loadData() {

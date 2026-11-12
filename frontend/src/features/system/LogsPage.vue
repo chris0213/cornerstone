@@ -4,6 +4,7 @@ import { useAppStore } from '../../store'
 import { useAuthStore } from '../../store/auth'
 import { storeToRefs } from 'pinia'
 import { applyKeywordFilter } from '@/lib/filters'
+import { formatDateTime } from '@/lib/utils'
 import { Files, User, Clock, Warning, Check, Edit } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { getLocale } from '@/i18n'
@@ -71,23 +72,6 @@ const getActionType = (action: string) => {
 const getStatusText = (log: any) => {
   if (log.success === 'true') return { text: t('common.success'), type: 'success' }
   return { text: t('common.failed'), type: 'danger' }
-}
-
-const formatDateTime = (dateString: string) => {
-  const date = new Date(dateString)
-  if (isNaN(date.getTime())) {
-    return dateString
-  }
-  return date.toLocaleString(locale.value || 'zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  })
 }
 </script>
 

@@ -4,6 +4,7 @@ MAC/ARP 表发现：通过交换机 MAC 地址表 + ARP 表发现下挂终端
 LLDP/CDP 负责发现网络设备骨架，MAC/ARP 负责把接入端口下的终端（服务器等）
 关联到 IPAM/资产库，自动建立「交换机-服务器」链路；未匹配的记录为未知接入。
 """
+from src.utils.timeutil import utc_now
 import asyncio
 import logging
 import re
@@ -289,7 +290,7 @@ class EndpointLookup:
 
 async def upsert_unknown_endpoints(db: AsyncSession, records: list) -> int:
     """未知接入记录落库：按（接入设备+端口+MAC）去重，重复发现仅刷新 last_seen_at"""
-    now = datetime.now()
+    now = utc_now()
     for device_id, port, mac, ip in records:
         result = await db.execute(
             select(DiscoveryUnknownEndpoint).where(

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Optional, List, Dict
 from ipaddress import IPv4Network
 import logging
+from src.utils.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ async def probe_single_ip(ip: str, tcp_ports: List[int] = None, timeout: float =
     if tcp_ports is None:
         tcp_ports = DEFAULT_TCP_PORTS
     
-    start_time = datetime.now()
+    start_time = utc_now()
     result = {
         "ip": ip,
         "is_online": False,
@@ -206,7 +207,7 @@ async def probe_single_ip(ip: str, tcp_ports: List[int] = None, timeout: float =
     if result["is_online"]:
         result["hostname"] = await _probe_hostname(ip, 0.5)
     
-    duration = (datetime.now() - start_time).total_seconds() * 1000
+    duration = (utc_now() - start_time).total_seconds() * 1000
     result["duration_ms"] = int(duration)
     
     return result
@@ -250,7 +251,7 @@ async def scan_prefix(
     online_count = 0
     
     semaphore = asyncio.Semaphore(max_concurrent)
-    start_time = datetime.now()
+    start_time = utc_now()
     
     # 创建扫描任务
     # started: 已开始探测的任务数（信号量 FIFO，按 IP 顺序递增）
@@ -308,7 +309,7 @@ async def scan_prefix(
             yield result_info
     
     # 扫描完成
-    duration = (datetime.now() - start_time).total_seconds()
+    duration = (utc_now() - start_time).total_seconds()
     logger.info(f"Scan completed for {prefix_network}: {online_count}/{total} online, duration: {duration:.1f}s")
     
     yield {

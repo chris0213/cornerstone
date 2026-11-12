@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.report import MonthlyReport
 from src.models.setting import Setting
+from src.utils.timeutil import utc_now
 from src.services.report_generator import (
     collect_report_data,
     generate_report_pdf,
@@ -370,7 +371,7 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
                 result["file_path"],
             )
             notification.status = "sent"
-            notification.sent_at = datetime.now(BEIJING_TZ).replace(tzinfo=None)
+            notification.sent_at = utc_now()
             outcome["email_sent"] = True
         except Exception as e:
             notification.status = "failed"
@@ -395,7 +396,7 @@ async def run_scheduled_report(db: AsyncSession) -> dict:
             target="",
             status="sent" if ch in chat_result["sent"] else "failed",
             error_message=chat_result["failed"].get(ch, None) and chat_result["failed"][ch][:500],
-            sent_at=datetime.now(BEIJING_TZ).replace(tzinfo=None) if ch in chat_result["sent"] else None,
+            sent_at=utc_now() if ch in chat_result["sent"] else None,
         )
         db.add(notification)
     await db.commit()

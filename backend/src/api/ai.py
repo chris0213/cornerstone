@@ -1,6 +1,7 @@
 """
 AI 智能功能 API 路由
 """
+from src.utils.timeutil import to_bjt, utc_now
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -136,7 +137,7 @@ async def ai_search(
     model_used = None
     status = "success"
     error_message = None
-    started = datetime.now()
+    started = utc_now()
     payload = None
     try:
         # Step 0: 操作/故障处置类问题优先命中内部知识库（RAG）
@@ -200,7 +201,7 @@ async def ai_search(
         }
 
     # 持久化聊天日志（即便查询失败也记录问题本身，便于回溯）
-    duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+    duration_ms = int((utc_now() - started).total_seconds() * 1000)
     await _persist_chat_log(
         db=db,
         user=current_user,
@@ -284,7 +285,7 @@ def _build_chat_log_filters(current_user: User, keyword: str, data_type: str, us
         conds.append(AIChatLog.user_id == user_id)
     if keyword:
         kw = f"%{keyword}%"
-        conds.append(or_(AIChatLog.question.like(kw), AIChatLog.answer_text.like(kw)))
+        conds.append(or_(AIChatLog.question.ilike(kw), AIChatLog.answer_text.ilike(kw)))
     if data_type:
         conds.append(AIChatLog.data_type == data_type)
     if days and days > 0:
@@ -419,7 +420,7 @@ async def export_chat_logs(
                 log.status or "",
             ])
 
-    filename = f"ai-chat-logs-{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    filename = f"ai-chat-logs-{utc_now().strftime('%Y%m%d%H%M%S')}.csv"
     return StreamingResponse(
         gen(),
         media_type="text/csv; charset=utf-8",
@@ -828,14 +829,12 @@ async def get_backup_analysis(
 # ── AI 预测辅助函数 ─────────────────────────
 
 def _generate_id(prefix: str) -> str:
-    return f"{prefix}-{datetime.now().timestamp():.0f}-{datetime.now().microsecond}"
+    return f"{prefix}-{utc_now().timestamp():.0f}-{utc_now().microsecond}"
 
 
 def _now_str() -> str:
-    try:
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return datetime.now().isoformat()
+    """展示用时间戳：数据库统一 UTC，对外展示按北京时间。"""
+    return to_bjt(utc_now()).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _extract_usage_pct(usage_str: str | None) -> int:
@@ -881,7 +880,7 @@ async def _gather_system_stats(db: AsyncSession) -> dict:
     ]
 
     # 保修到期设备（30天内）
-    now = datetime.utcnow()
+    now = utc_now()
     thirty_days = now + timedelta(days=30)
     warranty_expiring = await db.scalar(
         select(func.count(Device.id))
@@ -1084,7 +1083,7 @@ async def ai_trend(
     """趋势预测：基于数据分析资源使用趋势"""
     stats = await _gather_system_stats(db)
 
-    now = datetime.utcnow()
+    now = utc_now()
     seven_days_ago = now - timedelta(days=7)
 
     # IP使用趋势 - 按子网统计

@@ -20,6 +20,7 @@ from src.models.setting import Setting
 from src.config import settings
 from src.services.alert_ws import broadcast_new_alert
 from src.utils.logger import get_logger
+from src.utils.timeutil import utc_now
 
 logger = get_logger()
 
@@ -62,7 +63,7 @@ class AlertService:
         
         for rule in rules:
             # 静默中的规则不产生新告警（到期后自动恢复）
-            if rule.muted_until is not None and rule.muted_until > datetime.now():
+            if rule.muted_until is not None and rule.muted_until > utc_now():
                 logger.info(f"[evaluate_rules] device_id={device_id} rule={rule.id} muted until {rule.muted_until}, skip")
                 continue
             mode = (getattr(rule, "detection_mode", None) or "static")
@@ -185,7 +186,7 @@ class AlertService:
                             should_send = True
                             reason = "告警从未发送过通知"
                         elif last_notification.sent_at:
-                            hours_since_last = (datetime.now() - last_notification.sent_at).total_seconds() / 3600
+                            hours_since_last = (utc_now() - last_notification.sent_at).total_seconds() / 3600
                             if hours_since_last >= 24:
                                 # 超过24小时，重新发送
                                 should_send = True
@@ -273,7 +274,7 @@ class AlertService:
                 return
             from src.models import MetricSample
 
-            now = datetime.now()
+            now = utc_now()
             for metric, value in (("latency", latency), ("packet_loss", packet_loss)):
                 if value is None:
                     continue
@@ -298,7 +299,7 @@ class AlertService:
         try:
             from src.models import MetricSample
 
-            cutoff = datetime.now() - timedelta(days=METRIC_RETENTION_DAYS)
+            cutoff = utc_now() - timedelta(days=METRIC_RETENTION_DAYS)
             await db.execute(delete(MetricSample).where(MetricSample.sampled_at < cutoff))
             _LAST_PRUNE_AT = now
         except Exception as e:
@@ -555,7 +556,7 @@ class AlertService:
             try:
                 await AlertService._send_notification(db, channel, alert_record)
                 notification.status = "sent"
-                notification.sent_at = datetime.now()
+                notification.sent_at = utc_now()
                 logger.info(f"[_send_notifications] alert_id={alert_record.id} channel={channel} sent successfully")
             except Exception as e:
                 notification.status = "failed"
@@ -746,7 +747,7 @@ class AlertService:
                 try:
                     await coro
                     notification.status = "sent"
-                    notification.sent_at = datetime.now()
+                    notification.sent_at = utc_now()
                     sent = True
                 except Exception as e:
                     notification.status = "failed"
@@ -769,7 +770,7 @@ class AlertService:
         stmt = update(AlertRecord).where(AlertRecord.id == alert_id).values(
             status="acknowledged",
             acknowledged_by=user_id,
-            acknowledged_at=datetime.now()
+            acknowledged_at=utc_now()
         )
         await db.execute(stmt)
         await db.commit()
@@ -786,7 +787,7 @@ class AlertService:
         
         for alert in alerts:
             alert.status = "resolved"
-            alert.resolved_at = datetime.now()
+            alert.resolved_at = utc_now()
         
         await db.commit()
     
@@ -866,7 +867,7 @@ class AlertService:
         幂等：每条告警两次提醒间隔不小于 CRITICAL_ESCALATION_HOURS。
         返回本次触发升级提醒的告警数。
         """
-        threshold = datetime.now() - timedelta(hours=AlertService.CRITICAL_ESCALATION_HOURS)
+        threshold = utc_now() - timedelta(hours=AlertService.CRITICAL_ESCALATION_HOURS)
         result = await db.execute(
             select(AlertRecord).where(
                 AlertRecord.severity == "critical",
@@ -879,7 +880,7 @@ class AlertService:
         escalated = 0
         for alert in stale_alerts:
             # 已提醒过且距上次提醒不足间隔 → 跳过（幂等）
-            if alert.escalated_at and (datetime.now() - alert.escalated_at).total_seconds() / 3600 \
+            if alert.escalated_at and (utc_now() - alert.escalated_at).total_seconds() / 3600 \
                     < AlertService.CRITICAL_ESCALATION_HOURS:
                 continue
             logger.warning(f"[告警升级] critical 告警 id={alert.id} 已超过 "
@@ -888,7 +889,7 @@ class AlertService:
                 await AlertService._send_notifications(db, alert)
             except Exception as e:
                 logger.warning(f"[告警升级] id={alert.id} 提醒发送失败（不影响主流程）: {e}")
-            alert.escalated_at = datetime.now()
+            alert.escalated_at = utc_now()
             escalated += 1
 
         if escalated:

@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class Role(Base):
     """角色"""
@@ -13,8 +13,8 @@ class Role(Base):
     display_name = Column(String(50), nullable=False)                 # 超级管理员 / IT运维工程师 / 只读查看者
     description = Column(String(255))
     is_builtin = Column(Boolean, default=False)                      # True=内置角色不可删除
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
     
     users = relationship("User", back_populates="role")
     permissions = relationship("RolePermission", back_populates="role")
@@ -60,12 +60,12 @@ class User(Base):
     ldap_username = Column(String(100))                              # LDAP 用户名
     department = Column(String(200))                                  # 部门
     mobile = Column(String(50))                                       # 手机号码
-    last_login_at = Column(DateTime(timezone=True))                  # 最后登录时间
+    last_login_at = Column(UTCDateTime)                  # 最后登录时间
     last_login_ip = Column(String(50))                               # 最后登录IP
     avatar = Column(String(255))                                     # 头像URL（可选）
     locale = Column(String(10), default="zh-CN")                      # 语言偏好 zh-CN / en-US
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
     
     role = relationship("Role", back_populates="users")
 
@@ -78,8 +78,8 @@ class UserSession(Base):
     jti = Column(String(36), unique=True, nullable=False)            # JWT ID，用于失效单个token
     ip_address = Column(String(50))
     user_agent = Column(String(255))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(UTCDateTime, server_default=func.now())
+    expires_at = Column(UTCDateTime)
     is_revoked = Column(Boolean, default=False)                      # True=已强制下线
     
     user = relationship("User")

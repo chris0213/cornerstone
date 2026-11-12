@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, JSON, Text, Index
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from src.database import Base
+from src.database import Base, JSONType, UTCDateTime
 
 
 class AlertRule(Base):
@@ -18,8 +18,8 @@ class AlertRule(Base):
     threshold = Column(Float, nullable=False, comment="阈值")
     severity = Column(String(20), nullable=False, default="warning", comment="告警级别：info/warning/critical")
     enabled = Column(Boolean, default=True, comment="是否启用")
-    notification_channels = Column(JSON, default=list, comment="通知渠道：email/dingtalk/wechat/webhook")
-    muted_until = Column(DateTime, nullable=True, comment="静默截止时间：到期前该规则不产生新告警")
+    notification_channels = Column(JSONType, default=list, comment="通知渠道：email/dingtalk/wechat/webhook")
+    muted_until = Column(UTCDateTime, nullable=True, comment="静默截止时间：到期前该规则不产生新告警")
 
     # 自适应告警（突变检测）——默认 static，与历史行为完全一致
     detection_mode = Column(String(20), nullable=True, comment="检测模式：static（静态阈值）/anomaly（自适应突变检测）")
@@ -27,8 +27,8 @@ class AlertRule(Base):
     baseline_sensitivity = Column(Float, nullable=True, comment="基线敏感度：z-score 阈值（默认 3.0）")
     mutation_threshold = Column(Float, nullable=True, comment="环比突变阈值：相对变化率（默认 0.5，即 50%）")
 
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())
     
     device = relationship("Device", back_populates="alert_rules")
 
@@ -51,14 +51,14 @@ class AlertRecord(Base):
     threshold = Column(Float, comment="阈值")
     status = Column(String(20), nullable=False, default="active", comment="状态：active/acknowledged/resolved")
     acknowledged_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="确认人")
-    acknowledged_at = Column(DateTime, comment="确认时间")
+    acknowledged_at = Column(UTCDateTime, comment="确认时间")
     resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="处理人")
-    resolved_at = Column(DateTime, comment="恢复时间")
+    resolved_at = Column(UTCDateTime, comment="恢复时间")
     resolve_note = Column(Text, nullable=True, comment="处理备注（手动处理必填）")
     object_type = Column(String(20), nullable=True, comment="告警对象类型：device/circuit/prefix/ip/system（消除 device_id 语义过载）")
     ai_analysis = Column(Text, nullable=True, comment="AI根因分析结果")
-    escalated_at = Column(DateTime, nullable=True, comment="严重告警升级提醒时间（长时间未认领时重复提醒）")
-    created_at = Column(DateTime, server_default=func.now())
+    escalated_at = Column(UTCDateTime, nullable=True, comment="严重告警升级提醒时间（长时间未认领时重复提醒）")
+    created_at = Column(UTCDateTime, server_default=func.now())
     
     rule = relationship("AlertRule")
     device = relationship("Device", back_populates="alert_records")
@@ -76,7 +76,7 @@ class AlertNotification(Base):
     target = Column(String(200), comment="通知目标")
     status = Column(String(20), default="pending", comment="状态：pending/sent/failed")
     error_message = Column(String(500), comment="错误信息")
-    sent_at = Column(DateTime, comment="发送时间")
-    created_at = Column(DateTime, server_default=func.now())
+    sent_at = Column(UTCDateTime, comment="发送时间")
+    created_at = Column(UTCDateTime, server_default=func.now())
     
     record = relationship("AlertRecord")

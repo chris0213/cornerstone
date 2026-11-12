@@ -30,9 +30,10 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 def _month_range(now: Optional[datetime] = None) -> tuple[datetime, datetime]:
     """本月时间范围（北京时间的自然月）"""
     bj = now.astimezone(BEIJING_TZ) if now else datetime.now(BEIJING_TZ)
-    start = datetime(bj.year, bj.month, 1)
-    end = (datetime(bj.year + 1, 1, 1) if bj.month == 12
-           else datetime(bj.year, bj.month + 1, 1))
+    # aware BJT 边界，绑定参数时由 UTCDateTime 统一转 UTC
+    start = datetime(bj.year, bj.month, 1, tzinfo=BEIJING_TZ)
+    end = (datetime(bj.year + 1, 1, 1, tzinfo=BEIJING_TZ) if bj.month == 12
+           else datetime(bj.year, bj.month + 1, 1, tzinfo=BEIJING_TZ))
     return start, end
 
 

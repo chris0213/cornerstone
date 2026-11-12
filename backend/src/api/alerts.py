@@ -15,6 +15,7 @@ from src.api.dependencies import get_current_active_user, require_permission
 from src.utils.logger import audit_log
 from src.utils.ip_whitelist import get_client_ip_from_request
 from src.schemas.alert import AlertRuleCreate, AlertRuleUpdate
+from src.utils.timeutil import utc_now
 
 router = APIRouter(tags=["alerts"])
 
@@ -323,7 +324,7 @@ async def resolve_alert(
     stmt = update(AlertRecord).where(AlertRecord.id == record_id).values(
         status="resolved",
         resolved_by=current_user.id,
-        resolved_at=datetime.now(),
+        resolved_at=utc_now(),
         resolve_note=note
     )
     await db.execute(stmt)
@@ -354,7 +355,7 @@ async def batch_acknowledge_alerts(
     if not body.record_ids:
         raise HTTPException(status_code=400, detail="record_ids 不能为空")
 
-    now = datetime.now()
+    now = utc_now()
     stmt = (
         update(AlertRecord)
         .where(AlertRecord.id.in_(body.record_ids), AlertRecord.status == "active")
@@ -397,7 +398,7 @@ async def mute_alert_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="告警规则不存在")
 
-    muted_until = datetime.now() + timedelta(hours=body.hours)
+    muted_until = utc_now() + timedelta(hours=body.hours)
     rule.muted_until = muted_until
     await db.commit()
 

@@ -214,7 +214,7 @@ import {
   type ChangeItem, type ChangeSummary, type ChangeObjectItem,
 } from '@/api/changes'
 import { getUsers } from '@/api/users'
-import { formatDateTime, formatDate } from '@/lib/utils'
+import { formatDateTime, formatDate, formatTimeHMS } from '@/lib/utils'
 import { exportToCSV } from '@/lib/csv'
 
 const { t } = useI18n()
@@ -394,7 +394,7 @@ function toggleExpand(id: string) {
 }
 
 function formatTime(iso: string): string {
-  return formatDateTime(iso).slice(11)
+  return formatTimeHMS(iso)
 }
 
 function typeLabel(type: string): string {

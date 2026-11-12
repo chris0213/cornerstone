@@ -41,9 +41,9 @@ async def read_logs(
             query = query.where(AuditLog.action.in_(DANGEROUS_ACTIONS))
 
     if user:
-        query = query.where(AuditLog.user.like(f"%{user}%"))
+        query = query.where(AuditLog.user.ilike(f"%{user}%"))
     if action:
-        query = query.where(AuditLog.action.like(f"%{action}%"))
+        query = query.where(AuditLog.action.ilike(f"%{action}%"))
     query = query.order_by(AuditLog.created_at.desc())
     result = await db.execute(query.offset(page.skip).limit(page.limit))
     logs = result.scalars().all()

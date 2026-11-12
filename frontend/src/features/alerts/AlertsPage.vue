@@ -22,6 +22,7 @@ import {
 import type { UserResponse } from '../../api/users'
 import { getUsers } from '../../api/users'
 import { getLocale } from '@/i18n'
+import { formatDateTime } from '@/lib/utils'
 import { useI18n } from 'vue-i18n'
 
 const { locale, t } = useI18n()
@@ -92,11 +93,6 @@ function formatRelativeTime(dateText: string): string {
   if (diffMinutes < 60) return t('alerts.minutesAgo', { count: diffMinutes })
   if (diffMinutes < 1440) return t('alerts.hoursAgo', { count: Math.floor(diffMinutes / 60) })
   return t('alerts.daysAgo', { count: Math.floor(diffMinutes / 1440) })
-}
-
-function formatDateTime(dateText?: string): string {
-  if (!dateText) return '-'
-  return new Date(dateText).toLocaleString(getLocale() || 'zh-CN')
 }
 
 // 告警标题：优先规则名，无规则时按类型映射

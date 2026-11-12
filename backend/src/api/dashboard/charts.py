@@ -12,6 +12,7 @@ from src.models.circuit_incident import CircuitIncident
 from src.api.dependencies import get_current_active_user
 from src.models.user import User
 from .common import require_manager_or_admin, to_naive_bjt
+from src.utils.timeutil import BJT, ensure_utc, to_bjt, utc_now
 
 router = APIRouter()
 
@@ -198,11 +199,7 @@ async def get_circuit_cost_trend(
     """
     require_manager_or_admin(current_user)
 
-    now = datetime.now()
-
-    def _naive(dt):
-        """SQLite 存储的时区感知时间转 naive，避免与月初/月末比较时报错"""
-        return dt.replace(tzinfo=None) if getattr(dt, 'tzinfo', None) else dt
+    now = utc_now()
 
     # 一次取全部在册专线（口径与"专线月租费用"卡片一致：active/正常）
     circuits = (await db.execute(
@@ -228,8 +225,8 @@ async def get_circuit_cost_trend(
 
     def cost_in_month(circuit, history, month_start, month_end) -> float:
         """专线在指定月份的生效月租：合同交集 + 变更历史还原"""
-        start = _naive(circuit.contract_start) if circuit.contract_start else None
-        end = _naive(circuit.contract_end) if circuit.contract_end else None
+        start = ensure_utc(circuit.contract_start) if circuit.contract_start else None
+        end = ensure_utc(circuit.contract_end) if circuit.contract_end else None
         if start and start > month_end:
             return 0.0  # 该月尚未开通
         if end and end < month_start:
@@ -239,7 +236,7 @@ async def get_circuit_cost_trend(
         if history:
             applicable = [
                 h for h in history
-                if h.created_at and _naive(h.created_at) <= month_end
+                if h.created_at and ensure_utc(h.created_at) <= month_end
             ]
             try:
                 if applicable:
@@ -274,10 +271,10 @@ async def get_circuit_cost_trend(
     total_costs = []
 
     for year, month in month_points:
-        month_start = datetime(year, month, 1)
+        month_start = datetime(year, month, 1, tzinfo=BJT)
         # 下月1日 - 1秒 作为月末
         next_idx = year * 12 + month
-        month_end = datetime(next_idx // 12, next_idx % 12 + 1, 1) - timedelta(seconds=1)
+        month_end = datetime(next_idx // 12, next_idx % 12 + 1, 1, tzinfo=BJT) - timedelta(seconds=1)
 
         months.append(f"{year:04d}-{month:02d}")
 
@@ -291,7 +288,7 @@ async def get_circuit_cost_trend(
             type_key = (circuit.type or "").strip() or "其他"
             per_type[type_key] += value
 
-            end = _naive(circuit.contract_end) if circuit.contract_end else None
+            end = ensure_utc(circuit.contract_end) if circuit.contract_end else None
             billing_key = "expired_unrenewed" if (end and end < month_start) else "in_contract"
             billing[billing_key] += value
 
@@ -318,7 +315,7 @@ async def get_device_lifecycle_stats(
     """获取设备生命周期统计"""
     require_manager_or_admin(current_user)
     
-    now = datetime.now()
+    now = utc_now()
     three_years_ago = now - timedelta(days=365 * 3)
     five_years_ago = now - timedelta(days=365 * 5)
     
@@ -396,9 +393,10 @@ async def get_monthly_incidents_trend(
     require_manager_or_admin(current_user)
     
     try:
-        now = datetime.now()
-        month_start = datetime(now.year, now.month, 1)
-        next_month = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1)
+        now = utc_now()
+        now_bjt = to_bjt(now)
+        month_start = datetime(now_bjt.year, now_bjt.month, 1, tzinfo=BJT)
+        next_month = datetime(now_bjt.year + (1 if now_bjt.month == 12 else 0), 1 if now_bjt.month == 12 else now_bjt.month + 1, 1, tzinfo=BJT)
         
         # 本月故障总数
         total_result = await db.execute(
@@ -411,7 +409,7 @@ async def get_monthly_incidents_trend(
         total_incidents = total_result.scalar() or 0
         
         # 上月故障总数
-        last_month_start = datetime(now.year, now.month - 1 if now.month > 1 else 1, 1)
+        last_month_start = (month_start - timedelta(days=1)).replace(day=1)
         last_month_result = await db.execute(
             select(func.count(CircuitIncident.id))
             .where(and_(
@@ -489,7 +487,7 @@ async def get_monthly_incidents_trend(
                     "title": row.title or "",
                     "circuit_name": row.circuit_name or "",
                     "severity": row.severity or "low",
-                    "started_at": to_naive_bjt(row.started_at).strftime("%Y-%m-%d %H:%M:%S") if row.started_at else "",
+                    "started_at": row.started_at.isoformat() if row.started_at else "",
                     "duration_hours": float(row.duration_minutes or 0) / 60,
                     "status": row.status or "open"
                 })

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { getTimelineEvents, type TimelineEvent } from '@/api/timeline'
+import { formatTimeHM, formatMonthDay, parseServerDate } from '@/lib/utils'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -67,13 +68,13 @@ function handlePageChange(page: number) {
 
 function formatTime(dateString: string | null): string {
   if (!dateString) return '-'
-  const date = new Date(dateString)
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return formatTimeHM(dateString)
 }
 
 function formatDate(dateString: string | null): string {
   if (!dateString) return '-'
-  const date = new Date(dateString)
+  const date = parseServerDate(dateString)
+  if (!date) return '-'
   const today = new Date()
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
@@ -83,7 +84,7 @@ function formatDate(dateString: string | null): string {
   } else if (date.toDateString() === yesterday.toDateString()) {
     return '昨天'
   }
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return formatMonthDay(dateString)
 }
 
 function toggleType(type: string) {

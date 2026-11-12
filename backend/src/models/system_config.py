@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from sqlalchemy.sql import func
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class SystemConfig(Base):
     """系统配置"""
@@ -10,5 +10,5 @@ class SystemConfig(Base):
     key = Column(String(100), unique=True, nullable=False)  # 配置键
     value = Column(Text)  # 配置值（JSON格式）
     description = Column(String(255))  # 配置说明
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(UTCDateTime, server_default=func.now())
+    updated_at = Column(UTCDateTime, onupdate=func.now())

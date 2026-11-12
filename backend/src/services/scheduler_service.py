@@ -1,3 +1,4 @@
+from src.utils.timeutil import utc_now
 import logging
 import asyncio
 from datetime import datetime
@@ -25,14 +26,14 @@ def get_scheduler() -> AsyncIOScheduler:
 
 async def scheduled_monitoring_task():
     """定时执行的监控任务"""
-    logger.info(f"[{datetime.now()}] Running scheduled monitoring task...")
+    logger.info(f"[{utc_now()}] Running scheduled monitoring task...")
     async with async_session() as db:
         await run_monitoring_task(db)
 
 
 async def scheduled_circuit_expire_task():
     """定时执行的专线到期检查任务（每天凌晨1点执行）"""
-    logger.info(f"[{datetime.now()}] Running scheduled circuit expire check...")
+    logger.info(f"[{utc_now()}] Running scheduled circuit expire check...")
     async with async_session() as db:
         await circuit_expire_service.check_expiring_circuits(db, days_before=30)
         await db.commit()
@@ -45,9 +46,9 @@ async def scheduled_alert_escalation_task():
         try:
             escalated = await AlertService.escalate_stale_critical_alerts(db)
             if escalated:
-                logger.info(f"[{datetime.now()}] Escalated {escalated} stale critical alerts")
+                logger.info(f"[{utc_now()}] Escalated {escalated} stale critical alerts")
         except Exception as e:
-            logger.warning(f"[{datetime.now()}] Alert escalation error: {e}")
+            logger.warning(f"[{utc_now()}] Alert escalation error: {e}")
 
 
 async def scheduled_monthly_report_task():
@@ -57,9 +58,9 @@ async def scheduled_monthly_report_task():
         try:
             result = await run_scheduled_report(db)
             if result.get("action") not in ("disabled", "not_due"):
-                logger.info(f"[{datetime.now()}] Monthly report schedule: {result}")
+                logger.info(f"[{utc_now()}] Monthly report schedule: {result}")
         except Exception as e:
-            logger.warning(f"[{datetime.now()}] Monthly report schedule error: {e}")
+            logger.warning(f"[{utc_now()}] Monthly report schedule error: {e}")
 
 
 def start_scheduler(interval_minutes: int = 5):

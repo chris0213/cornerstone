@@ -1,8 +1,8 @@
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+from src.utils.timeutil import utc_now
 
-BJT = timezone(timedelta(hours=8))  # 北京时间
 from typing import Dict, List
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -25,8 +25,9 @@ async def cleanup_expired_backups():
     from ..models import Backup
     from ..database import async_session
 
-    # SQLite 存储为无时区字符串，去掉 tzinfo 以保证比较一致
-    cutoff = datetime.now(BJT).replace(tzinfo=None) - timedelta(days=AUTO_BACKUP_RETENTION_DAYS)
+    # 全库统一 UTC：created_at 为 timestamptz（SQLite 下由 UTCDateTime 归一为 UTC 挂钟），
+    # 统一用 UTC 比较，避免此前 naive 北京时间导致的提前 8 小时清理
+    cutoff = utc_now() - timedelta(days=AUTO_BACKUP_RETENTION_DAYS)
 
     async with async_session() as db:
         try:
@@ -103,7 +104,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
             credential = await db_session.get(Credential, task.credential_id)
             if not credential:
                 logger.error(f"备份任务 {task_id} 凭证不存在")
-                task.last_run_at = datetime.now(BJT)
+                task.last_run_at = utc_now()
                 task.last_run_status = "failed"
                 await db_session.commit()
                 await _notify_failure(db_session, "凭证不存在")
@@ -168,7 +169,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
             # 如果没有设备，更新任务状态
             if not devices_with_ip:
                 logger.warning(f"备份任务 {task_id} 没有找到可备份的设备")
-                task.last_run_at = datetime.now(BJT)
+                task.last_run_at = utc_now()
                 task.last_run_status = "failed"
                 await db_session.commit()
                 await _notify_failure(db_session, "没有找到可备份的设备")
@@ -285,7 +286,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
             # 更新任务状态（需要重新关联 session，因为 commit 后对象可能已脱离跟踪）
             task = await db_session.get(BackupTask, task_id)
             if task:
-                task.last_run_at = datetime.now(BJT)
+                task.last_run_at = utc_now()
                 if failed_count == 0:
                     task.last_run_status = "success"
                 elif success_count == 0:

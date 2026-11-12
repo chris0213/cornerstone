@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from ..database import Base
+from ..database import Base, UTCDateTime
 
 class DeviceLink(Base):
     __tablename__ = "device_links"
@@ -14,8 +14,8 @@ class DeviceLink(Base):
     target_interface = Column(String(100))
     link_type = Column(String(20), nullable=False, default="manual")
     confidence = Column(Integer, default=100)
-    discovered_at = Column(DateTime)
-    verified_at = Column(DateTime)
+    discovered_at = Column(UTCDateTime)
+    verified_at = Column(UTCDateTime)
     note = Column(Text)
     
     source_circuit_id = Column(Integer, ForeignKey("circuits.id"), nullable=True)

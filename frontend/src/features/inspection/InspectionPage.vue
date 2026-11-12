@@ -1,6 +1,7 @@
 <script setup lang="ts">import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElIcon } from 'element-plus';
 import { confirmAndRun } from '@/lib/confirm';
+import { formatDateTime, parseServerDate } from '@/lib/utils';
 import { Warning, Clock, Cpu, TrendCharts, Promotion } from '@element-plus/icons-vue';
 import { getTasks, getRecords, getFingerprints, getAlertCount, createTask, updateTask, deleteTask, executeTask, toggleTask, getInspectionCategories, getDevicesByCategory, type InspectionTask, type InspectionTaskCreate, type InspectionRecord, type DeviceFingerprint, type AlertCount, type ExecuteResponse, type InspectionCategory, type InspectionDeviceResult } from '@/api/inspection';
 import { getSites, type SiteResponse } from '@/api/sites';
@@ -102,22 +103,11 @@ function formatTime(dateString: string) {
  if (!dateString || dateString === 'None' || dateString === 'null') {
  return '-';
  }
- let date: Date;
- if (dateString.includes('T') && !dateString.includes('Z') && !dateString.includes('+')) {
- date = new Date(dateString.replace('T', ' '));
- } else {
- date = new Date(dateString);
- }
- if (date.getTime() < 86400000) {
+ const date = parseServerDate(dateString);
+ if (!date || date.getTime() < 86400000) {
  return '-';
  }
- return date.toLocaleString(locale.value || 'zh-CN', {
- year: 'numeric',
- month: '2-digit',
- day: '2-digit',
- hour: '2-digit',
- minute: '2-digit'
- });
+ return formatDateTime(dateString, { seconds: false });
 }
 // 格式化时长
 function formatDuration(seconds: number) {
