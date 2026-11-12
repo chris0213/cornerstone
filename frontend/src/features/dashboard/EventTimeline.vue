@@ -19,21 +19,21 @@ const PAGE_SIZE = 6
 const currentPage = ref(1)
 
 const eventTypeOptions = [
-  { value: 'device_offline', label: t('dashboard.evOffline'), color: '#F56C6C' },
-  { value: 'device_online', label: t('dashboard.evOnline'), color: '#67C23A' },
-  { value: 'config_change', label: t('dashboard.evConfigChange'), color: '#E6A23C' },
-  { value: 'backup_success', label: t('dashboard.evBackupSuccess'), color: '#409EFF' },
-  { value: 'backup_fail', label: t('dashboard.evBackupFail'), color: '#F56C6C' },
-  { value: 'system', label: t('dashboard.evSystem'), color: '#909399' }
+  { value: 'device_offline', label: t('dashboard.evOffline'), color: 'var(--color-danger)' },
+  { value: 'device_online', label: t('dashboard.evOnline'), color: 'var(--color-success)' },
+  { value: 'config_change', label: t('dashboard.evConfigChange'), color: 'var(--color-warning)' },
+  { value: 'backup_success', label: t('dashboard.evBackupSuccess'), color: 'var(--color-accent)' },
+  { value: 'backup_fail', label: t('dashboard.evBackupFail'), color: 'var(--color-danger)' },
+  { value: 'system', label: t('dashboard.evSystem'), color: 'var(--color-info)' }
 ]
 
 const eventTypeColors: Record<string, string> = {
-  device_offline: '#F56C6C',
-  device_online: '#67C23A',
-  config_change: '#E6A23C',
-  backup_success: '#409EFF',
-  backup_fail: '#F56C6C',
-  system: '#909399'
+  device_offline: 'var(--color-danger)',
+  device_online: 'var(--color-success)',
+  config_change: 'var(--color-warning)',
+  backup_success: 'var(--color-accent)',
+  backup_fail: 'var(--color-danger)',
+  system: 'var(--color-info)'
 }
 
 const timeRangeOptions = [
@@ -312,7 +312,7 @@ onMounted(() => {
   background: var(--bg-secondary);
   border-radius: 6px;
   font-size: 13px;
-  color: #595959;
+  color: var(--color-text-2);
 }
 
 .time-range-bar .el-icon {
@@ -397,7 +397,7 @@ onMounted(() => {
 .source-tag {
   font-size: 12px;
   color: var(--accent-primary);
-  background: #e6f7ff;
+  background: var(--color-accent-soft);
   padding: 2px 8px;
   border-radius: 4px;
 }

@@ -278,7 +278,7 @@ function initLifecycleChart() {
     if (unsetCount > 0) {
       const noteEl = document.createElement('div')
       noteEl.id = 'lifecycle-unset-note'
-      noteEl.style.color = '#909399'
+      noteEl.style.color = 'var(--color-text-3)'
       noteEl.style.fontSize = '12px'
       noteEl.style.marginTop = '8px'
       noteEl.innerText = t('manager.uncountedNote', { n: unsetCount })
@@ -432,11 +432,11 @@ function getSeverityRisks(severity: string): RiskItem[] {
 }
 
 function getAgeColor(range: string): string {
-  if (!range) return '#909399'
-  if (range.includes('未设置')) return '#909399' // 数据缺失灰色
-  if (range.includes('5年以上') || range.includes('> 5年')) return '#E24B4A' // 高风险
-  if (range.includes('3-5')) return '#EF9F27' // 需关注
-  return '#1D9E75' // 正常
+  if (!range) return '#8a94a3'
+  if (range.includes('未设置')) return '#8a94a3' // 数据缺失灰色
+  if (range.includes('5年以上') || range.includes('> 5年')) return '#b42318' // 高风险
+  if (range.includes('3-5')) return '#b45309' // 需关注
+  return '#1f8a5b' // 正常
 }
 
 function getOldDevicesWarning(): string | null {
@@ -457,12 +457,12 @@ function getExpiringDisplayCount(): number {
 function getExpiringIconStyle(): Record<string, string> {
   const stats = managerStats.value?.expiring_soon
   if (!stats || stats.total_count === 0) {
-    return { background: '#f6ffed', color: 'var(--accent-success)' }
+    return { background: 'var(--color-success-soft)', color: 'var(--accent-success)' }
   }
   if (stats.urgent_count > 0) {
-    return { background: '#fff2f0', color: 'var(--accent-danger)' }
+    return { background: 'var(--color-danger-soft)', color: 'var(--accent-danger)' }
   }
-  return { background: '#fff7e6', color: 'var(--accent-warning)' }
+  return { background: 'var(--color-warning-soft)', color: 'var(--accent-warning)' }
 }
 
 function getExpiringTrendColor(): string {
@@ -497,7 +497,7 @@ onMounted(() => {
     <div class="overview-cards">
       <!-- 本月网络可用性 -->
       <div class="overview-card" @click="navigateTo('/circuits')">
-        <div class="card-icon" style="background: #e6f7ff; color: var(--accent-primary)">
+        <div class="card-icon" style="background: var(--color-accent-soft); color: var(--accent-primary)">
           <el-icon><TrendCharts /></el-icon>
         </div>
         <div class="card-content">
@@ -513,7 +513,7 @@ onMounted(() => {
 
       <!-- 专线月租费用（合同内为主值，已到期未续约为副行） -->
       <div class="overview-card" @click="navigateTo('/circuits')">
-        <div class="card-icon" style="background: #f6ffed; color: var(--accent-success)">
+        <div class="card-icon" style="background: var(--color-success-soft); color: var(--accent-success)">
           <el-icon><Money /></el-icon>
         </div>
         <div class="card-content">
@@ -527,7 +527,7 @@ onMounted(() => {
 
       <!-- 未解决故障 -->
       <div class="overview-card" :class="{ 'has-alert': (managerStats?.open_incidents.count || 0) > 0 }" @click="navigateTo('/alerts?tab=circuit')">
-        <div class="card-icon" :style="{ background: (managerStats?.open_incidents.count || 0) > 0 ? '#fff2f0' : '#f6ffed', color: (managerStats?.open_incidents.count || 0) > 0 ? 'var(--accent-danger)' : 'var(--accent-success)' }">
+        <div class="card-icon" :style="{ background: (managerStats?.open_incidents.count || 0) > 0 ? 'var(--color-danger-soft)' : 'var(--color-success-soft)', color: (managerStats?.open_incidents.count || 0) > 0 ? 'var(--accent-danger)' : 'var(--accent-success)' }">
           <el-icon><Warning /></el-icon>
         </div>
         <div class="card-content">
@@ -1179,12 +1179,12 @@ onMounted(() => {
 }
 
 .expiring-section-title.urgent {
-  background: #fff2f0;
+  background: var(--color-danger-soft);
   color: var(--accent-danger);
 }
 
 .expiring-section-title.warning {
-  background: #fff7e6;
+  background: var(--color-warning-soft);
   color: var(--accent-warning);
 }
 
@@ -1202,12 +1202,12 @@ onMounted(() => {
 }
 
 .urgent-item {
-  background: #fff2f0;
+  background: var(--color-danger-soft);
   border-left: 3px solid var(--accent-danger);
 }
 
 .warning-item {
-  background: #fffbe6;
+  background: var(--color-warning-soft);
   border-left: 3px solid var(--accent-warning);
 }
 
@@ -1239,7 +1239,7 @@ onMounted(() => {
 
 .expiring-item-date {
   font-size: 13px;
-  color: #595959;
+  color: var(--color-text-2);
 }
 
 .expiring-item-days {
@@ -1279,7 +1279,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  background: #fff2f0;
+  background: var(--color-danger-soft);
   border-radius: 6px;
   color: var(--accent-danger);
   font-size: 13px;
@@ -1309,7 +1309,7 @@ onMounted(() => {
 
 .report-item .el-icon {
   font-size: 20px;
-  color: #409EFF;
+  color: var(--color-accent);
 }
 
 .report-name {

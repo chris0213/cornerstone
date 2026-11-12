@@ -117,6 +117,12 @@ async function handleLogin() {
   }
 }
 
+function handleSubmit() {
+  setAnimationMode('login-click')
+  if (loginMode.value === 'local') handleLogin()
+  else handleLDAPLogin()
+}
+
 async function handleSSOLogin() {
   ssoLoading.value = true
   try {
@@ -259,7 +265,7 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div class="login-form">
+      <form class="login-form" @submit.prevent="handleSubmit">
         <Transition name="fade-slide">
           <div v-if="error" class="error-message">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -318,7 +324,6 @@ onMounted(async () => {
               @keydown="checkCapsLock"
               @keyup="checkCapsLock"
               @input="triggerNodePulse()"
-              @keyup.enter="handleLogin"
             />
             <span
               class="input-suffix password-toggle"
@@ -363,7 +368,6 @@ onMounted(async () => {
                 @focus="setAnimationMode('captcha')"
                 @blur="setAnimationMode('default')"
                 @input="triggerNodePulse()"
-                @keyup.enter="handleLogin"
               />
               <span class="input-focus-ring"></span>
             </div>
@@ -400,11 +404,10 @@ onMounted(async () => {
         </div>
 
         <button
-          type="button"
+          type="submit"
           class="login-btn"
           :class="{ 'btn-loading': loading }"
           :disabled="loading"
-          @click="setAnimationMode('login-click'); loginMode === 'local' ? handleLogin() : handleLDAPLogin()"
         >
           <span v-if="loading" class="btn-loader">
             <svg class="loading-spinner" viewBox="0 0 24 24">
@@ -412,16 +415,9 @@ onMounted(async () => {
             </svg>
           </span>
           <span v-else>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 16l-4-4m0 0L7 10m4 6l4-4m-4 6l4-4" />
-            </svg>
             {{ loginMode === 'local' ? t('login.loginButton') : t('login.ldapLoginButton') }}
           </span>
         </button>
-
-        <div class="forgot-password">
-          <span>{{ t('login.forgotPasswordHint') }}</span>
-        </div>
 
         <template v-if="hasSSO">
           <div class="login-divider">
@@ -443,7 +439,7 @@ onMounted(async () => {
             <span>{{ ssoLoading ? t('common.loading') : t('login.ssoLogin') }}</span>
           </button>
         </template>
-      </div>
+      </form>
     </div>
   </div>
 </template>
@@ -451,99 +447,79 @@ onMounted(async () => {
 <style scoped>
 /* 登录页强调色走主题变量（Element Plus），硬编码值仅作回退 */
 .login-form-container {
-  --lp-primary: var(--el-color-primary, #3b82f6);
-  --lp-primary-2: var(--el-color-primary-dark-2, #6366f1);
-  --lp-danger: var(--el-color-danger, #dc2626);
-  --lp-danger-bg: var(--el-color-danger-light-9, #fef2f2);
-  --lp-danger-border: var(--el-color-danger-light-7, #fecaca);
-  --lp-warn: var(--el-color-warning, #d97706);
-  width: 520px;
+  --lp-primary: var(--color-accent);
+  --lp-primary-2: var(--color-accent-hover);
+  /* 品牌蓝紫渐变终点（锁图标 / 登录按钮共用） */
+  --lp-grad-end: #8b5cf6;
+  --lp-danger: var(--color-danger);
+  --lp-danger-bg: var(--color-danger-soft);
+  --lp-danger-border: var(--color-danger);
+  --lp-warn: var(--color-warning);
+  /* 卡片固定 420px 宽（content-box），右侧留 64px 呼吸边距，左侧 48px 接插画 */
+  width: 420px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 50px 20px;
-  padding-left: 20px;
-  background: rgba(255, 255, 255, 0.015);
-  backdrop-filter: blur(20px);
+  /* 上下留白随视口高度收缩，避让语言切换器 */
+  padding: clamp(20px, 5vh, 56px) 64px clamp(16px, 4vh, 48px) 48px;
+  background: transparent;
 }
 
 .login-box {
   width: 100%;
-  background: rgba(255, 255, 255, 0.98);
-  border-radius: 20px;
-  padding: 48px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  animation: loginBoxSlideIn 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.3s both;
-}
-
-@keyframes loginBoxSlideIn {
-  from {
-    opacity: 0;
-    transform: translateX(40px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  box-sizing: border-box;
+  background: var(--color-surface-0);
+  border: 1px solid var(--color-line-1);
+  border-radius: 16px;
+  padding: clamp(26px, 3.8vh, 40px) clamp(24px, 2.4vw, 34px);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.45);
 }
 
 .login-header {
   text-align: center;
-  margin-bottom: 42px;
+  margin-bottom: clamp(16px, 2.6vh, 34px);
 }
 
 .header-icon {
-  width: 58px;
-  height: 58px;
-  margin: 0 auto 20px;
+  width: clamp(36px, 4.8vh, 44px);
+  height: clamp(36px, 4.8vh, 44px);
+  margin: 0 auto clamp(8px, 1.4vh, 16px);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
-  border-radius: 18px;
-  color: white;
-  font-size: 26px;
-  box-shadow: 0 10px 28px rgba(59, 130, 246, 0.35);
-  animation: headerIconPulse 3.5s ease-in-out infinite;
-}
-
-@keyframes headerIconPulse {
-  0%,
-  100% {
-    transform: scale(1);
-    box-shadow: 0 10px 28px rgba(59, 130, 246, 0.35);
-  }
-  50% {
-    transform: scale(1.04);
-    box-shadow: 0 14px 36px rgba(59, 130, 246, 0.45);
-  }
+  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-grad-end) 100%);
+  border: none;
+  border-radius: 12px;
+  color: #fff;
+  box-shadow: 0 10px 24px -10px color-mix(in srgb, var(--lp-primary) 65%, transparent);
 }
 
 .header-icon svg {
-  width: 28px;
-  height: 28px;
+  width: clamp(18px, 2.4vh, 22px);
+  height: clamp(18px, 2.4vh, 22px);
 }
 
 .login-header h2 {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 10px;
-  letter-spacing: 0.5px;
+  font-size: clamp(22px, 2.9vh, 26px);
+  font-weight: 500;
+  color: var(--color-text-1);
+  margin-bottom: clamp(4px, 0.8vh, 8px);
+  letter-spacing: 0;
 }
 
 .login-header p {
   font-size: 13px;
-  color: #64748b;
+  color: var(--color-text-2);
 }
 
 .login-tabs {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 28px;
-  padding: 6px;
-  background: #f8fafc;
-  border-radius: 12px;
+  padding: 4px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-line-1);
+  border-radius: 10px;
 }
 
 .tab-btn {
@@ -552,27 +528,26 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 12px 16px;
-  border: none;
-  border-radius: 8px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
-  color: #64748b;
+  color: var(--color-text-2);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-base) var(--motion-ease),
+    color var(--motion-base) var(--motion-ease);
 }
 
 .tab-btn:hover {
-  background: #f1f5f9;
-  color: #334155;
+  color: var(--color-text-1);
 }
 
 .tab-btn.active {
-  background: white;
+  background: var(--color-surface-0);
+  border-color: var(--color-line-1);
   color: var(--lp-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transform: translateY(-1px);
 }
 
 .tab-btn svg {
@@ -583,7 +558,7 @@ onMounted(async () => {
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: clamp(10px, 1.6vh, 20px);
 }
 
 .error-message {
@@ -619,16 +594,10 @@ onMounted(async () => {
   height: 14px;
 }
 
-/* 忘记密码提示 */
-.forgot-password {
-  text-align: center;
-  font-size: 12px;
-  color: #94a3b8;
-}
-
 .fade-slide-enter-active,
 .fade-slide-leave-active {
-  transition: all 0.3s ease;
+  transition: opacity var(--motion-base) var(--motion-ease),
+    transform var(--motion-base) var(--motion-ease);
 }
 
 .fade-slide-enter-from,
@@ -640,7 +609,7 @@ onMounted(async () => {
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: clamp(5px, 0.9vh, 9px);
 }
 
 .form-label {
@@ -650,14 +619,14 @@ onMounted(async () => {
 }
 
 .label-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: #334155;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-2);
 }
 
 .label-required {
-  color: #ef4444;
-  font-weight: 700;
+  color: var(--color-danger);
+  font-weight: 500;
 }
 
 .input-wrapper {
@@ -669,53 +638,44 @@ onMounted(async () => {
 .input-icon {
   position: absolute;
   left: 16px;
-  width: 20px;
-  height: 20px;
-  color: #94a3b8;
+  width: 18px;
+  height: 18px;
+  color: var(--color-text-3);
   pointer-events: none;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color var(--motion-base) var(--motion-ease);
 }
 
 .input-focus-ring {
-  position: absolute;
-  inset: -2px;
-  border-radius: 12px;
-  border: 2px solid transparent;
-  pointer-events: none;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.form-input:focus + .input-focus-ring {
-  border-color: var(--lp-primary);
-  box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.08);
+  display: none;
 }
 
 .form-input {
   width: 100%;
-  height: 48px;
-  padding: 0 16px 0 50px;
-  border: 2px solid #e2e8f0;
-  border-radius: 12px;
+  height: clamp(42px, 5.6vh, 48px);
+  padding: 0 16px 0 48px;
+  border: 1px solid var(--color-line-1);
+  border-radius: 10px;
   font-size: 14px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background: #fafbfc;
-  color: #1e293b;
+  background: var(--color-surface-0);
+  color: var(--color-text-1);
+  transition: border-color var(--motion-base) var(--motion-ease),
+    background-color var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-base) var(--motion-ease);
 }
 
 .form-input:focus {
   outline: none;
   border-color: var(--lp-primary);
-  background: white;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08), 0 3px 12px rgba(0, 0, 0, 0.05);
+  background: var(--color-surface-0);
+  box-shadow: 0 0 0 3px var(--color-accent-ring);
 }
 
 .form-input:focus ~ .input-icon {
   color: var(--lp-primary);
-  transform: scale(1.08);
 }
 
 .form-input::placeholder {
-  color: #94a3b8;
+  color: var(--color-text-3);
 }
 
 .input-suffix {
@@ -723,9 +683,9 @@ onMounted(async () => {
   right: 16px;
   width: 22px;
   height: 22px;
-  color: #94a3b8;
+  color: var(--color-text-3);
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color var(--motion-fast) var(--motion-ease);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -733,7 +693,6 @@ onMounted(async () => {
 
 .input-suffix:hover {
   color: var(--lp-primary);
-  transform: scale(1.12);
 }
 
 .password-toggle svg {
@@ -752,31 +711,30 @@ onMounted(async () => {
 
 .captcha-image-wrapper {
   cursor: pointer;
-  border-radius: 12px;
+  border: 1px solid var(--color-line-1);
+  border-radius: 10px;
   overflow: hidden;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
+  transition: border-color var(--motion-fast) var(--motion-ease);
 }
 
 .captcha-image-wrapper:hover {
-  transform: scale(1.02);
-  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.12);
+  border-color: var(--color-line-2);
 }
 
 .captcha-image {
   width: 130px;
-  height: 48px;
+  height: clamp(42px, 5.6vh, 48px);
   object-fit: cover;
 }
 
 .captcha-loading {
   width: 130px;
-  height: 48px;
+  height: clamp(42px, 5.6vh, 48px);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #fafbfc;
-  border-radius: 12px;
+  background: var(--color-surface-2);
+  border-radius: 10px;
 }
 
 .loading-spinner {
@@ -807,12 +765,12 @@ onMounted(async () => {
   gap: 10px;
   cursor: pointer;
   font-size: 13px;
-  color: #64748b;
-  transition: color 0.2s;
+  color: var(--color-text-2);
+  transition: color var(--motion-fast) var(--motion-ease);
 }
 
 .checkbox-label:hover {
-  color: #334155;
+  color: var(--color-text-1);
 }
 
 .checkbox {
@@ -820,22 +778,21 @@ onMounted(async () => {
 }
 
 .checkbox-custom {
-  width: 20px;
-  height: 20px;
-  border: 2px solid #cbd5e1;
-  border-radius: 7px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--color-line-2);
+  border-radius: 5px;
   position: relative;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .checkbox:checked + .checkbox-custom {
-  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
+  background: var(--lp-primary);
   border-color: var(--lp-primary);
-  transform: scale(1.05);
-  box-shadow: 0 5px 16px rgba(59, 130, 246, 0.35);
 }
 
 .checkbox-custom svg {
@@ -854,35 +811,36 @@ onMounted(async () => {
 }
 
 .login-btn {
-  height: 52px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-2) 100%);
-  color: white;
+  height: clamp(42px, 5.6vh, 48px);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-grad-end) 100%);
+  color: #fff;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: filter var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  box-shadow: 0 5px 18px rgba(59, 130, 246, 0.35);
+  gap: 8px;
+  box-shadow: 0 10px 22px -12px color-mix(in srgb, var(--lp-primary) 70%, transparent);
 }
 
 .login-btn:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 28px rgba(59, 130, 246, 0.45);
+  filter: brightness(1.07);
+  box-shadow: 0 12px 26px -12px color-mix(in srgb, var(--lp-primary) 80%, transparent);
 }
 
-.login-btn:active:not(:disabled) {
-  transform: translateY(-1px);
+.login-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-accent-ring);
 }
 
 .login-btn:disabled {
-  opacity: 0.65;
+  opacity: 0.6;
   cursor: not-allowed;
-  transform: none;
 }
 
 .login-btn svg {
@@ -905,46 +863,42 @@ onMounted(async () => {
 .divider-line {
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, transparent, #e2e8f0, transparent);
+  background: var(--color-line-1);
 }
 
 .divider-text {
   font-size: 12px;
-  color: #94a3b8;
-  font-weight: 500;
+  color: var(--color-text-3);
+  font-weight: 400;
 }
 
 .sso-login-btn {
-  height: 52px;
-  border: 2px solid #e2e8f0;
-  border-radius: 12px;
-  background: white;
-  color: #475569;
+  height: 48px;
+  border: 1px solid var(--color-line-1);
+  border-radius: 10px;
+  background: var(--color-surface-0);
+  color: var(--color-text-2);
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sso-login-btn:hover:not(:disabled) {
   border-color: var(--lp-primary);
   color: var(--lp-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.15);
-}
-
-.sso-login-btn:active:not(:disabled) {
-  transform: translateY(-1px);
+  background: var(--color-accent-soft);
 }
 
 .sso-login-btn:disabled {
-  opacity: 0.65;
+  opacity: 0.6;
   cursor: not-allowed;
-  transform: none;
 }
 
 .sso-icon {
@@ -956,6 +910,12 @@ onMounted(async () => {
   .login-form-container {
     width: 100%;
     justify-content: center;
+    padding: 32px 20px;
+  }
+
+  .login-box {
+    max-width: 420px;
+    margin: 0 auto;
   }
 }
 

@@ -349,7 +349,7 @@ const submitPlacement = async () => {
         h('button', {
           style: {
             padding: '4px 12px', fontSize: '12px', lineHeight: '1', height: '24px',
-            border: '1px solid #e6a23c', color: '#e6a23c', background: '#fdf6ec',
+            border: '1px solid var(--color-warning)', color: 'var(--color-warning)', background: 'var(--color-warning-soft)',
             borderRadius: '4px', cursor: 'pointer',
           },
           onClick: () => undoPlacement(),
@@ -872,7 +872,7 @@ onBeforeUnmount(() => {
       </template>
       <template #footer>
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-size: 12px; color: #909399;">{{ selectedRack?.name }} · U{{ detailDevice?.uPosition }}</span>
+          <span style="font-size: 12px; color: var(--color-text-3);">{{ selectedRack?.name }} · U{{ detailDevice?.uPosition }}</span>
           <div>
             <el-button v-if="detailDevice" type="primary" plain @click="goDevicePage(detailDevice.id)">
               {{ t('rack.viewDevice') }}
@@ -898,7 +898,7 @@ onBeforeUnmount(() => {
 .rack-view {
   width: 100%;
   padding: 20px 24px;
-  background: var(--bg-page, #f5f7fa);
+  background: var(--bg-page, var(--color-surface-1));
   min-height: 100%;
   box-sizing: border-box;
 }
@@ -911,8 +911,8 @@ onBeforeUnmount(() => {
   margin-bottom: 18px;
 }
 .rack-page-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex-shrink: 0; }
-.rack-title-text { margin: 0; font-size: 22px; font-weight: 600; color: var(--text-primary, #1f2937); white-space: nowrap; }
-.rack-subtitle { color: var(--text-secondary, #6b7280); font-size: 13px; }
+.rack-title-text { margin: 0; font-size: 22px; font-weight: 600; color: var(--text-primary, var(--color-text-1)); white-space: nowrap; }
+.rack-subtitle { color: var(--text-secondary, var(--color-text-3)); font-size: 13px; }
 .rack-page-actions { display: flex; gap: 8px; }
 
 .rack-layout {
@@ -942,7 +942,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 .rack-name { margin: 0; font-size: 16px; font-weight: 600; }
-.rack-meta { color: var(--text-secondary, #6b7280); font-size: 13px; }
+.rack-meta { color: var(--text-secondary, var(--color-text-3)); font-size: 13px; }
 
 .rack-face-wrapper {
   display: flex;
@@ -1037,12 +1037,12 @@ onBeforeUnmount(() => {
 .rack-right-col { display: flex; flex-direction: column; gap: 16px; }
 .rack-empty-state { padding: 40px 0; }
 
-.more-delete-item { color: var(--el-color-danger, #f56c6c); }
+.more-delete-item { color: var(--el-color-danger, var(--color-danger)); }
 
 .delete-question {
   margin: 0 0 12px;
   font-size: 14px;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary, var(--color-text-1));
   line-height: 1.6;
 }
 .delete-note { width: 100%; }

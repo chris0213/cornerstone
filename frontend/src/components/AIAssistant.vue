@@ -229,13 +229,13 @@ defineExpose({ open })
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: var(--accent-primary, #3b82f6);
+  background: var(--accent-primary, var(--color-accent));
   color: #fff;
   font-size: 24px;
 }
 .ai-welcome-text {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   line-height: 1.6;
   margin: 0 0 16px;
 }
@@ -246,19 +246,19 @@ defineExpose({ open })
 }
 .ai-example-chip {
   padding: 8px 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
   border-radius: 8px;
-  background: #fafafa;
-  color: #595959;
+  background: var(--color-surface-1);
+  color: var(--color-text-2);
   font-size: 13px;
   cursor: pointer;
   text-align: left;
   transition: all 0.15s;
 }
 .ai-example-chip:hover {
-  border-color: var(--accent-primary, #3b82f6);
-  color: var(--accent-primary, #3b82f6);
-  background: var(--bg-tertiary, #f3f4f6);
+  border-color: var(--accent-primary, var(--color-accent));
+  color: var(--accent-primary, var(--color-accent));
+  background: var(--bg-tertiary, var(--color-surface-1));
 }
 .ai-messages {
   flex: 1;
@@ -275,7 +275,7 @@ defineExpose({ open })
 }
 .ai-msg--user {
   align-self: flex-end;
-  background: #1890ff;
+  background: var(--color-accent);
   color: #fff;
 }
 .ai-msg--ai {
@@ -306,17 +306,17 @@ defineExpose({ open })
 }
 .ai-suggestion-chip {
   padding: 4px 10px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--color-line-2);
   border-radius: 16px;
   background: #fff;
-  color: #595959;
+  color: var(--color-text-2);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 .ai-suggestion-chip:hover {
-  border-color: var(--accent-primary, #3b82f6);
-  color: var(--accent-primary, #3b82f6);
+  border-color: var(--accent-primary, var(--color-accent));
+  color: var(--accent-primary, var(--color-accent));
 }
 .ai-msg-rows {
   margin-top: 8px;
@@ -326,25 +326,25 @@ defineExpose({ open })
 }
 .ai-msg-row {
   padding: 6px 8px;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border-color, var(--color-line-1));
   border-radius: 6px;
   background: var(--bg-primary, #fff);
 }
 .ai-row-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-h, #111827);
+  color: var(--text-h, var(--color-text-1));
 }
 .ai-row-sub {
   margin-top: 2px;
   font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
 }
 .ai-input-bar {
   display: flex;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-surface-1);
   align-items: flex-end;
 }
 .ai-history-link {

@@ -1031,7 +1031,7 @@ onMounted(() => {
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  background: rgba(64, 158, 255, 0.1);
+  background: rgba(37, 99, 235, 0.1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1044,13 +1044,13 @@ onMounted(() => {
 
 .tip-title {
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
   margin-bottom: 4px;
 }
 
 .tip-desc {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .toolbar {
@@ -1105,16 +1105,16 @@ onMounted(() => {
 
 .user-name {
   font-weight: 500;
-  color: #303133;
+  color: var(--color-text-1);
 }
 
 .user-email {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
 }
 
 .text-gray {
-  color: #909399;
+  color: var(--color-text-3);
 }
 
 .last-login {
@@ -1125,7 +1125,7 @@ onMounted(() => {
 
 .login-ip {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
   margin-top: 2px;
 }
 
@@ -1156,7 +1156,7 @@ onMounted(() => {
 
 .reset-pwd-content p {
   margin: 0 0 20px 0;
-  color: #606266;
+  color: var(--color-text-2);
 }
 
 .new-password {
@@ -1172,7 +1172,7 @@ onMounted(() => {
 
 .password-header .label {
   font-size: 14px;
-  color: #606266;
+  color: var(--color-text-2);
   font-weight: 500;
 }
 
@@ -1182,15 +1182,15 @@ onMounted(() => {
 
 .password-display {
   padding: 16px;
-  background: #f5f7fa;
+  background: var(--color-surface-1);
   border-radius: 8px;
-  border: 1px dashed #d9d9d9;
+  border: 1px dashed var(--color-line-2);
 }
 
 .password-text {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 16px;
-  color: #409eff;
+  color: var(--color-accent);
   font-weight: 600;
   letter-spacing: 2px;
 }
@@ -1198,7 +1198,7 @@ onMounted(() => {
 .password-tip {
   margin-top: 12px;
   font-size: 13px;
-  color: #909399;
+  color: var(--color-text-3);
   text-align: center;
 }
 
@@ -1225,13 +1225,13 @@ onMounted(() => {
 .perm-name {
   display: block;
   font-weight: 500;
-  color: #303133;
+  color: var(--color-text-1);
 }
 
 .perm-desc {
   display: block;
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
   margin-top: 2px;
 }
 

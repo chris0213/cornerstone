@@ -16,6 +16,11 @@ RUN if [ -f package-lock.json ]; then \
 
 COPY . .
 
+# 版本标识：构建时通过 --build-arg APP_VERSION=<git sha> 注入，
+# 会显示在「系统设置」页底部，用于生产环境确认前端产物版本
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 # 构建前端静态资源
 # 当前代码库存在历史 TS 类型错误，生产镜像先执行 Vite 构建，避免 Docker 部署被 vue-tsc 阻塞。
 RUN npx vite build

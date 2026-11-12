@@ -387,10 +387,10 @@ watch(() => config.value.use_starttls, (newVal) => {
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
   margin-bottom: 16px;
   padding-left: 8px;
-  border-left: 3px solid #1890ff;
+  border-left: 3px solid var(--color-accent);
 }
 
 .action-bar {
@@ -398,7 +398,7 @@ watch(() => config.value.use_starttls, (newVal) => {
   gap: 12px;
   justify-content: flex-end;
   padding-top: 24px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-surface-1);
   margin-top: 20px;
 }
 </style>

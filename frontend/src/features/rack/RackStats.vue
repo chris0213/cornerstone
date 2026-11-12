@@ -38,9 +38,9 @@ const usedArc = computed(() => {
 // 与侧边栏 / IP 管理页阈值保持一致：>90 红、70–90 橙、<70 蓝
 const ringColor = computed(() => {
   const p = stats.value.utilization
-  if (p > 90) return 'var(--el-color-danger, #f56c6c)'
-  if (p >= 70) return 'var(--el-color-warning, #e6a23c)'
-  return 'var(--el-color-primary, #409eff)'
+  if (p > 90) return 'var(--color-danger)'
+  if (p >= 70) return 'var(--color-warning)'
+  return 'var(--color-accent)'
 })
 </script>
 
@@ -126,7 +126,7 @@ const ringColor = computed(() => {
   margin: 0 0 10px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary, var(--color-text-1));
   letter-spacing: 0.3px;
 }
 .panel-title.mt { margin-top: 16px; }
@@ -140,17 +140,17 @@ const ringColor = computed(() => {
 .stat-card {
   border-radius: 6px;
   padding: 10px 12px;
-  background: #f8fafc;
+  background: var(--color-surface-1);
   display: flex;
   flex-direction: column;
   gap: 3px;
   border: 1px solid var(--border-color, #eef0f3);
 }
-.stat-label { font-size: 11px; color: var(--text-secondary, #6b7280); }
-.stat-value { font-size: 18px; font-weight: 600; color: var(--text-primary, #1f2937); }
+.stat-label { font-size: 11px; color: var(--text-secondary, var(--color-text-3)); }
+.stat-value { font-size: 18px; font-weight: 600; color: var(--text-primary, var(--color-text-1)); }
 .stat-card.used .stat-value { color: #3f83f8; }
-.stat-card.free .stat-value { color: #10b981; }
-.stat-card.util .stat-value { color: #6366f1; }
+.stat-card.free .stat-value { color: var(--color-success); }
+.stat-card.util .stat-value { color: var(--color-accent); }
 
 .util-ring-row {
   display: flex;
@@ -158,8 +158,8 @@ const ringColor = computed(() => {
   gap: 14px;
   padding: 4px 0 8px;
 }
-.ring-pct { font-size: 18px; font-weight: 700; fill: var(--text-primary, #1f2937); }
-.ring-label { font-size: 10px; fill: var(--text-secondary, #6b7280); }
+.ring-pct { font-size: 18px; font-weight: 700; fill: var(--text-primary, var(--color-text-1)); }
+.ring-label { font-size: 10px; fill: var(--text-secondary, var(--color-text-3)); }
 
 .legend { flex: 1; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .legend-row {
@@ -174,7 +174,7 @@ const ringColor = computed(() => {
   align-self: center;
 }
 .dot.used { background: #3f83f8; }
-.dot.free { background: #10b981; }
+.dot.free { background: var(--color-success); }
 
 .type-bars { display: flex; flex-direction: column; gap: 8px; }
 .type-row-head {
@@ -183,8 +183,8 @@ const ringColor = computed(() => {
   font-size: 12px;
   margin-bottom: 4px;
 }
-.type-name { color: var(--text-primary, #1f2937); }
-.type-count { color: var(--text-secondary, #6b7280); font-weight: 600; }
+.type-name { color: var(--text-primary, var(--color-text-1)); }
+.type-count { color: var(--text-secondary, var(--color-text-3)); font-weight: 600; }
 .type-bar-bg {
   width: 100%;
   height: 6px;
@@ -194,7 +194,7 @@ const ringColor = computed(() => {
 }
 .type-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #3f83f8);
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-hover));
   border-radius: 3px;
   transition: width .3s;
 }

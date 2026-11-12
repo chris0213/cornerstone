@@ -791,7 +791,7 @@ onMounted(() => {
 .table-header h3 {
   margin: 0;
   font-size: 16px;
-  color: #303133;
+  color: var(--color-text-1);
 }
 
 .header-actions {
@@ -802,24 +802,24 @@ onMounted(() => {
 .interface-label {
   margin-left: 8px;
   padding: 2px 6px;
-  background-color: #f5f7fa;
+  background-color: var(--color-surface-1);
   border-radius: 4px;
   font-size: 12px;
-  color: #606266;
+  color: var(--color-text-2);
 }
 
 .confidence-high {
-  color: #67c23a;
+  color: var(--color-success);
   font-weight: bold;
 }
 
 .confidence-medium {
-  color: #e6a23c;
+  color: var(--color-warning);
   font-weight: bold;
 }
 
 .confidence-low {
-  color: #f56c6c;
+  color: var(--color-danger);
   font-weight: bold;
 }
 
@@ -853,7 +853,7 @@ onMounted(() => {
 
 .discovery-progress-msg {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -868,7 +868,7 @@ onMounted(() => {
   margin-left: 10px;
   font-size: 12px;
   font-weight: normal;
-  color: #909399;
+  color: var(--color-text-3);
 }
 
 .unknown-table :deep(.el-table__cell) {
@@ -876,7 +876,7 @@ onMounted(() => {
 }
 
 .text-muted {
-  color: #909399;
+  color: var(--color-text-3);
 }
 
 .accept-info {
@@ -886,6 +886,6 @@ onMounted(() => {
 .accept-switch-hint {
   margin-left: 10px;
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
 }
 </style>

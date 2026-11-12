@@ -177,14 +177,14 @@ export default { components: { Search } }
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
   font-size: 12px;
   font-weight: 500;
   margin-bottom: 6px;
   cursor: pointer;
   user-select: none;
 }
-.rack-group-title:hover { color: var(--text-primary, #1f2937); }
+.rack-group-title:hover { color: var(--text-primary, var(--color-text-1)); }
 .collapse-arrow { font-size: 12px; }
 .rack-group-title .el-tag { margin-left: auto; }
 
@@ -204,7 +204,7 @@ export default { components: { Search } }
   gap: 8px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary, var(--color-text-1));
   transition: background .12s;
 }
 .rack-item:hover { background: var(--bg-hover, #eef3ff); }
@@ -226,7 +226,7 @@ export default { components: { Search } }
   width: 40px;
   height: 6px;
   border-radius: 999px;
-  background: var(--el-fill-color, #f0f2f5);
+  background: var(--el-fill-color, var(--color-surface-1));
   overflow: hidden;
   display: inline-block;
 }
@@ -236,19 +236,19 @@ export default { components: { Search } }
   border-radius: 999px;
   transition: width 0.3s ease;
 }
-.util-fill.util-low { background: var(--el-color-primary, #409eff); }
-.util-fill.util-mid { background: var(--el-color-warning, #e6a23c); }
-.util-fill.util-high { background: var(--el-color-danger, #f56c6c); }
+.util-fill.util-low { background: var(--el-color-primary, var(--color-accent)); }
+.util-fill.util-mid { background: var(--el-color-warning, var(--color-warning)); }
+.util-fill.util-high { background: var(--el-color-danger, var(--color-danger)); }
 .util-text {
   width: 30px;
   font-size: 11px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   text-align: right;
 }
 .util-u {
   font-size: 11px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
   opacity: 0.75;
 }
 </style>

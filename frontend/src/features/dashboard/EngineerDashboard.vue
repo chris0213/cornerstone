@@ -10,9 +10,9 @@ import { useRouter } from 'vue-router'
 import { Plus, MapLocation, Connection, Clock, DataBoard, FolderOpened, Lightning } from '@element-plus/icons-vue'
 
 function getOnlineDevicesColor(online: number, total: number): string {
-  if (online === 0) return '#F56C6C' // 全部离线，红色
-  if (online > 0 && online < total) return '#E6A23C' // 部分在线，橙色
-  return '#67C23A' // 全部在线，绿色
+  if (online === 0) return 'var(--color-danger)' // 全部离线，红色
+  if (online > 0 && online < total) return 'var(--color-warning)' // 部分在线，橙色
+  return 'var(--color-success)' // 全部在线，绿色
 }
 
 const { t, locale } = useI18n()
@@ -29,7 +29,8 @@ const quickActions = computed(() => {
       icon: 'Plus',
       label: t('dashboard.actAddDevice'),
       path: '/devices',
-      color: '#409EFF',
+      color: 'var(--color-accent)',
+      soft: 'var(--color-accent-soft)',
       description: t('dashboard.actAddDeviceDesc')
     })
   }
@@ -38,7 +39,8 @@ const quickActions = computed(() => {
       icon: 'Globe',
       label: t('dashboard.actAddCircuit'),
       path: '/circuits',
-      color: '#67C23A',
+      color: 'var(--color-success)',
+      soft: 'var(--color-success-soft)',
       description: t('dashboard.actAddCircuitDesc')
     })
   }
@@ -47,7 +49,8 @@ const quickActions = computed(() => {
       icon: 'Network',
       label: t('dashboard.actAllocIp'),
       path: '/ipam',
-      color: '#E6A23C',
+      color: 'var(--color-warning)',
+      soft: 'var(--color-warning-soft)',
       description: t('dashboard.actAllocIpDesc')
     })
   }
@@ -57,7 +60,8 @@ const quickActions = computed(() => {
       icon: 'Clock',
       label: t('dashboard.actInspection'),
       path: '/reports',
-      color: '#909399',
+      color: 'var(--color-info)',
+      soft: 'var(--color-info-soft)',
       description: t('dashboard.actInspectionDesc')
     })
   }
@@ -66,7 +70,8 @@ const quickActions = computed(() => {
       icon: 'Database',
       label: t('dashboard.actBackup'),
       path: '/backups',
-      color: '#F56C6C',
+      color: 'var(--color-success)',
+      soft: 'var(--color-success-soft)',
       description: t('dashboard.actBackupDesc')
     })
   }
@@ -75,7 +80,8 @@ const quickActions = computed(() => {
       icon: 'FolderOpened',
       label: t('dashboard.actViewSites'),
       path: '/sites',
-      color: '#9C27B0',
+      color: 'var(--color-accent)',
+      soft: 'var(--color-accent-soft)',
       description: t('dashboard.actViewSitesDesc')
     })
   }
@@ -126,20 +132,20 @@ const timeRangeOptions = [
 
 // 设备品牌颜色映射（后端 /dashboard/device-types 按品牌分组，key 为品牌英文标识）
 const deviceTypeColors: Record<string, string> = {
-  'huawei': '#E6A23C',
-  'cisco': '#409EFF',
-  'ruijie': '#F56C6C',
-  'h3c': '#67C23A',
-  'juniper': '#722ED1',
-  'fortinet': '#36BFFA',
-  'paloalto': '#FF6347',
-  'arista': '#00CED1',
-  'mikrotik': '#F7BA1E',
-  'dell': '#4682B4',
-  'hp': '#9932CC',
-  'linux': '#909399',
-  'other': '#C0C4CC',
-  'unknown': '#909399'
+  'huawei': 'var(--color-warning)',
+  'cisco': 'var(--color-accent)',
+  'ruijie': 'var(--color-danger)',
+  'h3c': 'var(--color-success)',
+  'juniper': 'var(--color-info)',
+  'fortinet': 'var(--color-accent)',
+  'paloalto': 'var(--color-danger)',
+  'arista': 'var(--color-success)',
+  'mikrotik': 'var(--color-warning)',
+  'dell': 'var(--color-info)',
+  'hp': 'var(--color-info)',
+  'linux': 'var(--color-text-3)',
+  'other': 'var(--color-text-3)',
+  'unknown': 'var(--color-text-3)'
 }
 
 
@@ -211,7 +217,7 @@ function getDetailTranslation(detail: string): string {
 
 // 获取设备类型颜色
 function getDeviceTypeColor(type: string): string {
-  return deviceTypeColors[type] || '#909399'
+  return deviceTypeColors[type] || 'var(--color-text-3)'
 }
 
 // 带宽格式化
@@ -333,7 +339,7 @@ onMounted(() => {
               @click="navigateTo(action.path)"
               :title="action.description"
             >
-              <div class="action-icon" :style="{ backgroundColor: action.color + '15', color: action.color }">
+              <div class="action-icon" :style="{ backgroundColor: action.soft, color: action.color }">
                 <el-icon><component :is="action.icon === 'Plus' ? Plus : action.icon === 'Globe' ? MapLocation : action.icon === 'Network' ? Connection : action.icon === 'Clock' ? Clock : action.icon === 'Database' ? DataBoard : FolderOpened" /></el-icon>
               </div>
               <span class="action-label">{{ action.label }}</span>
@@ -491,10 +497,10 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: var(--bg-primary);
+  background: var(--color-surface-0);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid var(--text-secondary);
+  border-left: 3px solid var(--color-line-2);
   transition: all 0.2s ease;
   position: relative;
   cursor: pointer;
@@ -506,10 +512,10 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.overview-card-success { border-left-color: var(--accent-success); }
-.overview-card-warning { border-left-color: #faad14; }
-.overview-card-blue { border-left-color: var(--accent-primary); }
-.overview-card-purple { border-left-color: #722ed1; }
+.overview-card-success { border-left-color: var(--color-success); }
+.overview-card-warning { border-left-color: var(--color-warning); }
+.overview-card-blue { border-left-color: var(--color-accent); }
+.overview-card-purple { border-left-color: var(--color-line-2); }
 
 .overview-card-label {
   font-size: 13px;
@@ -553,7 +559,7 @@ onMounted(() => {
   top: 50%;
   transform: translateY(-50%);
   font-size: 24px;
-  color: #e8e8e8;
+  color: var(--color-line-1);
   transition: all 0.2s ease;
 }
 
@@ -623,13 +629,13 @@ onMounted(() => {
 .circuit-type-item {
   border-radius: 6px;
   padding: 12px 14px;
-  border-left: 3px solid #e8e8e8;
+  border-left: 3px solid var(--color-line-1);
   background: var(--bg-secondary);
   transition: all 0.2s ease;
 }
 
 .circuit-type-item:hover {
-  background: #f5f7fa;
+  background: var(--color-surface-1);
 }
 
 .circuit-type-header {
@@ -708,7 +714,7 @@ onMounted(() => {
 .usage-tag {
   font-size: 12px;
   color: var(--text-secondary);
-  background: #f5f7fa;
+  background: var(--color-surface-1);
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -805,9 +811,9 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #e6f7ff;
+  background: var(--color-accent-soft);
   border-radius: 6px;
-  color: #409EFF;
+  color: var(--color-accent);
   flex-shrink: 0;
 }
 
@@ -835,7 +841,7 @@ onMounted(() => {
 
 .activity-detail {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-2);
   margin-bottom: 4px;
 }
 

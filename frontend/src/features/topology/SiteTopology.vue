@@ -54,7 +54,7 @@
             orient="auto"
             markerUnits="strokeWidth"
           >
-            <path d="M0,0 L0,6 L9,3 z" fill="#F56C6C" />
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--color-danger)" />
           </marker>
         </defs>
 
@@ -141,16 +141,16 @@
 
     <div class="topology-legend">
       <div class="legend-item">
-        <span class="status-dot" style="background: #67C23A"></span> {{ t('topology.normal') }}
+        <span class="status-dot" style="background: var(--color-success)"></span> {{ t('topology.normal') }}
       </div>
       <div class="legend-item">
-        <span class="status-dot" style="background: #E6A23C"></span> {{ t('topology.warning') }}
+        <span class="status-dot" style="background: var(--color-warning)"></span> {{ t('topology.warning') }}
       </div>
       <div class="legend-item">
-        <span class="status-dot" style="background: #909399"></span> {{ t('topology.offline') }}
+        <span class="status-dot" style="background: var(--color-text-3)"></span> {{ t('topology.offline') }}
       </div>
       <div class="legend-item">
-        <span class="status-dot" style="background: #F56C6C"></span> {{ t('topology.critical') }}
+        <span class="status-dot" style="background: var(--color-danger)"></span> {{ t('topology.critical') }}
       </div>
       <!-- 专线类型 -->
       <div class="legend-section">{{ t('topology.circuitType') }}</div>
@@ -567,20 +567,20 @@ onUnmounted(() => {
 
 .search-input :deep(.el-input__wrapper) {
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(64, 158, 255, 0.3);
+  border: 1px solid rgba(37, 99, 235, 0.3);
   box-shadow: none;
   transition: all 0.3s ease;
 }
 
 .search-input :deep(.el-input__wrapper:hover) {
-  border-color: rgba(64, 158, 255, 0.6);
+  border-color: rgba(37, 99, 235, 0.6);
   background: rgba(255, 255, 255, 0.12);
 }
 
 .search-input :deep(.el-input__wrapper.is-focus) {
-  border-color: #409eff;
+  border-color: var(--color-accent);
   background: rgba(255, 255, 255, 0.15);
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
 }
 
 .search-input :deep(.el-input__inner) {
@@ -602,16 +602,16 @@ onUnmounted(() => {
   height: 40px;
   padding: 0;
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(64, 158, 255, 0.2);
+  border: 1px solid rgba(37, 99, 235, 0.2);
   color: #fff;
   transition: all 0.3s ease;
 }
 
 .toolbar-btn:hover {
-  background: rgba(64, 158, 255, 0.2);
-  border-color: rgba(64, 158, 255, 0.5);
+  background: rgba(37, 99, 235, 0.2);
+  border-color: rgba(37, 99, 235, 0.5);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 .toolbar-btn:active {
@@ -623,7 +623,7 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
   background: 
-    radial-gradient(ellipse at 20% 30%, rgba(64, 158, 255, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 30%, rgba(37, 99, 235, 0.08) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 70%, rgba(100, 89, 234, 0.08) 0%, transparent 50%),
     linear-gradient(180deg, #0a0e1a 0%, #1a1a2e 100%);
 }
@@ -660,23 +660,23 @@ onUnmounted(() => {
 }
 
 .topology-edge.normal {
-  stroke: #67C23A;
+  stroke: var(--color-success);
   stroke-width: 3.5;
   filter: drop-shadow(0 0 8px rgba(103, 194, 58, 0.5));
 }
 
 .topology-edge.warning {
-  stroke: #E6A23C;
+  stroke: var(--color-warning);
   stroke-width: 3.5;
   filter: drop-shadow(0 0 8px rgba(230, 162, 60, 0.5));
 }
 
 .topology-edge.offline,
 .topology-edge.critical {
-  stroke: #F56C6C;
+  stroke: var(--color-danger);
   stroke-width: 2.5;
   stroke-dasharray: 8,4;
-  filter: drop-shadow(0 0 8px rgba(245, 108, 108, 0.5));
+  filter: drop-shadow(0 0 8px rgba(180, 35, 24, 0.5));
   animation: edge-pulse 2s ease-in-out infinite;
 }
 
@@ -686,12 +686,12 @@ onUnmounted(() => {
 }
 
 .topology-edge.internet {
-  stroke: #67C23A;
+  stroke: var(--color-success);
 }
 
 .topology-edge.mpls {
-  stroke: #409eff;
-  filter: drop-shadow(0 0 8px rgba(64, 158, 255, 0.5));
+  stroke: var(--color-accent);
+  filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.5));
 }
 
 .topology-edge.sdwan {
@@ -716,15 +716,15 @@ onUnmounted(() => {
 }
 
 .topology-node:hover .node-circle {
-  stroke: #409eff;
+  stroke: var(--color-accent);
   stroke-width: 3;
-  filter: drop-shadow(0 0 15px rgba(64, 158, 255, 0.4));
+  filter: drop-shadow(0 0 15px rgba(37, 99, 235, 0.4));
 }
 
 .node-selected .node-circle {
-  stroke: #409eff;
+  stroke: var(--color-accent);
   stroke-width: 3;
-  filter: drop-shadow(0 0 20px rgba(64, 158, 255, 0.6));
+  filter: drop-shadow(0 0 20px rgba(37, 99, 235, 0.6));
 }
 
 .node-filtered {
@@ -775,13 +775,13 @@ onUnmounted(() => {
   position: fixed;
   background: rgba(15, 23, 36, 0.98);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(64, 158, 255, 0.3);
+  border: 1px solid rgba(37, 99, 235, 0.3);
   border-radius: 12px;
   padding: 16px 20px;
   z-index: 10000;
   pointer-events: none;
   min-width: 240px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(64, 158, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(37, 99, 235, 0.1);
 }
 
 .tooltip-title {
@@ -790,7 +790,7 @@ onUnmounted(() => {
   color: #fff;
   margin-bottom: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(64, 158, 255, 0.2);
+  border-bottom: 1px solid rgba(37, 99, 235, 0.2);
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
@@ -849,11 +849,11 @@ onUnmounted(() => {
 }
 
 .legend-line.internet {
-  background: #67C23A;
+  background: var(--color-success);
 }
 
 .legend-line.mpls {
-  background: #409eff;
+  background: var(--color-accent);
 }
 
 .legend-line.sdwan {

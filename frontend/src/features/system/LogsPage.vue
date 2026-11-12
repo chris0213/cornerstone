@@ -231,7 +231,7 @@ const formatDateTime = (dateString: string) => {
   background: #fff;
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--color-text-3);
   transition: all 0.2s ease;
 }
 
@@ -241,34 +241,34 @@ const formatDateTime = (dateString: string) => {
 }
 
 .overview-card-info { 
-  border-left-color: #1890ff; 
+  border-left-color: var(--color-accent); 
 }
 
 .overview-card-success { 
-  border-left-color: #52c41a; 
+  border-left-color: var(--color-success); 
 }
 
 .overview-card-primary { 
-  border-left-color: #722ed1; 
+  border-left-color: var(--color-accent); 
 }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--color-text-1);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .table-card {
@@ -287,16 +287,16 @@ const formatDateTime = (dateString: string) => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--color-accent);
 }
 
 .tabs-container {
   margin-bottom: 16px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-surface-1);
 }
 
 .logs-tabs {
@@ -309,17 +309,17 @@ const formatDateTime = (dateString: string) => {
   gap: 16px;
   margin-bottom: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-surface-1);
 }
 
 .search-label {
   font-size: 14px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .search-date {
   font-size: 14px;
-  color: #262626;
+  color: var(--color-text-1);
   font-weight: 500;
 }
 
@@ -332,17 +332,17 @@ const formatDateTime = (dateString: string) => {
 }
 
 .time-icon {
-  color: #1890ff;
+  color: var(--color-accent);
   font-size: 14px;
 }
 
 .target-text {
-  color: #262626;
+  color: var(--color-text-1);
   font-weight: 500;
 }
 
 .detail-text {
-  color: #8c8c8c;
+  color: var(--color-text-3);
   font-size: 13px;
 }
 
@@ -350,16 +350,16 @@ const formatDateTime = (dateString: string) => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .user-icon {
-  color: #52c41a;
+  color: var(--color-success);
   font-size: 14px;
 }
 
 .ip-text {
-  color: #8c8c8c;
+  color: var(--color-text-3);
   font-size: 13px;
   font-family: monospace;
 }

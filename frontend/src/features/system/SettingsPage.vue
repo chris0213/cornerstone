@@ -35,18 +35,22 @@ const brandForm = reactive({
 const brandLoading = ref(false)
 const brandFetchLoading = ref(false)
 
-// ============ 未保存提示（dirty 检测） ============
-// 以「加载完成后的初始值」为基线，三个区块任一有改动即视为 dirty
-const companyBaseline = ref('')
-const brandBaseline = ref('')
-const logoBaseline = ref('') // 初始 Logo（base64 data URL 或空）
+// ============ 未保存提示（显式用户编辑标记） ============
+// 只认「用户是否真实编辑过」，不再比较「基线快照 vs 当前值」：
+// 异步回填、接口重试、切语言都不会改变标记，因此加载完成的瞬间不会被误判为已修改。
+// Logo 的上传/删除是即时提交到服务端的，不存在未保存状态，故不参与判断。
+const companyTouched = ref(false)
+const brandTouched = ref(false)
 
-const snapshot = (obj: Record<string, unknown>) => JSON.stringify(obj)
+const hasUnsavedChanges = computed(() => companyTouched.value || brandTouched.value)
+const markCompanyDirty = () => { companyTouched.value = true }
+const markBrandDirty = () => { brandTouched.value = true }
+const markCompanyClean = () => { companyTouched.value = false }
+const markBrandClean = () => { brandTouched.value = false }
 
-const companyDirty = computed(() => companyBaseline.value !== '' && snapshot({ ...companyForm }) !== companyBaseline.value)
-const brandDirty = computed(() => brandBaseline.value !== '' && snapshot({ ...brandForm }) !== brandBaseline.value)
-const logoDirty = computed(() => currentLogo.value !== logoBaseline.value)
-const hasUnsavedChanges = computed(() => companyDirty.value || brandDirty.value || logoDirty.value)
+// 构建期注入的版本标识：用于在生产环境一眼确认前端产物是否为最新
+const appVersion = __APP_VERSION__
+const buildTime = __BUILD_TIME__
 
 const beforeUnloadHandler = (e: BeforeUnloadEvent) => {
   if (hasUnsavedChanges.value) {
@@ -63,7 +67,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnloadHandler)
 })
 
-onBeforeRouteLeave(async (_to, _from, _from2) => {
+// 注意：这里只声明 to/from 两个参数。
+// vue-router 4 会按函数形参个数判断：形参 >= 3 视为旧式守卫，只认 next()，
+// 返回值 true/false 会被忽略——之前多写了一个参数，导致「离开」确认后永远不放行。
+onBeforeRouteLeave(async () => {
   if (!hasUnsavedChanges.value) return true
   try {
     await ElMessageBox.confirm(
@@ -82,10 +89,6 @@ onBeforeRouteLeave(async (_to, _from, _from2) => {
   }
 })
 
-const markCompanyClean = () => { companyBaseline.value = snapshot({ ...companyForm }) }
-const markBrandClean = () => { brandBaseline.value = snapshot({ ...brandForm }) }
-const markLogoClean = () => { logoBaseline.value = currentLogo.value }
-
 const fetchBrandSettings = async () => {
   brandFetchLoading.value = true
   try {
@@ -99,7 +102,6 @@ const fetchBrandSettings = async () => {
     console.error('加载品牌设置失败:', error)
   } finally {
     brandFetchLoading.value = false
-    markBrandClean()
   }
 }
 
@@ -144,6 +146,7 @@ const resetBrandSettings = async () => {
     try {
       await api.post('/api/v1/settings/brand/reset')
       await fetchBrandSettings()
+      markBrandClean()
       await brandStore.loadBrand()
       ElMessage.success('品牌设置已恢复默认')
     } catch (error: any) {
@@ -169,8 +172,6 @@ const fetchCompanyInfo = async () => {
     Object.assign(companyForm, data)
   } catch (error: any) {
     console.error('Failed to load company info:', error)
-  } finally {
-    markCompanyClean()
   }
 }
 
@@ -217,6 +218,7 @@ const fetchLogo = async (retries = 3) => {
       if (data.value) {
         currentLogo.value = `data:image/png;base64,${data.value}`
       }
+      // 成功路径不再写基线：脏标记只由用户交互触发
       return
     } catch (error: any) {
       const isConnectionError = error.code === 'ECONNREFUSED' ||
@@ -227,8 +229,6 @@ const fetchLogo = async (retries = 3) => {
         continue
       }
       console.log(t('settings.fetchLogoFailed'), error)
-    } finally {
-      if (i === retries - 1) markLogoClean()
     }
   }
 }
@@ -276,7 +276,6 @@ const handleFileChange = async (event: Event) => {
       })
 
       currentLogo.value = URL.createObjectURL(file)
-      markLogoClean()
       ElMessage.success(t('settings.logoUploadSuccess'))
     } catch (error: any) {
       console.error(t('settings.uploadFailed'), error)
@@ -300,7 +299,6 @@ const handleLogoRemove = async () => {
   try {
     await api.delete('/settings/logo')
     currentLogo.value = ''
-    markLogoClean()
     ElMessage.success(t('settings.logoRemoved'))
   } catch (error: any) {
     console.error(t('settings.deleteFailed'), error)
@@ -383,10 +381,10 @@ const handleLogoRemove = async () => {
             <el-input v-model="brandForm.brand_name_en" disabled />
           </el-form-item>
           <el-form-item :label="t('settings.brandSlogan')" prop="brand_slogan">
-            <el-input v-model="brandForm.brand_slogan" :placeholder="t('settings.brandSloganPlaceholder')" :maxlength="50" show-word-limit />
+            <el-input v-model="brandForm.brand_slogan" :placeholder="t('settings.brandSloganPlaceholder')" :maxlength="50" show-word-limit @input="markBrandDirty" />
           </el-form-item>
           <el-form-item :label="t('settings.brandSubtitle')" prop="brand_subtitle">
-            <el-input v-model="brandForm.brand_subtitle" :placeholder="t('settings.brandSubtitlePlaceholder')" :maxlength="100" show-word-limit />
+            <el-input v-model="brandForm.brand_subtitle" :placeholder="t('settings.brandSubtitlePlaceholder')" :maxlength="100" show-word-limit @input="markBrandDirty" />
           </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveBrandSettings" :loading="brandLoading">{{ t('common.save') }}</el-button>
@@ -401,14 +399,8 @@ const handleLogoRemove = async () => {
               <div class="preview-logo">
                 <img v-if="currentLogo" :src="currentLogo" :alt="t('settings.companyLogo')" />
                 <svg v-else viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M24 4L4 20v24l20 16 20-16V20L24 4z" fill="url(#previewLogoGradient)" />
-                  <path d="M24 10L8 22v16l16 10 16-10V22L24 10z" fill="white" opacity="0.95" />
-                  <defs>
-                    <linearGradient id="previewLogoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" style="stop-color:#3b82f6" />
-                      <stop offset="100%" style="stop-color:#8b5cf6" />
-                    </linearGradient>
-                  </defs>
+                  <path d="M24 4L4 20v24l20 16 20-16V20L24 4z" fill="var(--color-accent)" />
+                  <path d="M24 10L8 22v16l16 10 16-10V22L24 10z" fill="var(--color-surface-0)" opacity="0.95" />
                 </svg>
               </div>
               <span class="preview-brand-name">{{ brandForm.brand_name_zh }}&nbsp;&nbsp;{{ brandForm.brand_name_en }}</span>
@@ -432,19 +424,19 @@ const handleLogoRemove = async () => {
       <div class="company-form">
         <el-form ref="companyFormRef" :model="companyForm" :rules="companyRules" label-width="120px" size="large">
           <el-form-item :label="t('settings.companyName')" prop="company_name">
-            <el-input v-model="companyForm.company_name" :placeholder="t('settings.companyNamePlaceholder')" :maxlength="100" />
+            <el-input v-model="companyForm.company_name" :placeholder="t('settings.companyNamePlaceholder')" :maxlength="100" @input="markCompanyDirty" />
           </el-form-item>
           <el-form-item :label="t('settings.companyShortName')">
-            <el-input v-model="companyForm.company_short_name" :placeholder="t('settings.companyShortNamePlaceholder')" :maxlength="50" />
+            <el-input v-model="companyForm.company_short_name" :placeholder="t('settings.companyShortNamePlaceholder')" :maxlength="50" @input="markCompanyDirty" />
           </el-form-item>
           <el-form-item :label="t('settings.itDeptName')">
-            <el-input v-model="companyForm.it_department_name" :placeholder="t('settings.itDeptPlaceholder')" :maxlength="50" />
+            <el-input v-model="companyForm.it_department_name" :placeholder="t('settings.itDeptPlaceholder')" :maxlength="50" @input="markCompanyDirty" />
           </el-form-item>
           <el-form-item :label="t('settings.itContactName')">
-            <el-input v-model="companyForm.it_contact_name" :placeholder="t('settings.itContactPlaceholder')" :maxlength="50" />
+            <el-input v-model="companyForm.it_contact_name" :placeholder="t('settings.itContactPlaceholder')" :maxlength="50" @input="markCompanyDirty" />
           </el-form-item>
           <el-form-item :label="t('settings.itContactEmail')">
-            <el-input v-model="companyForm.it_contact_email" :placeholder="t('settings.itEmailPlaceholder')" />
+            <el-input v-model="companyForm.it_contact_email" :placeholder="t('settings.itEmailPlaceholder')" @input="markCompanyDirty" />
           </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveCompanyInfo" :loading="companyLoading">{{ t('common.save') }}</el-button>
@@ -452,6 +444,8 @@ const handleLogoRemove = async () => {
         </el-form>
       </div>
     </div>
+
+    <p class="build-info" :title="buildTime">{{ appVersion }} · {{ buildTime }}</p>
   </div>
 </template>
 
@@ -460,6 +454,14 @@ const handleLogoRemove = async () => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.build-info {
+  margin: 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-section {

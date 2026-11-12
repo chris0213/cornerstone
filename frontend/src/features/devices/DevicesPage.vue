@@ -1320,10 +1320,10 @@ onMounted(async () => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--color-surface-0);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--color-line-2);
   transition: all 0.2s ease;
 }
 
@@ -1332,11 +1332,11 @@ onMounted(async () => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.overview-card-success { border-left-color: #52c41a; }
-.overview-card-warning { border-left-color: #faad14; }
-.overview-card-danger { border-left-color: #ff4d4f; }
-.overview-card-info { border-left-color: #bfbfbf; }
-.overview-card-blue { border-left-color: #1890ff; }
+.overview-card-success { border-left-color: var(--color-success); }
+.overview-card-warning { border-left-color: var(--color-warning); }
+.overview-card-danger { border-left-color: var(--color-danger); }
+.overview-card-info { border-left-color: var(--color-info); }
+.overview-card-blue { border-left-color: var(--color-accent); }
 
 /* 可点击保修卡片（联动筛选，与 IPAM 页一致） */
 .overview-card-clickable {
@@ -1345,31 +1345,31 @@ onMounted(async () => {
 
 .overview-card-clickable:hover {
   border-left-width: 3px;
-  outline: 1px solid #1890ff;
+  outline: 1px solid var(--color-accent);
 }
 
 .overview-card.is-active {
-  outline: 2px solid #1890ff;
+  outline: 2px solid var(--color-accent);
   outline-offset: -2px;
 }
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--color-text-1);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .table-card {
@@ -1410,10 +1410,10 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   padding: 12px;
-  background: #f6ffed;
+  background: var(--color-success-soft);
   border: 1px solid #b7eb8f;
   border-radius: 4px;
-  color: #52c41a !important;
+  color: var(--color-success) !important;
 }
 
 .import-actions {
@@ -1457,7 +1457,7 @@ onMounted(async () => {
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--color-accent);
 }
 
 .table-filters {
@@ -1492,7 +1492,7 @@ onMounted(async () => {
 
 .device-name {
   font-weight: 500;
-  color: #262626;
+  color: var(--color-text-1);
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1502,14 +1502,14 @@ onMounted(async () => {
 
 .device-spec {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .serial-number {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   font-size: 13px;
-  color: #595959;
-  background: #fafafa;
+  color: var(--color-text-2);
+  background: var(--color-surface-1);
   padding: 3px 8px;
   border-radius: 4px;
 }
@@ -1531,7 +1531,7 @@ onMounted(async () => {
 
 .warranty-date {
   font-size: 13px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 /* 固定宽列不换行 */
@@ -1548,12 +1548,12 @@ onMounted(async () => {
 }
 
 .online-dot-on {
-  background: #52c41a;
+  background: var(--color-success);
   box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.15);
 }
 
 .online-dot-off {
-  background: #bfbfbf;
+  background: var(--color-line-2);
   box-shadow: 0 0 0 3px rgba(191, 191, 191, 0.15);
 }
 
@@ -1580,20 +1580,20 @@ onMounted(async () => {
 }
 
 .muted {
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .site-badge {
   display: inline-block;
-  background: #e6f7ff;
-  color: #1890ff;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
   padding: 4px 12px;
   border-radius: 16px;
   font-size: 13px;
 }
 
 .required {
-  color: #ff4d4f;
+  color: var(--color-danger);
 }
 
 /* 操作列：编辑 + 更多 */
@@ -1674,7 +1674,7 @@ onMounted(async () => {
 }
 
 @keyframes row-highlight {
-  0% { background-color: #e6f7ff; }
+  0% { background-color: var(--color-accent-soft); }
   100% { background-color: transparent; }
 }
 </style>

@@ -92,6 +92,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # 发布时用 APP_VERSION=$(git rev-parse --short HEAD) docker compose build frontend 注入
+        APP_VERSION: ${APP_VERSION:-dev}
     image: cornerstone/frontend:latest
     container_name: cornerstone-frontend
     restart: unless-stopped

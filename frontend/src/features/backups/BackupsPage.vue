@@ -1249,8 +1249,8 @@ onMounted(() => {
 }
 
 .config-content {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--color-ink-blue-950);
+  color: var(--color-on-ink-blue);
   padding: 20px;
   border-radius: 8px;
   overflow-x: auto;
@@ -1282,8 +1282,8 @@ onMounted(() => {
 }
 
 .diff-content {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--color-ink-blue-950);
+  color: var(--color-on-ink-blue);
   padding: 16px;
   border-radius: 8px;
   overflow-x: auto;
@@ -1301,17 +1301,17 @@ onMounted(() => {
 }
 
 .diff-line.added {
-  background: rgba(82, 196, 26, 0.15);
-  color: #7cb305;
+  background: rgba(58, 168, 119, 0.18);
+  color: var(--color-success-on-dark);
 }
 
 .diff-line.removed {
-  background: rgba(255, 77, 79, 0.15);
-  color: #ff7875;
+  background: rgba(226, 100, 91, 0.18);
+  color: var(--color-danger-on-dark);
 }
 
 .diff-line.header {
-  color: var(--el-color-primary);
+  color: var(--color-accent-on-dark);
   font-weight: 600;
 }
 

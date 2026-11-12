@@ -48,9 +48,9 @@ const severityOptions = [
 ]
 
 const severityColors: Record<string, string> = {
-  critical: '#F56C6C',
-  major: '#E6A23C',
-  minor: '#409EFF'
+  critical: 'var(--color-danger)',
+  major: 'var(--color-warning)',
+  minor: 'var(--color-accent)'
 }
 
 const severityLabels: Record<string, string> = {
@@ -169,7 +169,7 @@ onMounted(() => {
   <div class="circuit-incidents-tab">
     <div class="stats-row" v-if="stats">
       <div class="stat-card">
-        <div class="stat-value" :style="{ color: stats.current_count > 0 ? '#F56C6C' : '#67C23A' }">
+        <div class="stat-value" :style="{ color: stats.current_count > 0 ? 'var(--color-danger)' : 'var(--color-success)' }">
           {{ stats.current_count }}
         </div>
         <div class="stat-label">当前故障</div>
@@ -336,7 +336,7 @@ onMounted(() => {
 
 .stat-card {
   flex: 1;
-  background: #fafafa;
+  background: var(--color-surface-1);
   border-radius: 8px;
   padding: 16px;
   text-align: center;
@@ -345,12 +345,12 @@ onMounted(() => {
 .stat-value {
   font-size: 24px;
   font-weight: 700;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .stat-label {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-top: 4px;
 }
 
@@ -398,7 +398,7 @@ onMounted(() => {
 }
 
 .logs-section {
-  background: #fafafa;
+  background: var(--color-surface-1);
   border-radius: 8px;
   padding: 16px;
 }
@@ -409,7 +409,7 @@ onMounted(() => {
   gap: 8px;
   font-weight: 600;
   margin-bottom: 16px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .logs-list {
@@ -426,18 +426,18 @@ onMounted(() => {
 
 .log-time {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--color-line-2);
   margin-bottom: 4px;
 }
 
 .log-content {
   font-size: 14px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .log-operator {
   font-weight: 600;
-  color: #1890ff;
+  color: var(--color-accent);
 }
 
 .log-input {

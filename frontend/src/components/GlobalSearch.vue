@@ -415,7 +415,7 @@ defineExpose({ open, doSearchQuery })
   font-size: 11px;
   color: #ccc;
   padding: 2px 8px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
   border-radius: 4px;
   font-family: monospace;
   flex-shrink: 0;
@@ -440,7 +440,7 @@ defineExpose({ open, doSearchQuery })
 
 .clear-history {
   font-size: 12px;
-  color: #1890ff;
+  color: var(--color-accent);
   background: none;
   border: none;
   cursor: pointer;
@@ -460,11 +460,11 @@ defineExpose({ open, doSearchQuery })
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
-  color: #595959;
+  color: var(--color-text-2);
 }
 
 .history-item:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-1);
 }
 
 .history-item .el-icon {
@@ -496,9 +496,9 @@ defineExpose({ open, doSearchQuery })
   align-items: center;
   gap: 8px;
   padding: 16px 20px;
-  color: #ff4d4f;
+  color: var(--color-danger);
   font-size: 14px;
-  background: #fff2f0;
+  background: var(--color-danger-soft);
 }
 
 .ai-answer-card {
@@ -542,18 +542,18 @@ defineExpose({ open, doSearchQuery })
 }
 
 .result-card:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-1);
 }
 
 .card-primary {
   font-size: 14px;
   font-weight: 500;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .card-secondary {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-top: 2px;
 }
 
@@ -566,22 +566,22 @@ defineExpose({ open, doSearchQuery })
 }
 
 .result-row:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-1);
 }
 
 .result-field {
   font-size: 14px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .result-hint {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .search-suggestions {
   padding: 12px 20px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-surface-1);
 }
 
 .suggestions-label {
@@ -598,11 +598,11 @@ defineExpose({ open, doSearchQuery })
 
 .suggestion-chip {
   padding: 6px 14px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
   border-radius: 20px;
   font-size: 13px;
-  color: #595959;
-  background: #fafafa;
+  color: var(--color-text-2);
+  background: var(--color-surface-1);
   cursor: pointer;
   transition: all 0.15s;
 }

@@ -399,11 +399,11 @@ onMounted(() => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .card-title .el-icon {
-  color: #1890ff;
+  color: var(--color-accent);
 }
 
 .toolbar {
@@ -448,7 +448,7 @@ onMounted(() => {
 
 .role-desc {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .permission-tags {

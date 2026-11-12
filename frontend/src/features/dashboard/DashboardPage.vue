@@ -79,13 +79,13 @@ function switchView(view: 'engineer' | 'manager') {
 .page-title {
   font-size: 20px;
   font-weight: 500;
-  color: #262626;
+  color: var(--color-text-1);
   margin: 0;
 }
 
 .view-switcher {
   display: flex;
-  background: #f5f5f5;
+  background: var(--color-surface-1);
   border: 0.5px solid #e0e0e0;
   border-radius: 6px;
   padding: 3px;
@@ -107,12 +107,12 @@ function switchView(view: 'engineer' | 'manager') {
 }
 
 .switcher-btn:hover {
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .switcher-btn.active {
   background: #ffffff;
-  color: #262626;
+  color: var(--color-text-1);
   border: 0.5px solid #e0e0e0;
   font-weight: 500;
 }

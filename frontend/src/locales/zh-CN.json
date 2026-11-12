@@ -31,6 +31,9 @@
     "itemUnit": "项",
     "noPermission": "暂无权限查看该内容",
     "clear": "清空",
+    "retry": "重试",
+    "pageErrorTitle": "页面渲染出错",
+    "pageErrorHint": "可点击左侧菜单切换到其他页面，其他功能不受影响",
     "total": "共 {total} 条",
     "page": "第 {page} 页",
     "pageSize": "每页 {size} 条",
@@ -102,7 +105,6 @@
     "ssoLogin": "SSO 登录",
     "ssoLoginFailed": "获取 SSO 授权失败",
     "rememberMe": "记住我",
-    "forgotPasswordHint": "忘记密码？请联系管理员重置",
     "capsLockOn": "大写锁定已开启",
     "logout": "退出登录",
     "systemSlogan": "网络基础设施管理平台",
@@ -2507,7 +2509,7 @@
     "itContactPlaceholder": "请输入负责人姓名",
     "itContactMax": "IT负责人姓名不能超过 50 个字符",
     "itContactEmail": "IT负责人邮箱",
-    "itEmailPlaceholder": "如：it@example.com",
+    "itEmailPlaceholder": "如：it{'@'}example.com",
     "itEmailInvalid": "邮箱格式不正确"
   },
   "aiSettings": {

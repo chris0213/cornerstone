@@ -102,13 +102,15 @@ onUnmounted(() => {
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
-  color: var(--el-text-color-regular, #64748b);
+  color: var(--el-text-color-regular, var(--color-text-2));
   background-color: var(--el-fill-color-blank, transparent);
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .language-switcher:hover {
   background-color: var(--el-fill-color-light, #f1f5f9);
-  color: var(--el-text-color-primary, #1e293b);
+  color: var(--el-text-color-primary, var(--color-text-1));
 }
 
 .icon {
@@ -142,7 +144,7 @@ onUnmounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
   z-index: 1000;
-  border: 1px solid var(--el-border-color-light, #e2e8f0);
+  border: 1px solid var(--el-border-color-light, var(--color-line-1));
 }
 
 .dropdown-item {
@@ -153,17 +155,17 @@ onUnmounted(() => {
   border: none;
   cursor: pointer;
   font-size: 14px;
-  color: var(--el-text-color-regular, #64748b);
+  color: var(--el-text-color-regular, var(--color-text-2));
   transition: all 0.2s;
 }
 
 .dropdown-item:hover {
   background-color: var(--el-fill-color-light, #f1f5f9);
-  color: var(--el-text-color-primary, #1e293b);
+  color: var(--el-text-color-primary, var(--color-text-1));
 }
 
 .dropdown-item.is-active {
-  color: var(--el-color-primary, #3b82f6);
+  color: var(--el-color-primary, var(--color-accent));
   background-color: var(--el-color-primary-light-9, #f0f9ff);
 }
 
@@ -193,7 +195,7 @@ onUnmounted(() => {
 }
 
 :deep(.login-wrapper) .dropdown-item.is-active {
-  color: #3b82f6;
-  background: rgba(59, 130, 246, 0.15);
+  color: var(--color-accent);
+  background: rgba(37, 99, 235, 0.15);
 }
 </style>

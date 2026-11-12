@@ -454,7 +454,7 @@ onMounted(() => {
   height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  border: 4px solid #e4e7ed;
+  border: 4px solid var(--color-line-1);
 }
 
 .avatar-placeholder {
@@ -468,7 +468,7 @@ onMounted(() => {
   font-size: 48px;
   color: white;
   font-weight: bold;
-  border: 4px solid #e4e7ed;
+  border: 4px solid var(--color-line-1);
 }
 
 .avatar-upload-btn {
@@ -477,7 +477,7 @@ onMounted(() => {
   right: 5px;
   width: 40px;
   height: 40px;
-  background: #409eff;
+  background: var(--color-accent);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -489,12 +489,12 @@ onMounted(() => {
 }
 
 .avatar-upload-btn:hover {
-  background: #66b1ff;
+  background: var(--color-accent);
 }
 
 .avatar-upload-btn.loading {
   cursor: not-allowed;
-  background: #909399;
+  background: var(--color-text-3);
 }
 
 .upload-spinner {
@@ -551,19 +551,19 @@ onMounted(() => {
 }
 
 .strength-segment.empty {
-  background: #e4e7ed;
+  background: var(--color-line-1);
 }
 
 .strength-segment.weak {
-  background: #f56c6c;
+  background: var(--color-danger);
 }
 
 .strength-segment.medium {
-  background: #e6a23c;
+  background: var(--color-warning);
 }
 
 .strength-segment.strong {
-  background: #67c23a;
+  background: var(--color-success);
 }
 
 .strength-text {
@@ -584,7 +584,7 @@ onMounted(() => {
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-1);
   margin-bottom: 15px;
 }
 
@@ -609,8 +609,8 @@ onMounted(() => {
 }
 
 .avatar-option.selected {
-  border-color: #409eff;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
 }
 
 .avatar-option img {
@@ -621,12 +621,12 @@ onMounted(() => {
 
 .avatar-picker-divider {
   height: 1px;
-  background: #ebeef5;
+  background: var(--color-line-1);
   margin: 20px 0;
 }
 
 .upload-upload-area {
-  border: 2px dashed #dcdfe6;
+  border: 2px dashed var(--color-line-1);
   border-radius: 8px;
   padding: 30px;
   text-align: center;
@@ -635,25 +635,25 @@ onMounted(() => {
 }
 
 .upload-upload-area:hover {
-  border-color: #409eff;
-  background: #f5f7fa;
+  border-color: var(--color-accent);
+  background: var(--color-surface-1);
 }
 
 .upload-icon {
   font-size: 48px;
-  color: #c0c4cc;
+  color: var(--color-line-2);
   margin-bottom: 15px;
 }
 
 .upload-text {
   font-size: 14px;
-  color: #606266;
+  color: var(--color-text-2);
   margin-bottom: 8px;
 }
 
 .upload-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
 }
 
 .profile-login-history-table :deep(.cell) {

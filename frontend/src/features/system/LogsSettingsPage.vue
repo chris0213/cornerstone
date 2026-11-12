@@ -288,7 +288,7 @@ onMounted(() => {
 }
 
 .settings-card {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--color-line-1);
 }
 
 .card-header {
@@ -299,7 +299,7 @@ onMounted(() => {
 
 .header-icon {
   font-size: 20px;
-  color: #409eff;
+  color: var(--color-accent);
 }
 
 .header-title {
@@ -313,24 +313,24 @@ onMounted(() => {
 
 .unit {
   margin-left: 8px;
-  color: #606266;
+  color: var(--color-text-2);
 }
 
 .form-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-3);
   margin-top: 4px;
 }
 
 .card-footer {
   margin-top: 20px;
   padding-top: 20px;
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid var(--color-line-1);
 }
 
 .disabled-tip {
   margin-left: 8px;
-  color: #909399;
+  color: var(--color-text-3);
   cursor: help;
 }
 </style>

@@ -330,6 +330,6 @@ onMounted(() => {
 }
 
 .example-content strong {
-  color: #1890ff;
+  color: var(--color-accent);
 }
 </style>

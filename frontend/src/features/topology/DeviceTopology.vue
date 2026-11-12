@@ -1146,12 +1146,12 @@ onUnmounted(() => {
   --topo-text-primary: rgba(255, 255, 255, 0.92);
   --topo-text-secondary: rgba(255, 255, 255, 0.65);
   --topo-text-muted: rgba(255, 255, 255, 0.45);
-  --topo-accent: #409eff;
-  --topo-warning: #e6a23c;
-  --topo-success: #67c23a;
-  --topo-danger: #f56c6c;
-  --topo-unknown: #909399;
-  --topo-border: rgba(64, 158, 255, 0.2);
+  --topo-accent: var(--color-accent);
+  --topo-warning: var(--color-warning);
+  --topo-success: var(--color-success);
+  --topo-danger: var(--color-danger);
+  --topo-unknown: var(--color-text-3);
+  --topo-border: rgba(37, 99, 235, 0.2);
   --topo-node-bg: #162035;
   --topo-canvas-bg: #0a0e1a;
   --topo-edge-normal: #5b8db8;
@@ -1161,7 +1161,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #0a0e1a;
+  background: var(--color-ink-blue-950);
   position: relative;
 }
 
@@ -1182,7 +1182,7 @@ onUnmounted(() => {
 
 .search-input :deep(.el-input__wrapper) {
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(64, 158, 255, 0.3);
+  border: 1px solid rgba(37, 99, 235, 0.3);
 }
 
 .search-input :deep(.el-input__inner) {
@@ -1202,7 +1202,7 @@ onUnmounted(() => {
 
 .site-select :deep(.el-input__wrapper) {
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(64, 158, 255, 0.3);
+  border: 1px solid rgba(37, 99, 235, 0.3);
   box-shadow: none;
 }
 
@@ -1226,12 +1226,12 @@ onUnmounted(() => {
   height: 36px;
   padding: 0;
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(64, 158, 255, 0.2);
+  border: 1px solid rgba(37, 99, 235, 0.2);
   color: var(--topo-text-primary);
 }
 
 .toolbar-btn:hover {
-  background: rgba(64, 158, 255, 0.2);
+  background: rgba(37, 99, 235, 0.2);
   color: var(--topo-accent);
 }
 
@@ -1298,7 +1298,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(64, 158, 255, 0.2);
+  border: 1px solid rgba(37, 99, 235, 0.2);
   border-radius: 6px;
   padding: 4px 10px;
 }
@@ -1321,13 +1321,13 @@ onUnmounted(() => {
   height: 24px;
   padding: 0;
   font-size: 14px;
-  background: rgba(64, 158, 255, 0.15);
-  border-color: rgba(64, 158, 255, 0.3);
+  background: rgba(37, 99, 235, 0.15);
+  border-color: rgba(37, 99, 235, 0.3);
   color: #40A9FF;
 }
 
 .internet-control .el-button:hover {
-  background: rgba(64, 158, 255, 0.3);
+  background: rgba(37, 99, 235, 0.3);
 }
 
 .topology-main {
@@ -1341,7 +1341,7 @@ onUnmounted(() => {
   flex: 1;
   position: relative;
   background: 
-    radial-gradient(ellipse at 20% 30%, rgba(64, 158, 255, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 30%, rgba(37, 99, 235, 0.04) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 70%, rgba(100, 89, 234, 0.04) 0%, transparent 50%),
     #0a0e1a;
 }
@@ -1419,9 +1419,9 @@ onUnmounted(() => {
 }
 
 .node-selected .node-box {
-  stroke: #409eff;
+  stroke: var(--color-accent);
   stroke-width: 2.5;
-  filter: drop-shadow(0 0 8px rgba(64, 158, 255, 0.4));
+  filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.4));
 }
 
 .node-box {
@@ -1489,7 +1489,7 @@ onUnmounted(() => {
 .tooltip-panel {
   position: absolute;
   background: rgba(20, 30, 50, 0.96);
-  border: 1px solid rgba(64, 158, 255, 0.25);
+  border: 1px solid rgba(37, 99, 235, 0.25);
   border-radius: 8px;
   padding: 12px 16px;
   min-width: 220px;
@@ -1544,7 +1544,7 @@ onUnmounted(() => {
 
 .tooltip-hint {
   font-size: 11px;
-  color: rgba(64, 158, 255, 0.7);
+  color: rgba(37, 99, 235, 0.7);
   margin-top: 4px;
 }
 
@@ -1556,7 +1556,7 @@ onUnmounted(() => {
   bottom: 0;
   width: 260px;
   background: rgba(15, 23, 36, 0.98);
-  border-left: 1px solid rgba(64, 158, 255, 0.2);
+  border-left: 1px solid rgba(37, 99, 235, 0.2);
   display: flex;
   flex-direction: column;
   z-index: 100;
@@ -1568,7 +1568,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid rgba(64, 158, 255, 0.2);
+  border-bottom: 1px solid rgba(37, 99, 235, 0.2);
 }
 
 .panel-title {
@@ -1618,7 +1618,7 @@ onUnmounted(() => {
 
 .panel-footer {
   padding: 16px 20px;
-  border-top: 1px solid rgba(64, 158, 255, 0.2);
+  border-top: 1px solid rgba(37, 99, 235, 0.2);
 }
 
 .panel-footer .el-button {
@@ -1629,7 +1629,7 @@ onUnmounted(() => {
 .connection-section {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid rgba(64, 158, 255, 0.2);
+  border-top: 1px solid rgba(37, 99, 235, 0.2);
 }
 
 .connection-label {

@@ -50,9 +50,9 @@ watch(() => [props.rack?.id, props.devices.length], () => {
 
 // severity 用主题变量着色（与全局告警语义一致）
 const severityColor: Record<string, string> = {
-  critical: 'var(--el-color-danger, #f56c6c)',
-  warning: 'var(--el-color-warning, #e6a23c)',
-  info: 'var(--el-color-primary, #409eff)',
+  critical: 'var(--color-danger)',
+  warning: 'var(--color-warning)',
+  info: 'var(--color-accent)',
 }
 
 const realtimeEvents = computed<TimelineEvent[]>(() => {
@@ -147,19 +147,19 @@ const fmt = (iso: string) => {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary, var(--color-text-1));
 }
 .timeline-tabs { margin-bottom: 8px; }
 
 .evt-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary, var(--color-text-1));
   margin-bottom: 2px;
 }
 .evt-detail {
   font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
   line-height: 1.5;
   word-break: break-all;
 }
@@ -167,7 +167,7 @@ const fmt = (iso: string) => {
 .timeline-empty { padding: 16px 0 4px; text-align: center; }
 .rack-timeline { padding: 8px 0 4px; }
 :deep(.el-timeline-item__timestamp) {
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary, var(--color-text-3));
   font-size: 11px;
 }
 :deep(.el-timeline-item__wrapper) { padding-left: 16px; }

@@ -1,36 +1,138 @@
-/* 全局样式变量 */
+/* 全局样式变量 —— 基石 Cornerstone 统一色板
+ * 中性阶：偏冷石墨 / ink（机房、配线间、夜班值守）
+ * 强调色：单一信号蓝；语义色只表达成功 / 警告 / 危险
+ * 页面与组件只允许引用这里的变量，不再硬编码十六进制
+ */
 :root {
-  --text-primary: #1f2937;
-  --text-secondary: #6b7280;
-  --text-muted: #9ca3af;
-  --text-h: #111827;
-  
-  --bg-primary: #ffffff;
-  --bg-secondary: #f9fafb;
-  --bg-tertiary: #f3f4f6;
-  --bg-hover: #f3f4f6;
-  
-  --border-color: #e5e7eb;
-  --border-light: #f3f4f6;
-  
-  --accent-primary: #3b82f6;
-  --accent-secondary: #8b5cf6;
-  --accent-success: #10b981;
-  --accent-warning: #f59e0b;
-  --accent-danger: #ef4444;
-  --accent-info: #06b6d4;
-  
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  
+  /* ---- 中性阶：浅色界面 ---- */
+  --color-surface-0: #ffffff;          /* 卡片 */
+  --color-surface-1: #f5f7fa;          /* 页面底色 */
+  --color-surface-2: #eceff4;          /* 抬升面 / 输入底 */
+  --color-surface-3: #e2e7ee;          /* 选中底 */
+  --color-line-1: #dfe5ec;             /* 常规细线 */
+  --color-line-2: #cbd4df;             /* 强一档的细线 */
+
+  /* ---- 墨蓝深色阶：登录左侧与侧栏共用，与信号蓝同族、低饱和、无发光 ---- */
+  --color-ink-blue-950: #0d1524;       /* 底 */
+  --color-ink-blue-900: #121c2e;       /* 抬层 / 分组标题 / hover */
+  --color-ink-blue-800: #182339;       /* 再抬层 / 选中面 / 设备竖轨 */
+  --color-on-ink-blue: #e6edf9;
+  --color-on-ink-blue-muted: #9dabc2;
+  --color-hairline-ink-blue: rgba(178, 202, 238, 0.2);
+  --color-signal-ink-blue: rgba(228, 238, 252, 0.3);
+  --color-accent-on-dark: #6f9bf5;     /* 深底上的信号蓝，保持同一色相 */
+  --color-success-on-dark: #3aa877;    /* 深底上的成功色，保持同一色相 */
+  --color-danger-on-dark: #e2645b;     /* 深底上的危险色，保持同一色相 */
+
+  /* ---- 文本三档 ---- */
+  --color-text-1: #171d26;             /* 主要文本 */
+  --color-text-2: #56606f;             /* 次要文本 */
+  --color-text-3: #8a94a3;             /* 弱化 / 图标 */
+
+  /* ---- 单一强调色：信号蓝 ---- */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-soft: #e8efff;
+  --color-accent-ring: rgba(37, 99, 235, 0.22);
+
+  /* ---- 语义色（收敛、低饱和，文本在白底上可达 4.5:1） ---- */
+  --color-success: #1f8a5b;
+  --color-success-soft: #e9f5ef;
+  --color-warning: #b45309;
+  --color-warning-soft: #fbf1e4;
+  --color-danger: #b42318;
+  --color-danger-soft: #fbeceb;
+  --color-info: #64748b;
+  --color-info-soft: #eef1f5;
+
+  /* ---- 动效 ---- */
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-fast: 140ms;
+  --motion-base: 200ms;
+
+  /* ---- 兼容旧变量名（保持现有页面可平滑迁移） ---- */
+  --text-primary: var(--color-text-1);
+  --text-secondary: var(--color-text-2);
+  --text-muted: var(--color-text-3);
+  --text-h: var(--color-text-1);
+
+  --bg-primary: var(--color-surface-0);
+  --bg-secondary: var(--color-surface-1);
+  --bg-tertiary: var(--color-surface-2);
+  --bg-hover: var(--color-surface-2);
+
+  --border-color: var(--color-line-1);
+  --border-light: var(--color-surface-2);
+
+  --accent-primary: var(--color-accent);
+  --accent-secondary: var(--color-accent);
+  --accent-success: var(--color-success);
+  --accent-warning: var(--color-warning);
+  --accent-danger: var(--color-danger);
+  --accent-info: var(--color-info);
+
+  --shadow-sm: 0 1px 2px 0 rgba(15, 20, 27, 0.05);
+  --shadow-md: 0 4px 12px -2px rgba(15, 20, 27, 0.08);
+  --shadow-lg: 0 12px 32px -8px rgba(15, 20, 27, 0.14);
+
+  /* ---- Element Plus 主题接管 ---- */
+  --el-color-primary: var(--color-accent);
+  --el-color-primary-light-3: #5b86f2;
+  --el-color-primary-light-5: #97b0f7;
+  --el-color-primary-light-7: #c4d3fb;
+  --el-color-primary-light-8: #d9e4fd;
+  --el-color-primary-light-9: var(--color-accent-soft);
+  --el-color-primary-dark-2: var(--color-accent-hover);
+
+  --el-color-success: var(--color-success);
+  --el-color-success-light-3: #7fb99e;
+  --el-color-success-light-5: #a9cfbd;
+  --el-color-success-light-7: #cfe6dc;
+  --el-color-success-light-8: #dceee7;
+  --el-color-success-light-9: var(--color-success-soft);
+  --el-color-warning: var(--color-warning);
+  --el-color-warning-light-3: #cf9a63;
+  --el-color-warning-light-5: #ddbb98;
+  --el-color-warning-light-7: #eadccb;
+  --el-color-warning-light-8: #f0e7dd;
+  --el-color-warning-light-9: var(--color-warning-soft);
+  --el-color-danger: var(--color-danger);
+  --el-color-danger-light-3: #cf7a73;
+  --el-color-danger-light-5: #dda9a4;
+  --el-color-danger-light-7: #ebd2cf;
+  --el-color-danger-light-8: #f2e2e0;
+  --el-color-danger-light-9: var(--color-danger-soft);
+  --el-color-error: var(--color-danger);
+  --el-color-error-light-9: var(--color-danger-soft);
+  --el-color-info: var(--color-info);
+  --el-color-info-light-3: #9aa4b1;
+  --el-color-info-light-5: #b7bfc9;
+  --el-color-info-light-7: #d6dbe1;
+  --el-color-info-light-8: #e1e5ea;
+  --el-color-info-light-9: var(--color-info-soft);
+
+  --el-text-color-primary: var(--color-text-1);
+  --el-text-color-regular: var(--color-text-2);
+  --el-text-color-secondary: var(--color-text-3);
+  --el-text-color-placeholder: #9aa4b2;
+
+  --el-border-color: var(--color-line-1);
+  --el-border-color-light: var(--color-line-1);
+  --el-border-color-lighter: var(--color-line-1);
+  --el-border-color-extra-light: var(--color-surface-2);
+
+  --el-bg-color: var(--color-surface-0);
+  --el-bg-color-page: var(--color-surface-1);
+  --el-fill-color-light: var(--color-surface-2);
+  --el-fill-color-lighter: var(--color-surface-1);
+
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  
+
   font: 16px/1.5 var(--font-sans);
   color-scheme: light;
-  color: var(--text-primary);
-  background: var(--bg-primary);
+  color: var(--color-text-1);
+  background: var(--color-surface-1);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -40,7 +142,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: var(--bg-secondary);
+  background-color: var(--color-surface-1);
   overflow-x: hidden;
 }
 
@@ -52,12 +154,12 @@ body {
 /* 通用样式 */
 h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
-  color: var(--text-h);
+  color: var(--color-text-1);
   margin-top: 0;
 }
 
 a {
-  color: var(--accent-primary);
+  color: var(--color-accent);
   text-decoration: none;
 }
 
@@ -69,8 +171,8 @@ code {
   font-family: var(--font-mono);
   font-size: 0.875em;
   padding: 0.2em 0.4em;
-  background-color: var(--bg-tertiary);
-  border-radius: 0.25rem;
+  background-color: var(--color-surface-2);
+  border-radius: 4px;
 }
 
 /* 滚动条样式 */
@@ -80,14 +182,14 @@ code {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-secondary);
+  background: var(--color-surface-1);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--color-line-2);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--color-text-3);
 }

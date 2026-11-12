@@ -91,11 +91,11 @@ const getStatusColor = (ip: { address: string; data?: IPAddress }) => {
   const isOnline = ip.data.isOnline
   
   if (status === '已分配') {
-    return isOnline === true ? '#52c41a' : isOnline === false ? '#ff4d4f' : '#1890ff'
+    return isOnline === true ? 'var(--color-success)' : isOnline === false ? 'var(--color-danger)' : 'var(--color-accent)'
   }
-  if (status === '预留') return '#faad14'
+  if (status === '预留') return 'var(--color-warning)'
   
-  return '#f5f5f5'
+  return 'var(--color-surface-2)'
 }
 
 // 获取工具提示内容
@@ -197,23 +197,23 @@ watch(() => props.scanningCurrentIp, async (ip) => {
     <!-- 图例 -->
     <div class="matrix-legend">
       <div class="legend-item">
-        <span class="legend-color" style="background-color: #52c41a"></span>
+        <span class="legend-color" style="background-color: var(--color-success)"></span>
         <span class="legend-label">已分配(在线)</span>
       </div>
       <div class="legend-item">
-        <span class="legend-color" style="background-color: #1890ff"></span>
+        <span class="legend-color" style="background-color: var(--color-accent)"></span>
         <span class="legend-label">已分配(未知)</span>
       </div>
       <div class="legend-item">
-        <span class="legend-color" style="background-color: #ff4d4f"></span>
+        <span class="legend-color" style="background-color: var(--color-danger)"></span>
         <span class="legend-label">已分配(离线)</span>
       </div>
       <div class="legend-item">
-        <span class="legend-color" style="background-color: #faad14"></span>
+        <span class="legend-color" style="background-color: var(--color-warning)"></span>
         <span class="legend-label">预留</span>
       </div>
       <div class="legend-item">
-        <span class="legend-color" style="background-color: #f5f5f5"></span>
+        <span class="legend-color" style="background-color: var(--color-surface-2)"></span>
         <span class="legend-label">未分配</span>
       </div>
     </div>
@@ -235,7 +235,7 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 .matrix-scroll-large {
   max-height: 520px;
   overflow-y: auto;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--color-surface-1);
   border-radius: 6px;
   padding: 8px;
 }
@@ -246,7 +246,7 @@ watch(() => props.scanningCurrentIp, async (ip) => {
   color: rgba(0, 0, 0, 0.45);
   margin-top: 8px;
   padding-bottom: 2px;
-  border-bottom: 1px dashed #e8e8e8;
+  border-bottom: 1px dashed var(--color-line-1);
 }
 
 .matrix-row {
@@ -317,14 +317,14 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 .scan-progress-track {
   flex: 1;
   height: 8px;
-  background: #f0f0f0;
+  background: var(--color-surface-1);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .scan-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #69c0ff, #1890ff);
+  background: linear-gradient(90deg, #69c0ff, var(--color-accent));
   border-radius: 4px;
   transition: width 0.3s ease;
 }
@@ -332,13 +332,13 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 .scan-progress-text {
   font-size: 13px;
   font-weight: 600;
-  color: #1890ff;
+  color: var(--color-accent);
   white-space: nowrap;
 }
 
 /* 正在探测的格子：实心蓝色 + 大脉冲光环 */
 .ip-block-scanning {
-  background-color: #1890ff !important;
+  background-color: var(--color-accent) !important;
   animation: scan-pulse 0.8s ease-out infinite;
   z-index: 5;
 }
@@ -349,19 +349,19 @@ watch(() => props.scanningCurrentIp, async (ip) => {
 
 @keyframes scan-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.9);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.9);
   }
   70% {
-    box-shadow: 0 0 0 12px rgba(24, 144, 255, 0);
+    box-shadow: 0 0 0 12px rgba(37, 99, 235, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
   }
 }
 
 /* 扫描命中（在线）：亮绿实心闪烁 */
 .scan-hit {
-  background-color: #52c41a !important;
+  background-color: var(--color-success) !important;
   animation: hit-flash 0.6s ease-out;
 }
 
@@ -394,7 +394,7 @@ watch(() => props.scanningCurrentIp, async (ip) => {
   gap: 20px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-surface-1);
 }
 
 .legend-item {

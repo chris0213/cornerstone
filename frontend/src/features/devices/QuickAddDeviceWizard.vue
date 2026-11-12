@@ -402,7 +402,7 @@ loadData();
 }
 
 .connection-info {
-  background: #fafafa;
+  background: var(--color-surface-1);
   padding: 16px;
   border-radius: 8px;
 }
@@ -418,7 +418,7 @@ loadData();
 
 .device-info {
   margin-top: 16px;
-  background: #f5f5f5;
+  background: var(--color-surface-1);
   padding: 16px;
   border-radius: 8px;
 }
@@ -426,13 +426,13 @@ loadData();
 .device-info h4 {
   margin-bottom: 12px;
   font-size: 14px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .device-info pre {
   font-family: 'SF Mono', monospace;
   font-size: 12px;
-  color: #595959;
+  color: var(--color-text-2);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 200px;
@@ -448,18 +448,18 @@ loadData();
 
 .success-icon {
   font-size: 64px;
-  color: #67c23a;
+  color: var(--color-success);
   margin-bottom: 16px;
 }
 
 .complete-section h3 {
   font-size: 20px;
-  color: #262626;
+  color: var(--color-text-1);
   margin-bottom: 8px;
 }
 
 .complete-section p {
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-bottom: 24px;
 }
 
@@ -472,6 +472,6 @@ loadData();
   justify-content: flex-end;
   gap: 12px;
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-surface-1);
 }
 </style>

@@ -31,6 +31,9 @@
     "itemUnit": "",
     "noPermission": "No permission to view this content",
     "clear": "Clear",
+    "retry": "Retry",
+    "pageErrorTitle": "This page failed to render",
+    "pageErrorHint": "Use the sidebar to switch pages; other features are unaffected",
     "total": "Total {total} items",
     "page": "Page {page}",
     "pageSize": "{size} items per page",
@@ -89,7 +92,6 @@
     "ssoLogin": "SSO Login",
     "ssoLoginFailed": "Failed to get SSO authorization",
     "rememberMe": "Remember me",
-    "forgotPasswordHint": "Forgot password? Please contact your administrator to reset it",
     "capsLockOn": "Caps Lock is on",
     "logout": "Logout",
     "systemSlogan": "Network Infrastructure Management Platform",
@@ -2080,7 +2082,7 @@
     "itContactPlaceholder": "Enter contact name",
     "itContactMax": "IT contact name cannot exceed 50 characters",
     "itContactEmail": "IT Contact Email",
-    "itEmailPlaceholder": "e.g. it@example.com",
+    "itEmailPlaceholder": "e.g. it{'@'}example.com",
     "itEmailInvalid": "Invalid email format"
   },
   "aiSettings": {

@@ -163,7 +163,7 @@ async function submitQuery() {
 
 <style scoped>
 .ai-prediction-container {
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: linear-gradient(135deg, #0f172a 0%, var(--color-text-1) 100%);
   border-radius: 16px;
   padding: 24px;
   min-height: 420px;
@@ -280,19 +280,19 @@ async function submitQuery() {
 }
 
 .summary-icon {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent));
 }
 
 .trend-icon {
-  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  background: linear-gradient(135deg, var(--color-warning), var(--color-danger));
 }
 
 .root-cause-icon {
-  background: linear-gradient(135deg, #06b6d4, #14b8a6);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent));
 }
 
 .query-icon {
-  background: linear-gradient(135deg, #10b981, #3b82f6);
+  background: linear-gradient(135deg, var(--color-success), var(--color-accent));
 }
 
 .feature-card h3 {
@@ -405,7 +405,7 @@ async function submitQuery() {
 .result-title .el-icon {
   width: 24px;
   height: 24px;
-  color: #8b5cf6;
+  color: var(--color-accent);
 }
 
 .result-title h2 {
@@ -423,9 +423,9 @@ async function submitQuery() {
 }
 
 .confidence {
-  color: #10b981;
+  color: var(--color-success);
   padding: 4px 8px;
-  background: rgba(16, 185, 129, 0.1);
+  background: rgba(31, 138, 91, 0.1);
   border-radius: 4px;
 }
 
@@ -471,7 +471,7 @@ async function submitQuery() {
 .suggestion-card {
   display: flex;
   gap: 12px;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(239, 68, 68, 0.05));
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(180, 35, 24, 0.05));
   border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: 8px;
   padding: 16px;
@@ -480,12 +480,12 @@ async function submitQuery() {
 .suggestion-icon {
   width: 32px;
   height: 32px;
-  color: #f59e0b;
+  color: var(--color-warning);
   flex-shrink: 0;
 }
 
 .suggestion-content h4 {
-  color: #f59e0b;
+  color: var(--color-warning);
   font-size: 14px;
   font-weight: 600;
   margin: 0 0 8px 0;
@@ -510,7 +510,7 @@ async function submitQuery() {
 .loading-icon {
   width: 48px;
   height: 48px;
-  color: #8b5cf6;
+  color: var(--color-accent);
   animation: spin 1s linear infinite;
 }
 
@@ -523,9 +523,9 @@ async function submitQuery() {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--color-danger);
+  background: rgba(180, 35, 24, 0.1);
+  border: 1px solid rgba(180, 35, 24, 0.3);
   border-radius: 8px;
   padding: 12px 16px;
   font-size: 14px;

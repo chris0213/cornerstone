@@ -2,7 +2,7 @@
   <div class="forbidden-page">
     <div class="forbidden-container">
       <div class="forbidden-icon">
-        <el-icon :size="80" color="#f56c6c">
+        <el-icon :size="80" color="var(--color-danger)">
           <Lock />
         </el-icon>
       </div>
@@ -34,15 +34,16 @@ function goHome() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  background: var(--color-surface-1);
 }
 
 .forbidden-container {
   text-align: center;
   padding: 60px 40px;
-  background: white;
+  background: var(--color-surface-0);
+  border: 1px solid var(--color-line-1);
   border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 18px 40px -20px rgba(15, 20, 27, 0.18);
 }
 
 .forbidden-icon {
@@ -52,13 +53,13 @@ function goHome() {
 h1 {
   font-size: 48px;
   font-weight: bold;
-  color: #f56c6c;
+  color: var(--color-danger);
   margin: 0 0 10px 0;
 }
 
 p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-2);
   margin: 0 0 30px 0;
 }
 </style>

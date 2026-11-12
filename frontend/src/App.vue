@@ -6,6 +6,7 @@ import { useBrandStore } from './store/brand'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import GlobalSearch from './components/GlobalSearch.vue'
 import AIAssistant from './components/AIAssistant.vue'
+import RouteErrorBoundary from './components/RouteErrorBoundary.vue'
 import { useGlobalShortcut } from './lib/shortcuts'
 import api from './api/axios'
 import { ElMessage } from 'element-plus'
@@ -462,7 +463,9 @@ const mobileTabs = [
         </div>
       </header>
       <section class="enterprise-content">
-        <RouterView />
+        <RouteErrorBoundary>
+          <RouterView />
+        </RouteErrorBoundary>
       </section>
     </main>
 
@@ -492,37 +495,25 @@ const mobileTabs = [
 .enterprise-shell {
   display: flex;
   min-height: 100vh;
-  background: var(--bg-secondary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--color-surface-1);
+  font-family: var(--font-sans);
 }
 
 .enterprise-sidebar {
   width: 220px;
-  background: linear-gradient(180deg, #001529 0%, #001a33 100%);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--color-ink-blue-950);
+  color: var(--color-on-ink-blue-muted);
   height: 100vh;
   position: fixed;
   left: 0;
   top: 0;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width var(--motion-base) var(--motion-ease);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   z-index: 1000;
-  box-shadow: 
-    4px 0 20px rgba(0, 0, 0, 0.3),
-    8px 0 40px rgba(0, 0, 0, 0.1);
-}
-
-.enterprise-sidebar::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(90deg, rgba(255,255,255,0.03) 0%, transparent 50%);
-  pointer-events: none;
+  border-right: 1px solid var(--color-hairline-ink-blue);
+  box-shadow: none;
 }
 
 .enterprise-sidebar.collapsed {
@@ -549,8 +540,8 @@ const mobileTabs = [
   justify-content: space-between;
   padding: 0 24px;
   height: 64px;
-  background: #fff;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  background: var(--color-surface-0);
+  border-bottom: 1px solid var(--color-line-1);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -566,7 +557,7 @@ const mobileTabs = [
 
 .enterprise-eyebrow {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin: 0;
   font-weight: 500;
   text-transform: uppercase;
@@ -576,7 +567,7 @@ const mobileTabs = [
 .enterprise-page-title {
   font-size: 20px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
   margin: 0;
   min-height: 28px;
   white-space: nowrap;
@@ -588,7 +579,7 @@ const mobileTabs = [
   display: inline-block;
   width: 120px;
   height: 24px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--color-surface-2) 25%, var(--color-surface-3) 50%, var(--color-surface-2) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
   border-radius: 4px;
@@ -623,20 +614,22 @@ const mobileTabs = [
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
   border-radius: 8px;
-  background: #f8f8f8;
-  color: #8c8c8c;
+  background: var(--color-surface-1);
+  color: var(--color-text-3);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
   min-width: 220px;
 }
 
 .global-search-btn:hover {
-  border-color: #d9d9d9;
-  background: #f0f0f0;
-  color: #595959;
+  border-color: var(--color-line-2);
+  background: var(--color-surface-2);
+  color: var(--color-text-2);
 }
 
 .global-search-btn .el-icon {
@@ -650,12 +643,12 @@ const mobileTabs = [
 
 .search-btn-kbd {
   padding: 1px 6px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
   border-radius: 4px;
   font-size: 11px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: #bbb;
-  background: #fff;
+  font-family: var(--font-mono);
+  color: var(--color-text-3);
+  background: var(--color-surface-0);
 }
 
 .ai-assistant-btn {
@@ -663,19 +656,22 @@ const mobileTabs = [
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border: 1px solid #1890ff;
+  border: 1px solid var(--color-line-1);
   border-radius: 8px;
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
-  color: #fff;
+  background: var(--color-surface-1);
+  color: var(--color-text-2);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
   flex-shrink: 0;
 }
 
 .ai-assistant-btn:hover {
-  box-shadow: 0 4px 14px rgba(24, 144, 255, 0.35);
-  transform: translateY(-1px);
+  border-color: var(--color-line-2);
+  background: var(--color-surface-2);
+  color: var(--color-text-1);
 }
 
 .ai-assistant-btn .el-icon {
@@ -698,14 +694,14 @@ const mobileTabs = [
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #262626;
+  color: var(--color-text-1);
   text-decoration: none;
   font-size: 14px;
-  transition: color 0.2s;
+  transition: color var(--motion-fast) var(--motion-ease);
 }
 
 .user-profile-link:hover {
-  color: #1890ff;
+  color: var(--color-accent);
   text-decoration: none;
 }
 
@@ -727,7 +723,7 @@ const mobileTabs = [
   justify-content: center;
   height: 64px;
   padding: 0 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid var(--color-hairline-ink-blue);
   position: relative;
   gap: 12px;
 }
@@ -740,11 +736,12 @@ const mobileTabs = [
 .sidebar-toggle {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-on-ink-blue-muted);
   cursor: pointer;
   padding: 6px;
   border-radius: 4px;
-  transition: all 0.15s ease;
+  transition: background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
   width: 100%;
   display: flex;
   justify-content: center;
@@ -753,39 +750,21 @@ const mobileTabs = [
 
 
 .sidebar-toggle:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
+  background: var(--color-ink-blue-800);
+  color: var(--color-on-ink-blue);
 }
 
 .enterprise-brand-mark {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+  background: var(--color-ink-blue-800);
+  border: 1px solid var(--color-hairline-ink-blue);
   display: grid;
   place-items: center;
-  color: white;
-  font-weight: 700;
+  color: var(--color-on-ink-blue);
+  font-weight: 500;
   font-size: 18px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 16px rgba(24, 144, 255, 0.3);
-}
-
-.enterprise-brand-mark.loading {
-  background: rgba(24, 144, 255, 0.2);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-.enterprise-brand-mark:hover {
-  transform: scale(1.05) rotate(2deg);
-  box-shadow: 
-    0 8px 32px rgba(24, 144, 255, 0.4),
-    0 0 20px rgba(24, 144, 255, 0.2);
 }
 
 .enterprise-brand-logo {
@@ -793,7 +772,7 @@ const mobileTabs = [
   height: 36px;
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-ink-blue-800);
 }
 
 .brand-logo-image {
@@ -811,12 +790,12 @@ const mobileTabs = [
 .enterprise-brand-text strong {
   font-size: 15px;
   font-weight: 600;
-  color: white;
+  color: var(--color-on-ink-blue);
 }
 
 .enterprise-brand-text span {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--color-on-ink-blue-muted);
 }
 
 .enterprise-nav {
@@ -827,7 +806,7 @@ const mobileTabs = [
 
 .sidebar-footer {
   padding: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--color-hairline-ink-blue);
 }
 
 .enterprise-nav-group {
@@ -836,8 +815,11 @@ const mobileTabs = [
 
 .enterprise-nav-group-title {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
-  padding: 8px 16px 4px;
+  color: var(--color-on-ink-blue-muted);
+  background: var(--color-ink-blue-900);
+  padding: 6px 12px;
+  margin: 0 0 4px;
+  border-radius: 4px;
   font-weight: 500;
   letter-spacing: 0.5px;
 }
@@ -853,25 +835,22 @@ const mobileTabs = [
   gap: 10px;
   padding: 10px 16px;
   border-radius: 6px;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-on-ink-blue-muted);
   text-decoration: none;
   font-size: 14px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
   position: relative;
-  transform-origin: left center;
 }
 
 .enterprise-nav-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: white;
-  transform: translateX(4px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  background: var(--color-ink-blue-900);
+  color: var(--color-on-ink-blue);
 }
 
 .enterprise-nav-item.active {
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
-  color: white;
-  box-shadow: 0 4px 16px rgba(24, 144, 255, 0.3);
+  background: var(--color-ink-blue-800);
+  color: var(--color-on-ink-blue);
 }
 
 .enterprise-nav-item.active::before {
@@ -880,9 +859,9 @@ const mobileTabs = [
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  width: 3px;
+  width: 2px;
   height: 20px;
-  background: white;
+  background: var(--color-accent-on-dark);
   border-radius: 0 2px 2px 0;
 }
 
@@ -891,16 +870,15 @@ const mobileTabs = [
   width: 20px;
   height: 20px;
   line-height: 20px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color var(--motion-fast) var(--motion-ease);
 }
 
 .enterprise-nav-item:hover .el-icon {
-  transform: scale(1.1);
-  filter: drop-shadow(0 0 8px rgba(24, 144, 255, 0.5));
+  color: var(--color-on-ink-blue);
 }
 
 .enterprise-nav-item.active .el-icon {
-  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.6));
+  color: var(--color-accent-on-dark);
 }
 
 .enterprise-nav-item.has-children {
@@ -918,7 +896,7 @@ const mobileTabs = [
 
 .enterprise-nav-submenu {
   padding-left: 0;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-ink-blue-900);
   border-radius: 0 0 6px 6px;
   overflow: hidden;
 }
@@ -975,11 +953,11 @@ const mobileTabs = [
   position: fixed;
   left: 64px;
   z-index: 2000;
-  background: #fff;
-  color: #262626;
-  border: 1px solid #e5e7eb;
+  background: var(--color-surface-0);
+  color: var(--color-text-1);
+  border: 1px solid var(--color-line-1);
   border-radius: 6px;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
   padding: 8px 12px;
   font-size: 13px;
   white-space: nowrap;
@@ -994,10 +972,10 @@ const mobileTabs = [
 
 .tooltip-title {
   font-size: 12px;
-  font-weight: 600;
-  color: #8c8c8c;
+  font-weight: 500;
+  color: var(--color-text-3);
   padding: 4px 8px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-line-1);
   margin-bottom: 4px;
 }
 
@@ -1011,24 +989,28 @@ const mobileTabs = [
   display: block;
   padding: 6px 8px;
   border-radius: 4px;
-  color: #262626;
+  color: var(--color-text-1);
   text-decoration: none;
   font-size: 13px;
-  transition: background 0.15s ease;
+  transition: background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
 }
 
 .tooltip-subitem:hover {
-  background: #f0f7ff;
-  color: #1890ff;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
   text-decoration: none;
 }
 
-/* P0-3c: 登录页语言切换器定位——之前模板引用 .global-language-switcher 但无定义 */
+/* P0-3c: 登录页语言切换器定位——固定右上并留安全边距，避免被卡片/屏幕边缘裁切 */
 .global-language-switcher {
   position: fixed;
-  top: 16px;
-  right: 24px;
-  z-index: 1000;
+  top: max(18px, env(safe-area-inset-top));
+  right: max(28px, env(safe-area-inset-right));
+  z-index: 2000;
+  /* 兜底：无论窗口多窄都不越出视口右边界 */
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
 }
 
 /* #12b 移动端适配：<768px 侧边栏可叠加展开/收起，顶栏加汉堡按钮 */
@@ -1036,7 +1018,7 @@ const mobileTabs = [
   display: none;
   background: none;
   border: none;
-  color: var(--text-primary, #262626);
+  color: var(--color-text-1);
   cursor: pointer;
   padding: 6px;
   border-radius: 6px;
@@ -1046,7 +1028,7 @@ const mobileTabs = [
 }
 
 .mobile-menu-btn:hover {
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--color-surface-1);
 }
 
 @media (max-width: 768px) {
@@ -1060,7 +1042,7 @@ const mobileTabs = [
   /* 移动端：只有手动展开时才显示 */
   .enterprise-sidebar.mobile-expanded {
     left: 0;
-    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.25);
     z-index: 1500;
   }
 
@@ -1149,8 +1131,8 @@ const mobileTabs = [
   bottom: 0;
   left: 0;
   right: 0;
-  background: #fff;
-  border-top: 1px solid #e4e7ed;
+  background: var(--color-surface-0);
+  border-top: 1px solid var(--color-line-1);
   padding: 8px 0;
   padding-bottom: calc(8px + env(safe-area-inset-bottom));
   z-index: 1000;
@@ -1163,9 +1145,9 @@ const mobileTabs = [
   align-items: center;
   justify-content: center;
   padding: 6px 12px;
-  color: #909399;
+  color: var(--color-text-3);
   text-decoration: none;
-  transition: all 0.2s;
+  transition: color var(--motion-fast) var(--motion-ease);
   font-size: 12px;
 }
 
@@ -1175,11 +1157,11 @@ const mobileTabs = [
 }
 
 .mobile-tab-item.active {
-  color: #409eff;
+  color: var(--color-accent);
 }
 
 .mobile-tab-item:hover {
-  color: #66b1ff;
+  color: var(--color-accent);
 }
 
 @media (max-width: 768px) {

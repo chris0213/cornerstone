@@ -241,12 +241,12 @@ onMounted(() => {
 }
 
 .status-desc {
-  color: var(--text-secondary, #909399);
+  color: var(--text-secondary, var(--color-text-3));
   font-size: 13px;
 }
 
 .status-warning {
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--color-warning));
   font-size: 13px;
   font-weight: 600;
 }
@@ -258,11 +258,11 @@ onMounted(() => {
   margin-bottom: 16px;
   padding: 10px 14px;
   border-radius: 6px;
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--bg-secondary, var(--color-surface-1));
 }
 
 .my-ip-label {
-  color: var(--text-secondary, #909399);
+  color: var(--text-secondary, var(--color-text-3));
   font-size: 13px;
 }
 
@@ -270,7 +270,7 @@ onMounted(() => {
   font-family: monospace;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #303133);
+  color: var(--text-primary, var(--color-text-1));
 }
 
 .helper-text {
@@ -296,7 +296,7 @@ onMounted(() => {
 }
 
 .preview-reason {
-  color: var(--text-secondary, #909399);
+  color: var(--text-secondary, var(--color-text-3));
   font-size: 13px;
 }
 </style>

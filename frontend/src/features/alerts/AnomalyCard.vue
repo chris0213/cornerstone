@@ -91,7 +91,7 @@ function iconFor(a: Anomaly) {
   align-items: flex-start;
   gap: 16px;
   padding: 20px;
-  background: linear-gradient(135deg, #fffbe6 0%, #fff7e6 100%);
+  background: linear-gradient(135deg, var(--color-warning-soft) 0%, var(--color-warning-soft) 100%);
   border-radius: 12px;
   border: 1px solid #ffe58f;
   transition: all 0.2s ease;
@@ -102,7 +102,7 @@ function iconFor(a: Anomaly) {
 }
 
 .anomaly-item.anomaly-danger {
-  background: linear-gradient(135deg, #fff2f0 0%, #fff0f0 100%);
+  background: linear-gradient(135deg, var(--color-danger-soft) 0%, #fff0f0 100%);
   border-color: #ffccc7;
 }
 
@@ -115,12 +115,12 @@ function iconFor(a: Anomaly) {
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  color: #faad14;
+  color: var(--color-warning);
   flex-shrink: 0;
 }
 
 .anomaly-danger .anomaly-icon {
-  color: #ff4d4f;
+  color: var(--color-danger);
 }
 
 .anomaly-content {
@@ -138,12 +138,12 @@ function iconFor(a: Anomaly) {
 .anomaly-title {
   font-size: 15px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .anomaly-description {
   font-size: 14px;
-  color: #595959;
+  color: var(--color-text-2);
   margin-bottom: 12px;
   line-height: 1.5;
 }
@@ -159,11 +159,11 @@ function iconFor(a: Anomaly) {
 }
 
 .metric-label {
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
 .metric-value {
-  color: #262626;
+  color: var(--color-text-1);
   font-weight: 500;
 }
 
@@ -172,15 +172,15 @@ function iconFor(a: Anomaly) {
   align-items: flex-start;
   gap: 6px;
   font-size: 13px;
-  color: #52c41a;
+  color: var(--color-success);
   padding: 10px 14px;
-  background: #f6ffed;
+  background: var(--color-success-soft);
   border-radius: 6px;
   margin-bottom: 12px;
 }
 
 .anomaly-suggestion .el-icon {
-  color: #52c41a;
+  color: var(--color-success);
   font-size: 14px;
   margin-top: 1px;
 }
@@ -192,7 +192,7 @@ function iconFor(a: Anomaly) {
 
 .anomaly-detected-at {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .anomaly-action {

@@ -34,10 +34,10 @@ const { t } = useI18n()
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: var(--text-primary, #303133);
+  color: var(--text-primary, var(--color-text-1));
 }
 
 .card-title .el-icon {
-  color: var(--accent-primary, #409eff);
+  color: var(--accent-primary, var(--color-accent));
 }
 </style>

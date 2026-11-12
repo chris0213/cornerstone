@@ -206,10 +206,10 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  background: #f6ffed;
+  background: var(--color-success-soft);
   border-radius: 8px;
   margin-bottom: 16px;
-  color: #52c41a;
+  color: var(--color-success);
   font-weight: 500;
 }
 
@@ -225,7 +225,7 @@ onUnmounted(() => {
 
 .progress-text {
   font-weight: 600;
-  color: #1890ff;
+  color: var(--color-accent);
 }
 
 .progress-stats {
@@ -237,7 +237,7 @@ onUnmounted(() => {
 }
 
 .online-count {
-  color: #52c41a;
+  color: var(--color-success);
   font-weight: 500;
 }
 
@@ -246,7 +246,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
-  background: #e6f7ff;
+  background: var(--color-accent-soft);
   border-radius: 8px;
   margin-bottom: 16px;
   font-size: 13px;
@@ -254,8 +254,8 @@ onUnmounted(() => {
 
 .current-ip code {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  color: #1890ff;
-  background: rgba(24, 144, 255, 0.1);
+  color: var(--color-accent);
+  background: rgba(37, 99, 235, 0.1);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -281,7 +281,7 @@ onUnmounted(() => {
 .results-list {
   max-height: 160px;
   overflow-y: auto;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--color-surface-1);
   border-radius: 8px;
   padding: 8px;
 }
@@ -293,7 +293,7 @@ onUnmounted(() => {
   padding: 6px 10px;
   border-radius: 4px;
   margin-bottom: 4px;
-  background: #fafafa;
+  background: var(--color-surface-1);
 }
 
 .result-item:last-child {
@@ -305,11 +305,11 @@ onUnmounted(() => {
 }
 
 .result-icon.online {
-  color: #52c41a;
+  color: var(--color-success);
 }
 
 .result-icon.offline {
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .result-ip {
@@ -321,7 +321,7 @@ onUnmounted(() => {
 .result-method {
   font-size: 11px;
   color: #999;
-  background: #f0f0f0;
+  background: var(--color-surface-1);
   padding: 2px 6px;
   border-radius: 4px;
 }

@@ -191,11 +191,11 @@ function handleClose() {
 
 .result-section h4 {
   margin-bottom: 16px;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .result-section h5 {
   margin-bottom: 12px;
-  color: #595959;
+  color: var(--color-text-2);
 }
 </style>

@@ -609,7 +609,7 @@ onMounted(() => {
 
 .overview-card-label {
   font-size: 13px;
-  /* WCAG AA：--el-text-color-regular (#606266) 对白底约 5.9:1 */
+  /* WCAG AA：--el-text-color-regular (var(--color-text-2)) 对白底约 5.9:1 */
   color: var(--el-text-color-regular);
   margin-bottom: 6px;
 }
@@ -624,7 +624,7 @@ onMounted(() => {
 
 .overview-card-trend {
   font-size: 12px;
-  /* AA(大文字外)：--el-text-color-secondary (#909399) 对白底约 3.4:1，正文尺寸下加深到 regular */
+  /* AA(大文字外)：--el-text-color-secondary (var(--color-text-3)) 对白底约 3.4:1，正文尺寸下加深到 regular */
   color: var(--el-text-color-secondary);
 }
 

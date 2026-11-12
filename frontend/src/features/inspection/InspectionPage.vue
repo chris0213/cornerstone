@@ -841,10 +841,10 @@ onMounted(() => {
 }
 
 .overview-card {
-  background: #fff;
+  background: var(--color-surface-0);
   border-radius: 8px;
   padding: 20px;
-  border-left: 3px solid #8c8c8c;
+  border-left: 3px solid var(--color-line-2);
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
@@ -856,25 +856,25 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.overview-card-success { border-left-color: #52c41a; }
-.overview-card-warning { border-left-color: #faad14; }
-.overview-card-purple { border-left-color: #722ed1; }
+.overview-card-success { border-left-color: var(--color-success); }
+.overview-card-warning { border-left-color: var(--color-warning); }
+.overview-card-purple { border-left-color: var(--color-line-2); }
 
 .overview-card-icon {
   width: 48px;
   height: 48px;
   border-radius: 8px;
-  background: #f5f5f5;
+  background: var(--color-surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
 }
 
-.overview-card-success .overview-card-icon { background: #f6ffed; color: #52c41a; }
-.overview-card-warning .overview-card-icon { background: #fff7e6; color: #faad14; }
-.overview-card-purple .overview-card-icon { background: #f9f0ff; color: #722ed1; }
+.overview-card-success .overview-card-icon { background: var(--color-success-soft); color: var(--color-success); }
+.overview-card-warning .overview-card-icon { background: var(--color-warning-soft); color: var(--color-warning); }
+.overview-card-purple .overview-card-icon { background: var(--color-surface-2); color: var(--color-text-2); }
 
 .overview-card-content {
   flex: 1;
@@ -882,21 +882,21 @@ onMounted(() => {
 
 .overview-card-label {
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--color-text-3);
   margin-bottom: 6px;
 }
 
 .overview-card-value {
   font-size: 28px;
   font-weight: 700;
-  color: #262626;
+  color: var(--color-text-1);
   line-height: 1.2;
   margin-bottom: 4px;
 }
 
 .overview-card-trend {
   font-size: 12px;
-  color: #bfbfbf;
+  color: var(--color-line-2);
 }
 
 .table-card {
@@ -908,14 +908,14 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
   font-size: 15px;
 }
 
 .card-time {
   margin-left: auto;
   font-size: 14px;
-  color: #9ca3af;
+  color: var(--color-text-3);
   font-weight: normal;
 }
 
@@ -936,19 +936,19 @@ onMounted(() => {
 
 .overview-label {
   font-size: 14px;
-  color: #6b7280;
+  color: var(--color-text-3);
 }
 
 .overview-value {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--color-text-1);
 }
 
-.overview-value.success { color: #10b981; }
-.overview-value.warning { color: #f59e0b; }
-.overview-value.danger { color: #ef4444; }
-.overview-value.info { color: #3b82f6; }
+.overview-value.success { color: var(--color-success); }
+.overview-value.warning { color: var(--color-warning); }
+.overview-value.danger { color: var(--color-danger); }
+.overview-value.info { color: var(--color-accent); }
 
 .tab-content {
   padding-top: 16px;
@@ -971,11 +971,11 @@ onMounted(() => {
 }
 
 .smart-categories-section {
-  background: #fafafa;
+  background: var(--color-surface-1);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-line-1);
 }
 
 .section-header {
@@ -1001,7 +1001,7 @@ onMounted(() => {
   padding: 8px 16px;
   border-radius: 20px;
   background: #fff;
-  border: 2px solid #e8e8e8;
+  border: 2px solid var(--color-line-1);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 14px;

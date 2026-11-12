@@ -1276,7 +1276,7 @@ onMounted(() => {
 .kb-theme-dark :deep(code),
 .kb-theme-dark :deep(pre) {
   background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+  color: var(--color-line-1);
 }
 
 .editor-textarea :deep(.el-textarea__inner) {

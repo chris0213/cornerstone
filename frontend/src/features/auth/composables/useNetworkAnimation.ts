@@ -1,263 +1,258 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 
-type AnimationMode = 'default' | 'username' | 'password' | 'captcha' | 'login-click' | 'login-loading' | 'login-success' | 'login-fail'
+type AnimationMode =
+  | 'default'
+  | 'username'
+  | 'password'
+  | 'captcha'
+  | 'login-click'
+  | 'login-loading'
+  | 'login-success'
+  | 'login-fail'
 
-interface NetworkNode {
+export interface StarNode {
   id: number
+  /** 百分比坐标（0-100），相对插画区域 */
   x: number
   y: number
-  vx: number
-  vy: number
   radius: number
-  color: string
   opacity: number
+  accent: boolean
+  /** 构图锚点：更大更亮，带光晕 */
+  anchor: boolean
+  /** 闪烁节奏，让星点不同步 */
+  delay: number
+  duration: number
   pulse: boolean
 }
 
-interface NetworkLink {
+export interface StarLink {
   from: number
   to: number
   opacity: number
 }
 
-interface DataPacket {
-  id: number
-  linkIndex: number
-  progress: number
-  color: string
+/** 固定种子，保证每次刷新构图一致 */
+function mulberry32(seed: number) {
+  let t = seed
+  return () => {
+    t += 0x6d2b79f5
+    let r = Math.imul(t ^ (t >>> 15), 1 | t)
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296
+  }
 }
 
-const NODE_COUNT = 32
-const ANIMATION_WIDTH = 600
-const ANIMATION_HEIGHT = 800
-const COLORS = ['#3b82f6', '#6366f1', '#8b5cf6', '#0ea5e9', '#22d3ee', '#14b8a6']
-const PACKET_INTERVAL = 400
-const NODE_SPAWN_DELAY = 1000
+const random = mulberry32(20261111)
+
+function gaussian() {
+  let u = 0
+  let v = 0
+  while (u === 0) u = random()
+  while (v === 0) v = random()
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+}
+
+/** 文字安全区：Logo 与标语两处椭圆区域不放星点 */
+function inTextSafeZone(x: number, y: number) {
+  const logo = ((x - 50) / 27) ** 2 + ((y - 23) / 9) ** 2 < 1
+  const slogan = ((x - 50) / 32) ** 2 + ((y - 61) / 10) ** 2 < 1
+  return logo || slogan
+}
+
+interface ClusterSpec {
+  cx: number
+  cy: number
+  spreadX: number
+  spreadY: number
+  count: number
+  minRadius: number
+  maxRadius: number
+  minOpacity: number
+  maxOpacity: number
+  accentRate: number
+}
+
+/**
+ * 三层构图：左中上主星座（视觉重心）→ 右下副星座（与卡片对角呼应）
+ * → 左下与四周星尘（疏密层次），非均匀铺满。
+ */
+const CLUSTERS: ClusterSpec[] = [
+  { cx: 33, cy: 30, spreadX: 12, spreadY: 10, count: 20, minRadius: 1.2, maxRadius: 3.2, minOpacity: 0.55, maxOpacity: 0.95, accentRate: 0.45 },
+  { cx: 63, cy: 66, spreadX: 11, spreadY: 9, count: 11, minRadius: 0.9, maxRadius: 2.2, minOpacity: 0.4, maxOpacity: 0.8, accentRate: 0.3 },
+  { cx: 18, cy: 63, spreadX: 9, spreadY: 11, count: 9, minRadius: 0.7, maxRadius: 1.7, minOpacity: 0.3, maxOpacity: 0.65, accentRate: 0.2 }
+]
+
+const DUST_COUNT = 30
+
+function buildNodes() {
+  const nodes: StarNode[] = []
+  const clusters: number[][] = []
+
+  const pushNode = (spec: {
+    x: number
+    y: number
+    radius: number
+    opacity: number
+    accent: boolean
+    anchor?: boolean
+  }) => {
+    nodes.push({
+      id: nodes.length,
+      x: Math.min(98, Math.max(2, spec.x)),
+      y: Math.min(98, Math.max(2, spec.y)),
+      radius: spec.radius,
+      opacity: spec.opacity,
+      accent: spec.accent,
+      anchor: spec.anchor ?? false,
+      delay: random() * 6,
+      duration: random() * 4 + 4,
+      pulse: false
+    })
+    return nodes.length - 1
+  }
+
+  CLUSTERS.forEach((cluster) => {
+    const indices: number[] = []
+    let attempts = 0
+    while (indices.length < cluster.count && attempts < cluster.count * 30) {
+      attempts++
+      const x = cluster.cx + gaussian() * cluster.spreadX
+      const y = cluster.cy + gaussian() * cluster.spreadY
+      if (x < 3 || x > 97 || y < 3 || y > 97 || inTextSafeZone(x, y)) continue
+
+      const weight = (indices.length + 1) / cluster.count
+      const radius =
+        cluster.minRadius + (cluster.maxRadius - cluster.minRadius) * (0.35 + 0.65 * weight) * (0.75 + random() * 0.5)
+      const anchor = indices.length < 2 && cluster.cx < 40
+      indices.push(
+        pushNode({
+          x,
+          y,
+          radius: Math.min(cluster.maxRadius + 0.4, radius) * (anchor ? 1.15 : 1),
+          opacity: cluster.minOpacity + (cluster.maxOpacity - cluster.minOpacity) * random(),
+          accent: random() < cluster.accentRate,
+          anchor
+        })
+      )
+    }
+    clusters.push(indices)
+  })
+
+  // 星尘：越靠近主焦点越密，向右下逐渐稀疏
+  let dust = 0
+  let guard = 0
+  while (dust < DUST_COUNT && guard < DUST_COUNT * 40) {
+    guard++
+    const x = random() * 96 + 2
+    const y = random() * 96 + 2
+    const focus = Math.hypot(x - 33, (y - 30) * 1.15)
+    // 距离主焦点越远，保留概率越低
+    if (random() > Math.max(0.12, 1 - focus / 95)) continue
+    if (inTextSafeZone(x, y)) continue
+    pushNode({
+      x,
+      y,
+      radius: 0.5 + random() * 0.9,
+      opacity: 0.2 + random() * 0.35,
+      accent: random() < 0.15
+    })
+    dust++
+  }
+
+  return { nodes, clusters }
+}
+
+function buildLinks(nodes: StarNode[], clusters: number[][]): StarLink[] {
+  const links: StarLink[] = []
+  const seen = new Set<string>()
+
+  const addLink = (from: number, to: number, opacity: number) => {
+    if (from === to) return
+    const key = from < to ? `${from}-${to}` : `${to}-${from}`
+    if (seen.has(key)) return
+    seen.add(key)
+    links.push({ from, to, opacity })
+  }
+
+  const connectWithin = (indices: number[], maxDistance: number, maxPerNode: number) => {
+    indices.forEach((index) => {
+      const node = nodes[index]
+      nodes
+        .filter((_, i) => indices.includes(i) && i !== index)
+        .map((other) => ({
+          index: nodes.indexOf(other),
+          distance: Math.hypot(other.x - node.x, other.y - node.y)
+        }))
+        .filter((item) => item.distance < maxDistance)
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, maxPerNode)
+        .forEach(({ index: otherIndex, distance }) => {
+          addLink(index, otherIndex, Math.max(0.08, 0.3 - distance / 110))
+        })
+    })
+  }
+
+  connectWithin(clusters[0], 26, 2)
+  connectWithin(clusters[1], 24, 2)
+  connectWithin(clusters[2], 22, 1)
+
+  // 斜向桥接：主星座 → 右下副星座/左下星尘，形成指向右侧卡片的对角走势
+  const primary = clusters[0]
+  const secondary = clusters[1]
+  const tertiary = clusters[2]
+  if (primary.length && secondary.length) {
+    addLink(primary[0], secondary[0], 0.22)
+    addLink(primary[1] ?? primary[0], secondary[secondary.length - 1], 0.16)
+  }
+  if (primary.length && tertiary.length) {
+    addLink(primary[0], tertiary[0], 0.14)
+  }
+
+  return links
+}
+
+const { nodes: initialNodes, clusters } = buildNodes()
+const nodes = ref<StarNode[]>(initialNodes)
+const links = ref<StarLink[]>(buildLinks(initialNodes, clusters))
+const animationMode = ref<AnimationMode>('default')
+const hasEntered = ref(false)
+const illustrationRef = ref<HTMLElement | null>(null)
+
+let pulseTimer: number | null = null
 
 export function useNetworkAnimation() {
-  const mouseX = ref(0)
-  const mouseY = ref(0)
-  const illustrationRect = ref<DOMRect | null>(null)
-  const illustrationRef = ref<HTMLElement | null>(null)
-  const animationMode = ref<AnimationMode>('default')
-  const hasEntered = ref(false)
-
-  const nodes = ref<NetworkNode[]>([])
-  const links = ref<NetworkLink[]>([])
-  const dataPackets = ref<DataPacket[]>([])
-
-  let packetId = 0
-  let packetInterval: number | null = null
-
-  const initNodes = () => {
-    nodes.value = []
-    links.value = []
-
-    for (let i = 0; i < NODE_COUNT; i++) {
-      nodes.value.push({
-        id: i,
-        x: Math.random() * 550 + 25,
-        y: Math.random() * 780 + 10,
-        vx: (Math.random() - 0.5) * 0.5,
-        vy: (Math.random() - 0.5) * 0.5,
-        radius: Math.random() * 5 + 3,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        opacity: Math.random() * 0.5 + 0.3,
-        pulse: false
-      })
-    }
-
-    for (let i = 0; i < NODE_COUNT; i++) {
-      const connections = Math.floor(Math.random() * 4) + 2
-      for (let j = 0; j < connections; j++) {
-        const target = Math.floor(Math.random() * NODE_COUNT)
-        if (
-          target !== i &&
-          !links.value.some(
-            l =>
-              (l.from === i && l.to === target) ||
-              (l.from === target && l.to === i)
-          )
-        ) {
-          links.value.push({
-            from: i,
-            to: target,
-            opacity: Math.random() * 0.3 + 0.1
-          })
-        }
-      }
-    }
-  }
-
-  const animate = () => {
-    const rect = illustrationRect.value
-    if (!rect) return
-
-    nodes.value.forEach(node => {
-      let dx = mouseX.value - (rect.left + node.x)
-      let dy = mouseY.value - (rect.top + node.y)
-      const dist = Math.sqrt(dx * dx + dy * dy)
-
-      if (dist < 200) {
-        const force = (200 - dist) / 200
-        dx /= dist
-        dy /= dist
-        node.vx -= dx * force * 0.08
-        node.vy -= dy * force * 0.08
-      }
-
-      if (animationMode.value === 'login-success') {
-        node.vx *= 0.95
-        node.vy *= 0.95
-      }
-
-      node.x += node.vx
-      node.y += node.vy
-
-      node.vx *= 0.98
-      node.vy *= 0.98
-
-      if (node.x < node.radius) {
-        node.x = node.radius
-        node.vx *= -0.6
-      }
-      if (node.x > ANIMATION_WIDTH - node.radius) {
-        node.x = ANIMATION_WIDTH - node.radius
-        node.vx *= -0.6
-      }
-      if (node.y < node.radius) {
-        node.y = node.radius
-        node.vy *= -0.6
-      }
-      if (node.y > ANIMATION_HEIGHT - node.radius) {
-        node.y = ANIMATION_HEIGHT - node.radius
-        node.vy *= -0.6
-      }
-    })
-
-    links.value.forEach(link => {
-      const from = nodes.value[link.from]
-      const to = nodes.value[link.to]
-      const dx = from.x - to.x
-      const dy = from.y - to.y
-      const dist = Math.sqrt(dx * dx + dy * dy)
-
-      if (dist < 150) {
-        link.opacity = ((150 - dist) / 150) * 0.4
-      } else {
-        link.opacity = 0
-      }
-    })
-
-    dataPackets.value.forEach((packet, index) => {
-      packet.progress += 0.015
-
-      if (packet.progress >= 1) {
-        dataPackets.value.splice(index, 1)
-      }
-    })
-
-    requestAnimationFrame(animate)
-  }
-
-  const spawnDataPacket = () => {
-    if (links.value.length === 0) return
-
-    const activeLinks = links.value.filter(l => l.opacity > 0.1)
-    if (activeLinks.length === 0) return
-
-    const linkIndex = activeLinks[Math.floor(Math.random() * activeLinks.length)]
-    const originalIndex = links.value.indexOf(linkIndex)
-
-    if (originalIndex === -1) return
-
-    const fromNode = nodes.value[linkIndex.from]
-    dataPackets.value.push({
-      id: packetId++,
-      linkIndex: originalIndex,
-      progress: 0,
-      color: fromNode.color
-    })
-  }
-
-  const handleMouseMove = (e: MouseEvent) => {
-    mouseX.value = e.clientX
-    mouseY.value = e.clientY
-  }
-
-  const updateIllustrationRect = () => {
-    if (illustrationRef.value) {
-      illustrationRect.value = illustrationRef.value.getBoundingClientRect()
-    }
-  }
-
   const setAnimationMode = (mode: AnimationMode) => {
     animationMode.value = mode
-
-    if (mode === 'login-success') {
-      nodes.value.forEach(node => {
-        node.pulse = true
-        node.opacity = 1
-      })
-      setTimeout(() => {
+    if (mode === 'login-success' || mode === 'login-fail') {
+      window.setTimeout(() => {
         animationMode.value = 'default'
-        nodes.value.forEach(node => {
-          node.pulse = false
-        })
-      }, 1000)
-    } else if (mode === 'login-fail') {
-      setTimeout(() => {
-        animationMode.value = 'default'
-      }, 800)
+      }, 900)
     }
   }
 
   const triggerNodePulse = () => {
-    const randomNode = nodes.value[Math.floor(Math.random() * nodes.value.length)]
-    randomNode.pulse = true
-    setTimeout(() => {
-      randomNode.pulse = false
-    }, 400)
+    if (nodes.value.length === 0) return
+    const node = nodes.value[Math.floor(Math.random() * nodes.value.length)]
+    node.pulse = true
+    if (pulseTimer) window.clearTimeout(pulseTimer)
+    pulseTimer = window.setTimeout(() => {
+      node.pulse = false
+    }, 450)
   }
 
-  const startAnimation = () => {
-    updateIllustrationRect()
-    initNodes()
-    animate()
-
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('resize', updateIllustrationRect)
-
-    setTimeout(() => {
-      hasEntered.value = true
-      packetInterval = window.setInterval(spawnDataPacket, PACKET_INTERVAL)
-    }, NODE_SPAWN_DELAY)
+  const markEntered = () => {
+    hasEntered.value = true
   }
-
-  const stopAnimation = () => {
-    window.removeEventListener('mousemove', handleMouseMove)
-    window.removeEventListener('resize', updateIllustrationRect)
-    if (packetInterval) {
-      clearInterval(packetInterval)
-    }
-  }
-
-  onMounted(() => {
-    startAnimation()
-  })
-
-  onUnmounted(() => {
-    stopAnimation()
-  })
 
   return {
     illustrationRef,
     nodes,
     links,
-    dataPackets,
     hasEntered,
     animationMode,
     setAnimationMode,
-    triggerNodePulse
+    triggerNodePulse,
+    markEntered
   }
 }

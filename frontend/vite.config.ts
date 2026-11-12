@@ -6,6 +6,12 @@ import svgLoader from 'vite-svg-loader'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
+  // 构建期版本标识：优先取环境变量，便于发布时写入 commit / 版本号；
+  // 可通过 APP_VERSION=$(git rev-parse --short HEAD) npm run build 注入
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.APP_VERSION || 'dev'),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')),
+  },
   // 仅生产构建移除 console.* 与 debugger（esbuild minify 复用此 transform 配置），
   // 防止错误信息与 token 泄漏到浏览器控制台；dev 模式保留便于调试
   esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},

@@ -146,7 +146,7 @@ function goToChanges() {
   gap: 6px;
   background: none;
   border: none;
-  color: #1890ff;
+  color: var(--color-accent);
   cursor: pointer;
   padding: 8px 0;
 }
@@ -172,7 +172,7 @@ function goToChanges() {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #262626;
+  color: var(--color-text-1);
 }
 
 .actions-list {
@@ -182,7 +182,7 @@ function goToChanges() {
 
 .cost-value {
   font-size: 18px;
-  color: #262626;
+  color: var(--color-text-1);
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 </style>
