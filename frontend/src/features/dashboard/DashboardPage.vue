@@ -33,12 +33,9 @@ function switchView(view: 'engineer' | 'manager') {
 
 <template>
   <div class="dashboard-wrap">
-    <!-- 页面标题行 -->
-    <div class="dashboard-header">
-      <h1 class="page-title">首页</h1>
-
-      <!-- 切换 Tab（仅 super_admin 可见） -->
-      <div v-if="showTabs" class="view-switcher">
+    <!-- 切换 Tab（仅 super_admin 可见）；页面标题由顶栏统一展示 -->
+    <div v-if="showTabs" class="dashboard-header">
+      <div class="view-switcher">
         <button
           class="switcher-btn"
           :class="{ active: activeView === 'engineer' }"
@@ -72,15 +69,8 @@ function switchView(view: 'engineer' | 'manager') {
 .dashboard-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 20px;
-}
-
-.page-title {
-  font-size: 20px;
-  font-weight: 500;
-  color: var(--color-text-1);
-  margin: 0;
 }
 
 .view-switcher {
