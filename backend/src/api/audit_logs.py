@@ -1,17 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert
+from sqlalchemy import select
 
 from ..database import get_db
-from ..models import AuditLog, Role
+from ..models import AuditLog
 from ..schemas import AuditLogResponse
-from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
 from datetime import datetime, timezone
 
-@router.get("/")
+@router.get("/", dependencies=[Depends(require_permission("logs:read"))])
 async def read_logs(
     page: PageParams = Depends(pagination()),
     user: str = None,
@@ -73,7 +73,7 @@ async def read_logs(
     
     return result
 
-@router.get("/{log_id}", response_model=AuditLogResponse)
+@router.get("/{log_id}", response_model=AuditLogResponse, dependencies=[Depends(require_permission("logs:read"))])
 async def read_log(
     log_id: int,
     db: AsyncSession = Depends(get_db),
@@ -85,14 +85,6 @@ async def read_log(
         raise HTTPException(status_code=404, detail="Log not found")
     return log
 
-@router.post("/", response_model=AuditLogResponse, status_code=status.HTTP_201_CREATED)
-async def create_log(
-    log: dict,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_superuser)
-):
-    """手动写入审计日志（仅超级管理员，防止任意登录用户伪造审计记录）"""
-    stmt = insert(AuditLog).values(**log).returning(AuditLog)
-    result = await db.execute(stmt)
-    await db.commit()
-    return result.scalar_one()
+
+# 说明：审计日志只允许服务端内部写入（各业务接口在完成操作后直接 insert AuditLog）。
+# 历史 POST /api/v1/logs/ 允许客户端（含超管）伪造审计记录，已移除。

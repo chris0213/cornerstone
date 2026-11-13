@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import async_session
 from ..models.setting import Setting
-from ..models.audit_log import AuditLog
 from ..models.ai_chat_log import AIChatLog
 from ..models.link_monitor import LinkMonitor
+from ..services.audit_archive_service import archive_and_delete_audit_logs, normalize_retention_days
 import json
 
 logger = logging.getLogger(__name__)
@@ -24,28 +24,31 @@ LOG_SETTINGS_KEY = "log_settings"
 LINK_MONITOR_RETENTION_DAYS = 30
 
 
-async def cleanup_expired_logs():
+async def cleanup_expired_logs(session_factory=None):
     """
     读取 log_retention_days 和 login_log_retention_days 配置
     删除 audit_logs 表中超出保留天数的记录，并删除 30 天前的 AI 聊天日志
     log_auto_cleanup=False 时跳过执行
     执行结果写入系统日志（不写 audit_logs，避免循环）
+
+    session_factory 仅用于测试注入，生产使用全局 async_session。
     """
-    async with async_session() as db:
+    factory = session_factory or async_session
+    async with factory() as db:
         try:
             # 获取日志保留设置
             result = await db.execute(select(Setting).filter(Setting.key == LOG_SETTINGS_KEY))
             setting = result.scalars().first()
             
-            log_retention_days = 90
+            log_retention_days = 180
             login_log_retention_days = 180
             log_auto_cleanup = True
             
             if setting:
                 try:
                     config = json.loads(setting.value)
-                    log_retention_days = config.get("log_retention_days", 90)
-                    login_log_retention_days = config.get("login_log_retention_days", 180)
+                    log_retention_days = normalize_retention_days(config.get("log_retention_days", 180))
+                    login_log_retention_days = normalize_retention_days(config.get("login_log_retention_days", 180))
                     log_auto_cleanup = config.get("log_auto_cleanup", True)
                 except json.JSONDecodeError:
                     pass
@@ -62,27 +65,14 @@ async def cleanup_expired_logs():
             login_cutoff = utc_now() - timedelta(days=login_log_retention_days)
             
             deleted_count = 0
-            
-            # 删除审计日志（登录日志除外）
-            audit_result = await db.execute(
-                delete(AuditLog).where(
-                    AuditLog.created_at < audit_cutoff,
-                    AuditLog.action != 'login',
-                    AuditLog.action != 'logout'
-                )
+
+            # 审计/登录日志：先归档 CSV，归档失败则不删除（异常向上抛出并回滚）
+            archive_result = await archive_and_delete_audit_logs(db, audit_cutoff, login_cutoff)
+            deleted_count += archive_result["deleted_audit"] + archive_result["deleted_login"]
+            logger.info(
+                f"归档并删除审计日志 {archive_result['deleted_audit']} 条、登录日志 "
+                f"{archive_result['deleted_login']} 条，归档文件: {archive_result['archives']}"
             )
-            deleted_count += audit_result.rowcount
-            logger.info(f"删除了 {audit_result.rowcount} 条过期审计日志")
-            
-            # 删除登录日志
-            login_result = await db.execute(
-                delete(AuditLog).where(
-                    AuditLog.created_at < login_cutoff,
-                    AuditLog.action.in_(['login', 'logout'])
-                )
-            )
-            deleted_count += login_result.rowcount
-            logger.info(f"删除了 {login_result.rowcount} 条过期登录日志")
 
             # 删除过期 AI 聊天日志（保留 30 天，与模型注释一致）
             ai_log_cutoff = utc_now() - timedelta(days=30)

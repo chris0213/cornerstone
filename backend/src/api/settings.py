@@ -16,6 +16,7 @@ from ..models.audit_log import AuditLog
 from ..models.alert import AlertNotification
 from ..config import settings as app_config
 from ..services.alert_service import AlertService
+from ..services.audit_archive_service import archive_and_delete_audit_logs, normalize_retention_days
 from ..api.dependencies import require_super_admin
 from ..utils.logger import get_logger
 
@@ -327,7 +328,7 @@ AI_PRIVACY_SETTINGS_KEY = "ai_privacy_settings"
 
 
 class LogSettingsRequest(BaseModel):
-    log_retention_days: int = 90
+    log_retention_days: int = 180
     login_log_retention_days: int = 180
     log_auto_cleanup: bool = True
     login_max_attempts: int = 5
@@ -753,7 +754,7 @@ async def get_log_settings(
     
     # 返回默认值
     return LogSettingsResponse(
-        log_retention_days=90,
+        log_retention_days=180,
         login_log_retention_days=180,
         log_auto_cleanup=True,
         login_max_attempts=5,
@@ -776,8 +777,8 @@ async def update_log_settings(
     """保存日志设置（仅 super_admin）"""
     # log_login_operations 不可修改，保持为 True
     config_dict = {
-        "log_retention_days": request.log_retention_days,
-        "login_log_retention_days": request.login_log_retention_days,
+        "log_retention_days": normalize_retention_days(request.log_retention_days),
+        "login_log_retention_days": normalize_retention_days(request.login_log_retention_days),
         "log_auto_cleanup": request.log_auto_cleanup,
         "login_max_attempts": request.login_max_attempts,
         "session_timeout_minutes": request.session_timeout_minutes,
@@ -820,14 +821,14 @@ async def cleanup_logs(
     result = await db.execute(select(Setting).filter(Setting.key == LOG_SETTINGS_KEY))
     setting = result.scalars().first()
     
-    log_retention_days = 90
+    log_retention_days = 180
     login_log_retention_days = 180
     
     if setting:
         try:
             config = json.loads(setting.value)
-            log_retention_days = config.get("log_retention_days", 90)
-            login_log_retention_days = config.get("login_log_retention_days", 180)
+            log_retention_days = normalize_retention_days(config.get("log_retention_days", 180))
+            login_log_retention_days = normalize_retention_days(config.get("login_log_retention_days", 180))
         except json.JSONDecodeError:
             pass
     
@@ -835,27 +836,15 @@ async def cleanup_logs(
     audit_cutoff = utc_now() - timedelta(days=log_retention_days)
     login_cutoff = utc_now() - timedelta(days=login_log_retention_days)
     
-    # 删除过期审计日志
-    deleted_count = 0
-    
-    # 删除审计日志（登录日志除外）
-    audit_result = await db.execute(
-        delete(AuditLog).where(
-            AuditLog.created_at < audit_cutoff,
-            AuditLog.action != 'login',
-            AuditLog.action != 'logout'
-        )
-    )
-    deleted_count += audit_result.rowcount
-    
-    # 删除登录日志
-    login_result = await db.execute(
-        delete(AuditLog).where(
-            AuditLog.created_at < login_cutoff,
-            AuditLog.action.in_(['login', 'logout'])
-        )
-    )
-    deleted_count += login_result.rowcount
+    # 先归档后删除；归档失败则中止，不删除任何审计记录
+    try:
+        archive_result = await archive_and_delete_audit_logs(db, audit_cutoff, login_cutoff)
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"审计日志归档失败，已中止删除: {exc}")
+        raise HTTPException(status_code=500, detail="审计日志归档失败，已中止删除，请检查归档目录权限与磁盘空间")
+    deleted_count = archive_result["deleted_audit"] + archive_result["deleted_login"]
+    archives = archive_result["archives"]
     
     await db.commit()
     
@@ -867,7 +856,7 @@ async def cleanup_logs(
         user=current_user.username,
         action='log_cleanup',
         resource='system',
-        detail=f"清理了 {deleted_count} 条过期日志（审计日志保留{log_retention_days}天，登录日志保留{login_log_retention_days}天）"
+        detail=f"归档并清理了 {deleted_count} 条过期日志（审计保留{log_retention_days}天，登录保留{login_log_retention_days}天），归档文件: {', '.join(archives) or '无'}"
     )
     db.add(cleanup_log)
     await db.commit()

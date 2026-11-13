@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     
     # 备份配置
     backup_dir: str = "/opt/cornerstone/backups"
+    # 审计日志归档目录（留空则使用 backup_dir/audit-logs）；归档失败会阻止删除
+    audit_archive_dir: str = ""
     
     # SSO配置
     sso: SSOSettings = SSOSettings()
