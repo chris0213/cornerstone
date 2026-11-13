@@ -32,11 +32,25 @@ async def scheduled_monitoring_task():
 
 
 async def scheduled_circuit_expire_task():
-    """定时执行的专线到期检查任务（每天凌晨1点执行）"""
+    """定时执行的专线到期检查任务（每天凌晨1点执行）
+
+    无租户上下文时读侧为系统级（全平台专线），写入的告警会落到默认租户，
+    造成租户串数据；参照 run_monitoring_task 按活跃租户逐个检查。
+    """
+    from src.tenant.bootstrap import DEFAULT_TENANT_ID
+    from src.tenant.context import tenant_scope
+    from src.tenant.query import get_active_tenant_ids
+
     logger.info(f"[{utc_now()}] Running scheduled circuit expire check...")
     async with async_session() as db:
-        await circuit_expire_service.check_expiring_circuits(db, days_before=30)
-        await db.commit()
+        try:
+            tenant_ids = await get_active_tenant_ids(db) or [DEFAULT_TENANT_ID]
+            for tenant_id in tenant_ids:
+                with tenant_scope(tenant_id):
+                    await circuit_expire_service.check_expiring_circuits(db, days_before=30)
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"[{utc_now()}] Circuit expire check error: {e}")
 
 
 async def scheduled_alert_escalation_task():

@@ -174,12 +174,17 @@ async def save_schedule(db: AsyncSession, config: dict) -> dict:
 async def generate_report(db: AsyncSession, year: int, month: int, generated_by: str) -> dict:
     """生成指定月份月报 PDF 并落库（手动端点与定时任务共用）
 
+    数据与品牌配置按当前租户上下文读取；存储路径带租户维度，
+    避免不同租户同名品牌 PDF 互相覆盖。
     同月份只保留最新一次：生成前删除旧记录与旧文件。
     失败抛 ReportError。
     """
+    from src.tenant.context import current_tenant_id
+
     data = await collect_report_data(year, month, db)
 
-    report_dir = REPORT_DIR / str(year)
+    tenant_part = str(current_tenant_id() or 1)
+    report_dir = REPORT_DIR / tenant_part / str(year)
     report_dir.mkdir(parents=True, exist_ok=True)
     filename = get_report_filename(data)
     output_path = str(report_dir / filename)
@@ -325,82 +330,88 @@ async def _send_chat_notifications(db: AsyncSession, config: dict, message: str)
 async def run_scheduled_report(db: AsyncSession) -> dict:
     """调度入口（每分钟调用）：到达配置时间则生成上月月报并按渠道推送
 
+    配置与通知 webhook 均为租户级数据：在系统级上下文读配置后，
+    按活跃租户逐个生成该租户自己的月报（读侧按上下文过滤），
+    避免无租户上下文时全平台数据落到默认租户、跨租户泄漏。
     返回执行结果 dict，便于日志与测试断言。
     """
-    config = await get_schedule(db)
-    if not config["enabled"]:
-        return {"action": "disabled"}
+    from src.tenant.bootstrap import DEFAULT_TENANT_ID
+    from src.tenant.context import system_scope, tenant_scope
+    from src.tenant.query import get_active_tenant_ids
 
-    now = datetime.now(BEIJING_TZ)
-    if (now.day, now.hour, now.minute) != (config["day"], config["hour"], config["minute"]):
-        return {"action": "not_due"}
+    with system_scope():
+        config = await get_schedule(db)
+        if not config["enabled"]:
+            return {"action": "disabled"}
+
+        now = datetime.now(BEIJING_TZ)
+        if (now.day, now.hour, now.minute) != (config["day"], config["hour"], config["minute"]):
+            return {"action": "not_due"}
+
+        tenant_ids = await get_active_tenant_ids(db) or [DEFAULT_TENANT_ID]
 
     # 报告月份 = 上个月
     year, month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
 
-    if await _has_report(db, year, month):
-        return {"action": "skipped", "reason": "already_exists", "year": year, "month": month}
+    generated: list[int] = []
+    for tenant_id in tenant_ids:
+        with tenant_scope(tenant_id):
+            if await _has_report(db, year, month):
+                continue
+            try:
+                result = await generate_report(db, year, month, generated_by="system_schedule")
+            except ReportError as e:
+                logger.error("定时月报生成失败（租户%s）%04d-%02d: %s", tenant_id, year, month, e)
+                continue
+            generated.append(tenant_id)
 
-    try:
-        result = await generate_report(db, year, month, generated_by="system_schedule")
-    except ReportError as e:
-        logger.error("定时月报生成失败 %04d-%02d: %s", year, month, e)
-        return {"action": "failed", "error": str(e)}
+            channels = config.get("channels") or []
+            # 邮件渠道（带 PDF 附件）；结果落 alert_notifications（record_id=None, channel='report:<ym>'）
+            if "email" in channels and config["email_to"]:
+                from src.models.alert import AlertNotification
+                from src.services.alert_service import AlertService  # 局部导入避免循环依赖
+                notification = AlertNotification(
+                    record_id=None,
+                    channel=f"report:{year}-{month:02d}:email",
+                    target=config["email_to"][:200],
+                    status="pending",
+                )
+                db.add(notification)
+                try:
+                    smtp_cfg = await AlertService._get_notification_config(db)
+                    _send_report_email(
+                        smtp_cfg,
+                        config["email_to"],
+                        f"{year}年{month}月运营月报",
+                        result["file_path"],
+                    )
+                    notification.status = "sent"
+                    notification.sent_at = utc_now()
+                except Exception as e:
+                    notification.status = "failed"
+                    notification.error_message = str(e)[:500]
+                    logger.warning("定时月报邮件发送失败（报告已生成）: %s", e)
 
-    channels = config.get("channels") or []
-    outcome = {"action": "generated", "year": year, "month": month,
-               "filename": result["filename"], "email_sent": False, "chat_sent": []}
-
-    # 邮件渠道（带 PDF 附件）；结果落 alert_notifications（record_id=None, channel='report:<ym>'）
-    if "email" in channels and config["email_to"]:
-        from src.models.alert import AlertNotification
-        from src.services.alert_service import AlertService  # 局部导入避免循环依赖
-        notification = AlertNotification(
-            record_id=None,
-            channel=f"report:{year}-{month:02d}:email",
-            target=config["email_to"][:200],
-            status="pending",
-        )
-        db.add(notification)
-        try:
-            smtp_cfg = await AlertService._get_notification_config(db)
-            _send_report_email(
-                smtp_cfg,
-                config["email_to"],
-                f"{year}年{month}月运营月报",
-                result["file_path"],
+            # 聊天软件渠道（摘要 + 下载链接文本消息）
+            chat_result = await _send_chat_notifications(
+                db, config, _build_chat_message(config, year, month, result.get("summary", {}))
             )
-            notification.status = "sent"
-            notification.sent_at = utc_now()
-            outcome["email_sent"] = True
-        except Exception as e:
-            notification.status = "failed"
-            notification.error_message = str(e)[:500]
-            logger.warning("定时月报邮件发送失败（报告已生成）: %s", e)
-            outcome["email_error"] = str(e)
+            # 聊天渠道结果落库
+            from src.models.alert import AlertNotification
+            for ch in (chat_result["sent"] + list(chat_result["failed"].keys())):
+                notification = AlertNotification(
+                    record_id=None,
+                    channel=f"report:{year}-{month:02d}:{ch}",
+                    target="",
+                    status="sent" if ch in chat_result["sent"] else "failed",
+                    error_message=chat_result["failed"].get(ch, None) and chat_result["failed"][ch][:500],
+                    sent_at=utc_now() if ch in chat_result["sent"] else None,
+                )
+                db.add(notification)
+            await db.commit()
 
-    # 聊天软件渠道（摘要 + 下载链接文本消息）
-    chat_result = await _send_chat_notifications(
-        db, config, _build_chat_message(config, year, month, result.get("summary", {}))
-    )
-    outcome["chat_sent"] = chat_result["sent"]
-    if chat_result["failed"]:
-        outcome["chat_failed"] = chat_result["failed"]
+            logger.info("定时月报已生成（租户%s）: %s", tenant_id, result["filename"])
 
-    # 聊天渠道结果落库
-    from src.models.alert import AlertNotification
-    for ch in (chat_result["sent"] + list(chat_result["failed"].keys())):
-        notification = AlertNotification(
-            record_id=None,
-            channel=f"report:{year}-{month:02d}:{ch}",
-            target="",
-            status="sent" if ch in chat_result["sent"] else "failed",
-            error_message=chat_result["failed"].get(ch, None) and chat_result["failed"][ch][:500],
-            sent_at=utc_now() if ch in chat_result["sent"] else None,
-        )
-        db.add(notification)
-    await db.commit()
-
-    logger.info("定时月报已生成: %s email_sent=%s chat_sent=%s",
-                result["filename"], outcome["email_sent"], outcome["chat_sent"])
-    return outcome
+    if not generated:
+        return {"action": "skipped", "reason": "already_exists", "year": year, "month": month}
+    return {"action": "generated", "year": year, "month": month, "tenants": generated}

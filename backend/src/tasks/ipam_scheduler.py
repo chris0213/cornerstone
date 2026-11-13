@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import async_session
 from ..models import Prefix, IPAddress
 from ..services.scanner import scan_prefix, parse_custom_ports, get_prefix_scan_lock
+from ..tenant.context import system_scope, tenant_scope
 
 logger = logging.getLogger(__name__)
 
@@ -51,59 +52,68 @@ async def _run_prefix_scan_locked(prefix_id: int):
                 logger.info(f"[ipam-scan] prefix_id={prefix_id} 已禁用或不存在，跳过")
                 return
 
-            # 并发跑 scan_prefix，在线/离线都落库（离线只更新已登记记录，
-            # 不离线也建记录，避免从未在线的 IP 长期停留在"未探测"）
-            ports = parse_custom_ports(prefix.custom_scan_ports)
-
-            # 结果批量落库：每 50 条一次查询 + 写入 + commit（原实现每条一次
-            # SELECT + UPDATE/INSERT，全量 /16 需 13 万+ 次往返）
-            FLUSH_BATCH = 50
-            pending: dict = {}  # ip -> result item（同批内后扫到的覆盖先扫到的）
-            scanned = 0
-            online_count = 0
-
-            async def flush_pending():
-                nonlocal online_count
-                if not pending:
-                    return
-                rows = (await db.execute(
-                    select(IPAddress).where(
-                        IPAddress.prefix_id == prefix_id,
-                        IPAddress.address.in_(pending.keys())
-                    )
-                )).scalars().all()
-                existing_map = {row.address: row for row in rows}
-                from sqlalchemy import insert
-                for ip, item in pending.items():
-                    existing = existing_map.get(ip)
-                    if existing:
-                        existing.is_online = bool(item.get("is_online"))
-                        if existing.is_online:
-                            online_count += 1
-                            existing.mac_address = item.get("mac_address")
-                            existing.open_ports = item.get("open_ports")
-                            if existing.status in ("available", "未分配"):
-                                existing.status = "已分配"  # 在线即占位
-                    elif item.get("is_online"):
-                        online_count += 1
-                        await db.execute(insert(IPAddress).values(
-                            prefix_id=prefix_id, address=ip, status="已分配",
-                            is_online=True, mac_address=item.get("mac_address"),
-                            open_ports=item.get("open_ports"),
-                        ))
-                pending.clear()
-                await db.commit()
-
-            async for item in scan_prefix(prefix.network, [], tcp_ports=ports):
-                scanned += 1
-                if item.get("type") == "result":
-                    pending[item["ip"]] = item
-                    if len(pending) >= FLUSH_BATCH:
-                        await flush_pending()
-            await flush_pending()
-            logger.info(f"[ipam-scan] prefix_id={prefix_id} 完成: 共 {scanned} 条，在线 {online_count}")
+            # 扫描结果归属于 prefix 所在租户：切换上下文后查询/落库，避免串租户
+            with tenant_scope(prefix.tenant_id):
+                await _scan_prefix_in_tenant(db, prefix)
     except Exception as e:
         logger.exception(f"[ipam-scan] prefix_id={prefix_id} 扫描异常: {e}")
+
+
+async def _scan_prefix_in_tenant(db: AsyncSession, prefix: Prefix):
+    """在 prefix 所属租户上下文内执行扫描与批量落库"""
+    prefix_id = prefix.id
+    # 并发跑 scan_prefix，在线/离线都落库（离线只更新已登记记录，
+    # 不离线也建记录，避免从未在线的 IP 长期停留在"未探测"）
+    ports = parse_custom_ports(prefix.custom_scan_ports)
+
+    # 结果批量落库：每 50 条一次查询 + 写入 + commit（原实现每条一次
+    # SELECT + UPDATE/INSERT，全量 /16 需 13 万+ 次往返）
+    FLUSH_BATCH = 50
+    pending: dict = {}  # ip -> result item（同批内后扫到的覆盖先扫到的）
+    scanned = 0
+    online_count = 0
+
+    async def flush_pending():
+        nonlocal online_count
+        if not pending:
+            return
+        rows = (await db.execute(
+            select(IPAddress).where(
+                IPAddress.prefix_id == prefix_id,
+                IPAddress.address.in_(pending.keys())
+            )
+        )).scalars().all()
+        existing_map = {row.address: row for row in rows}
+        from sqlalchemy import insert
+        for ip, item in pending.items():
+            existing = existing_map.get(ip)
+            if existing:
+                existing.is_online = bool(item.get("is_online"))
+                if existing.is_online:
+                    online_count += 1
+                    existing.mac_address = item.get("mac_address")
+                    existing.open_ports = item.get("open_ports")
+                    if existing.status in ("available", "未分配"):
+                        existing.status = "已分配"  # 在线即占位
+            elif item.get("is_online"):
+                online_count += 1
+                await db.execute(insert(IPAddress).values(
+                    prefix_id=prefix_id, address=ip, status="已分配",
+                    is_online=True, mac_address=item.get("mac_address"),
+                    open_ports=item.get("open_ports"),
+                    tenant_id=prefix.tenant_id,
+                ))
+        pending.clear()
+        await db.commit()
+
+    async for item in scan_prefix(prefix.network, [], tcp_ports=ports):
+        scanned += 1
+        if item.get("type") == "result":
+            pending[item["ip"]] = item
+            if len(pending) >= FLUSH_BATCH:
+                await flush_pending()
+    await flush_pending()
+    logger.info(f"[ipam-scan] prefix_id={prefix_id} 完成: 共 {scanned} 条，在线 {online_count}")
 
 
 def _register_prefix_job(prefix: Prefix) -> bool:
@@ -168,14 +178,16 @@ async def reload_ipam_scan(prefix_id: Optional[int] = None, db: Optional[AsyncSe
         if prefix and prefix.auto_scan_enabled:
             _register_prefix_job(prefix)
 
-    if db is not None:
-        if prefix_id is None:
-            await _reload_all(db)
-        else:
-            await _reload_one(db, prefix_id)
-    else:
-        async with async_session() as s:
+    # 调度器为进程级共享状态：全量重载必须跨租户，显式系统作用域
+    with system_scope():
+        if db is not None:
             if prefix_id is None:
-                await _reload_all(s)
+                await _reload_all(db)
             else:
-                await _reload_one(s, prefix_id)
+                await _reload_one(db, prefix_id)
+        else:
+            async with async_session() as s:
+                if prefix_id is None:
+                    await _reload_all(s)
+                else:
+                    await _reload_one(s, prefix_id)

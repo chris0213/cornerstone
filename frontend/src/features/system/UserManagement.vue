@@ -19,6 +19,7 @@ interface UserItem {
  permissions: string[];
  is_active: boolean;
  is_superuser: boolean;
+ tenant_id?: number | null;
  last_login_at?: string;
  last_login_ip?: string;
  created_at?: string;
@@ -35,6 +36,9 @@ const authStore = useAuthStore();
 const appStore = useAppStore();
 const users = ref<UserItem[]>([]);
 const roles = ref<RoleItem[]>([]);
+// 租户选项（仅超管可指定用户归属，普通用户不可见）
+const tenantOptions = ref<{ id: number; code: string; name: string }[]>([]);
+const isSuperuser = computed(() => !!authStore.user?.is_superuser);
 const loading = ref(false);
 // 权限配置矩阵（computed 保证语言切换时实时更新）
 const rolePermissions = computed((): Record<string, { name: string; description: string; permissions: string[]; color: string }> => ({
@@ -139,6 +143,7 @@ const addForm = reactive({
  password: '',
  display_name: '',
  role_id: null as number | null,
+ tenant_id: null as number | null,
  is_active: true
 });
 // 编辑用户表单
@@ -148,6 +153,7 @@ const editForm = reactive({
  email: '',
  display_name: '',
  role_id: null as number | null,
+ tenant_id: null as number | null,
  is_active: true
 });
 const addRoleForm = reactive({
@@ -248,12 +254,24 @@ async function loadRoles() {
  }
  }
 }
+// 仅超管需要租户下拉；普通用户由后端强制写为自身租户
+async function loadTenants() {
+ if (!authStore.token || !isSuperuser.value) return;
+ try {
+ const response = await api.get('/api/v1/tenants/');
+ tenantOptions.value = (response.data || []).filter((t: any) => t.status === 'active');
+ } catch (error) {
+ // 无租户列表权限时保持为空，不阻断用户管理页
+ console.error('Load tenants failed:', error);
+ }
+}
 function resetAddForm() {
  addForm.username = '';
  addForm.email = '';
  addForm.password = '';
  addForm.display_name = '';
  addForm.role_id = null;
+ addForm.tenant_id = null;
  addForm.is_active = true;
 }
 async function handleAddUser() {
@@ -280,6 +298,7 @@ async function handleAddUser() {
  password: addForm.password,
  display_name: addForm.display_name,
  role_id: addForm.role_id,
+ ...(isSuperuser.value && addForm.tenant_id ? { tenant_id: addForm.tenant_id } : {}),
  is_active: addForm.is_active
  });
  // 添加审计日志
@@ -309,6 +328,7 @@ function openEditModal(user: UserItem) {
  editForm.email = user.email;
  editForm.display_name = user.display_name;
  editForm.role_id = roles.value.find(r => r.name === user.role)?.id || null;
+ editForm.tenant_id = user.tenant_id ?? null;
  editForm.is_active = user.is_active;
  showEditModal.value = true;
 }
@@ -323,6 +343,7 @@ async function handleEditUser() {
  email: editForm.email,
  display_name: editForm.display_name,
  role_id: editForm.role_id,
+ ...(isSuperuser.value && editForm.tenant_id ? { tenant_id: editForm.tenant_id } : {}),
  is_active: editForm.is_active
  });
  // 添加审计日志
@@ -536,6 +557,7 @@ onMounted(() => {
  loadUsers();
  loadRoles();
  loadPermissions();
+ loadTenants();
 });
 </script>
 
@@ -763,6 +785,21 @@ onMounted(() => {
             />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="isSuperuser" :label="t('tenants.fieldLabel')">
+          <el-select 
+            v-model="addForm.tenant_id" 
+            :placeholder="t('tenants.selectTenant')"
+            class="w-full"
+            clearable
+          >
+            <el-option 
+              v-for="tenant in tenantOptions" 
+              :key="tenant.id" 
+              :value="tenant.id" 
+              :label="`${tenant.name} (${tenant.code})`"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item :label="t('system.userStatus')">
           <el-switch v-model="addForm.is_active" />
         </el-form-item>
@@ -807,6 +844,21 @@ onMounted(() => {
               :key="role.id" 
               :value="role.id" 
               :label="role.display_name"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="isSuperuser" :label="t('tenants.fieldLabel')">
+          <el-select 
+            v-model="editForm.tenant_id" 
+            :placeholder="t('tenants.selectTenant')"
+            class="w-full"
+            clearable
+          >
+            <el-option 
+              v-for="tenant in tenantOptions" 
+              :key="tenant.id" 
+              :value="tenant.id" 
+              :label="`${tenant.name} (${tenant.code})`"
             />
           </el-select>
         </el-form-item>

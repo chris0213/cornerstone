@@ -219,11 +219,16 @@ MONITOR_CONCURRENCY = 50
 
 
 async def run_monitoring_task(db: AsyncSession) -> None:
-    """运行监控任务"""
-    # 获取所有在用状态的设备（生命周期四态：在用/停用/维修/报废，只监控在用）
-    query = select(Device).where(Device.status == "active")
-    result = await db.execute(query)
-    devices = result.scalars().all()
+    """运行监控任务：按租户逐个执行。
+
+    监控任务由调度器触发，处于系统作用域（不过滤）；这里显式遍历活跃租户，
+    在各自租户上下文内查询在用设备、写监控数据与告警，避免跨租户串数据。
+    """
+    from src.tenant.bootstrap import DEFAULT_TENANT_ID
+    from src.tenant.context import tenant_scope
+    from src.tenant.query import get_active_tenant_ids
+
+    tenant_ids = await get_active_tenant_ids(db) or [DEFAULT_TENANT_ID]
 
     # 限流并发监控，防止 CPU/进程数瞬时飙升
     semaphore = asyncio.Semaphore(MONITOR_CONCURRENCY)
@@ -232,12 +237,19 @@ async def run_monitoring_task(db: AsyncSession) -> None:
         async with semaphore:
             await monitor_device(db, device)
 
-    # 并行监控所有设备
-    tasks = [monitor_with_semaphore(device) for device in devices]
-    await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # 所有设备监控完成后统一提交事务
-    await db.commit()
+    for tenant_id in tenant_ids:
+        with tenant_scope(tenant_id):
+            # 获取该租户在用状态的设备（生命周期四态：在用/停用/维修/报废，只监控在用）
+            devices = (await db.execute(
+                select(Device).where(Device.status == "active")
+            )).scalars().all()
+
+            # 并行监控本租户所有设备
+            tasks = [monitor_with_semaphore(device) for device in devices]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 单个租户的监控数据统一提交，互不阻塞
+            await db.commit()
 
 
 def latest_snapshot_subquery():

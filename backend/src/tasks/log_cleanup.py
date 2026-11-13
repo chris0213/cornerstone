@@ -14,6 +14,9 @@ from ..models.setting import Setting
 from ..models.ai_chat_log import AIChatLog
 from ..models.link_monitor import LinkMonitor
 from ..services.audit_archive_service import archive_and_delete_audit_logs, normalize_retention_days
+from ..tenant.bootstrap import DEFAULT_TENANT_ID
+from ..tenant.context import system_scope, tenant_scope
+from ..tenant.query import get_active_tenant_ids, tenant_filter
 import json
 
 logger = logging.getLogger(__name__)
@@ -36,9 +39,10 @@ async def cleanup_expired_logs(session_factory=None):
     factory = session_factory or async_session
     async with factory() as db:
         try:
-            # 获取日志保留设置
-            result = await db.execute(select(Setting).filter(Setting.key == LOG_SETTINGS_KEY))
-            setting = result.scalars().first()
+            # 日志保留设置是平台级配置（settings.key 全局唯一），固定从默认租户读取
+            with tenant_scope(DEFAULT_TENANT_ID):
+                result = await db.execute(select(Setting).filter(Setting.key == LOG_SETTINGS_KEY))
+                setting = result.scalars().first()
             
             log_retention_days = 180
             login_log_retention_days = 180
@@ -66,30 +70,42 @@ async def cleanup_expired_logs(session_factory=None):
             
             deleted_count = 0
 
-            # 审计/登录日志：先归档 CSV，归档失败则不删除（异常向上抛出并回滚）
-            archive_result = await archive_and_delete_audit_logs(db, audit_cutoff, login_cutoff)
+            # 审计/登录日志：平台级一次导出并删除（对应 Q4 平台级归档），
+            # 归档失败则不删除（异常向上抛出并回滚）
+            with system_scope():
+                archive_result = await archive_and_delete_audit_logs(db, audit_cutoff, login_cutoff)
             deleted_count += archive_result["deleted_audit"] + archive_result["deleted_login"]
             logger.info(
                 f"归档并删除审计日志 {archive_result['deleted_audit']} 条、登录日志 "
                 f"{archive_result['deleted_login']} 条，归档文件: {archive_result['archives']}"
             )
 
-            # 删除过期 AI 聊天日志（保留 30 天，与模型注释一致）
+            # AI 聊天日志、链路监控数据属于租户业务数据：逐租户清理，避免串租户删除。
+            # tenant_filter 显式补条件，与 ORM 层注入互为双保险。
             ai_log_cutoff = utc_now() - timedelta(days=30)
-            ai_log_result = await db.execute(
-                delete(AIChatLog).where(AIChatLog.created_at < ai_log_cutoff)
-            )
-            deleted_count += ai_log_result.rowcount
-            logger.info(f"删除了 {ai_log_result.rowcount} 条过期 AI 聊天日志")
-
-            # 删除过期链路监控数据（保留 30 天）：监控任务每设备每轮插一行，
-            # 不清理会导致 link_monitor 表无限膨胀拖慢监控写入
             monitor_cutoff = utc_now() - timedelta(days=LINK_MONITOR_RETENTION_DAYS)
-            monitor_result = await db.execute(
-                delete(LinkMonitor).where(LinkMonitor.created_at < monitor_cutoff)
+            ai_deleted = 0
+            monitor_deleted = 0
+            for tenant_id in await get_active_tenant_ids(db):
+                with tenant_scope(tenant_id):
+                    ai_log_result = await db.execute(
+                        delete(AIChatLog).where(
+                            AIChatLog.created_at < ai_log_cutoff,
+                            tenant_filter(AIChatLog),
+                        )
+                    )
+                    monitor_result = await db.execute(
+                        delete(LinkMonitor).where(
+                            LinkMonitor.created_at < monitor_cutoff,
+                            tenant_filter(LinkMonitor),
+                        )
+                    )
+                    ai_deleted += ai_log_result.rowcount
+                    monitor_deleted += monitor_result.rowcount
+            deleted_count += ai_deleted + monitor_deleted
+            logger.info(
+                f"删除了 {ai_deleted} 条过期 AI 聊天日志、{monitor_deleted} 条过期链路监控数据"
             )
-            deleted_count += monitor_result.rowcount
-            logger.info(f"删除了 {monitor_result.rowcount} 条过期链路监控数据")
 
             await db.commit()
             

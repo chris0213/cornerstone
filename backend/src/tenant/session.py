@@ -9,10 +9,10 @@
 系统级执行；需要显式跳过时可传 `execution_options(include_all_tenants=True)`
 或使用 `system_scope()`。
 """
-from sqlalchemy import event, inspect
+from sqlalchemy import Delete, Insert, Update, event, inspect
 from sqlalchemy.orm import Session, with_loader_criteria
 
-from .context import current_tenant_id
+from .context import context_tenant_id, current_tenant_id
 from .mixin import TenantMixin
 
 
@@ -20,27 +20,59 @@ class CrossTenantWriteError(RuntimeError):
     """当前租户上下文与写入对象的 tenant_id 不一致。"""
 
 
+def _tenant_table_map() -> dict:
+    """TenantMixin 子类的 `__table__` → 实体类映射（用于 Core DML 补条件）。"""
+    mapping = {}
+    for cls in TenantMixin.__subclasses__():
+        table = getattr(cls, "__table__", None)
+        if table is not None:
+            mapping[table] = cls
+    return mapping
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _add_tenant_criteria(execute_state) -> None:
-    if not execute_state.is_select or execute_state.is_column_load:
-        return
     if execute_state.execution_options.get("include_all_tenants"):
         return
     tenant_id = current_tenant_id()
     if tenant_id is None:
         return
-    execute_state.statement = execute_state.statement.options(
-        with_loader_criteria(
-            TenantMixin,
-            lambda cls: cls.tenant_id == tenant_id,
-            include_aliases=True,
+    statement = execute_state.statement
+
+    if execute_state.is_select:
+        if execute_state.is_column_load:
+            return
+        execute_state.statement = statement.options(
+            with_loader_criteria(
+                TenantMixin,
+                lambda cls: cls.tenant_id == tenant_id,
+                include_aliases=True,
+            )
         )
-    )
+        return
+
+    # Core DML 不会被 with_loader_criteria 覆盖：update/delete 显式补租户条件，
+    # insert 显式补 tenant_id，避免绕过 ORM 的语句跨租户生效。
+    target_cls = _tenant_table_map().get(getattr(statement, "table", None))
+    if target_cls is None:
+        return
+
+    if isinstance(statement, (Update, Delete)):
+        execute_state.statement = statement.where(target_cls.tenant_id == tenant_id)
+    elif isinstance(statement, Insert):
+        values = getattr(statement, "_values", None)
+        multi_values = getattr(statement, "_multi_values", None)
+        keys = {getattr(k, "key", k) for k in values} if isinstance(values, dict) else set()
+        if multi_values or "tenant_id" in keys:
+            return
+        execute_state.statement = statement.values(tenant_id=tenant_id)
 
 
 @event.listens_for(Session, "before_flush")
 def _stamp_and_guard_tenant(session: Session, flush_context, instances) -> None:
-    tenant_id = current_tenant_id()
+    # 用 context_tenant_id（忽略 bypass）：超管跨租户读取时不加过滤，
+    # 但新建数据仍归属其所属租户，避免全部落到默认租户。
+    tenant_id = context_tenant_id()
     if tenant_id is None:
         return
 

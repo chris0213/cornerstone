@@ -47,17 +47,23 @@ class LDAPConfigRequest(BaseModel):
 
 
 async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None,
-                            reason: str = None):
-    """记录登录尝试日志（只记原因分类，绝不记录密码）"""
+                            reason: str = None, tenant_id: int = None):
+    """记录登录尝试日志（只记原因分类，绝不记录密码）。
+
+    与本地登录同口径：已知用户显式归属其租户，查不到归属写平台级安全事件。
+    """
     detail = "LDAP登录成功" if success else f"LDAP登录失败：{reason or '用户名或密码错误'}"
-    stmt = insert(AuditLog).values(
+    values = dict(
         user=username,
         action="用户登录",
         resource="系统",
         detail=detail,
         ip_address=ip_address,
-        success="true" if success else "false"
+        success="true" if success else "false",
     )
+    if tenant_id is not None:
+        values["tenant_id"] = tenant_id
+    stmt = insert(AuditLog).values(**values)
     await db.execute(stmt)
     await db.commit()
 
@@ -208,7 +214,13 @@ async def ldap_login(
         return result
     except LDAPAuthException as e:
         logger.warning(f"LDAP 登录认证失败 username={body.username}: {e}")
-        await log_login_attempt(db, body.username, False, client_ip)
+        # 已知用户按其所属租户归属；查不到归属写平台级安全事件
+        tenant_id = None
+        res = await db.execute(select(User).where(User.username == body.username))
+        known = res.scalar_one_or_none()
+        if known is not None:
+            tenant_id = known.tenant_id
+        await log_login_attempt(db, body.username, False, client_ip, tenant_id=tenant_id)
         await record_login_failure(body.username, client_ip)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     except Exception as e:

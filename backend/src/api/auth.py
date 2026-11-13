@@ -38,6 +38,7 @@ from ..utils.security import (
 from ..config import settings
 from ..services.permission_service import get_user_permissions
 from ..services.avatar_service import avatar_url
+from ..tenant.guard import ensure_tenant_active
 from ..services.sso_service import sso_service, SSOException
 from .dependencies import get_current_active_user
 from src.utils.timeutil import utc_now
@@ -120,17 +121,25 @@ def generate_random_code(length: int = 4):
     return ''.join(secrets.choice(characters) for _ in range(length))
 
 async def log_login_attempt(db: AsyncSession, username: str, success: bool, ip_address: str = None,
-                            reason: str = None):
-    """记录登录尝试日志（只记原因分类，绝不记录密码）"""
+                            reason: str = None, tenant_id: int = None):
+    """记录登录尝试日志（只记原因分类，绝不记录密码）。
+
+    登录发生在认证之前、没有租户上下文，必须显式传入 tenant_id 归属到
+    用户所属租户；用户不存在/密码错误等查不到归属的场景写默认租户，
+    作为平台级安全事件供超管审计。
+    """
     detail = "登录成功" if success else f"登录失败：{reason or '用户名或密码错误'}"
-    stmt = insert(AuditLog).values(
+    values = dict(
         user=username,
         action="用户登录",
         resource="系统",
         detail=detail,
         ip_address=ip_address,
-        success="true" if success else "false"
+        success="true" if success else "false",
     )
+    if tenant_id is not None:
+        values["tenant_id"] = tenant_id
+    stmt = insert(AuditLog).values(**values)
     await db.execute(stmt)
     await db.commit()
 
@@ -144,7 +153,8 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
         try:
             networks = await get_cached_whitelist(db)
             if networks and not is_ip_in_networks(client_ip, networks):
-                await log_login_attempt(db, user.username, False, client_ip, reason="IP不在访问白名单")
+                await log_login_attempt(db, user.username, False, client_ip, reason="IP不在访问白名单",
+                                        tenant_id=user.tenant_id)
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="您的IP地址不在访问白名单中，请联系管理员添加"
@@ -154,6 +164,15 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
         except Exception:
             # 检查过程出错默认放行（与中间件 fail-open 语义一致，避免锁死系统）
             logger.error("[IP白名单] 登录前置检查出错，默认放行")
+
+    # 租户状态拦截：停用/删除租户的用户明确拒绝登录并记录原因，
+    # 不静默失效（停用租户时其已有会话也已被租户管理接口撤销）。
+    try:
+        await ensure_tenant_active(db, user.tenant_id)
+    except HTTPException as exc:
+        await log_login_attempt(db, user.username, False, client_ip, reason=str(exc.detail),
+                                tenant_id=user.tenant_id)
+        raise
 
     stmt = select(Role).where(Role.id == user.role_id)
     result = await db.execute(stmt)
@@ -185,6 +204,7 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
     now = utc_now()
     session = UserSession(
         user_id=user.id,
+        tenant_id=user.tenant_id,  # 登录在认证前无租户上下文，显式归属用户所属租户
         jti=jti,
         ip_address=client_ip,
         user_agent=user_agent,
@@ -198,7 +218,7 @@ async def _perform_login(db: AsyncSession, user: User, client_ip: str, user_agen
     )
     await db.execute(stmt)
 
-    await log_login_attempt(db, user.username, True, client_ip)
+    await log_login_attempt(db, user.username, True, client_ip, tenant_id=user.tenant_id)
     await reset_login_failures(user.username, client_ip)
     await db.commit()
 
@@ -245,7 +265,9 @@ async def login_for_access_token(
         # 用户不存在也执行一次 bcrypt 校验，抹平响应时差（防时序枚举用户名）
         verify_password(form_data.password, DUMMY_HASH)
     if not user or not verify_password(form_data.password, user.hashed_password):
-        await log_login_attempt(db, form_data.username, False, client_ip)
+        # 已知用户按其所属租户归属；用户不存在写平台级（默认租户）安全事件
+        await log_login_attempt(db, form_data.username, False, client_ip,
+                                tenant_id=user.tenant_id if user else None)
         await record_login_failure(form_data.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -254,7 +276,8 @@ async def login_for_access_token(
         )
 
     if not user.is_active:
-        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用")
+        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用",
+                                tenant_id=user.tenant_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="账号已被禁用",
@@ -469,6 +492,7 @@ async def refresh_token(
     session_expire = utc_now() + timedelta(days=7)
     new_session = UserSession(
         user_id=user.id,
+        tenant_id=user.tenant_id,  # 刷新发生在认证后但无租户上下文，显式归属
         jti=jti,
         ip_address=client_ip,
         user_agent=request.headers.get("User-Agent", ""),
@@ -538,7 +562,9 @@ async def login_with_captcha(
         # 用户不存在也执行一次 bcrypt 校验，抹平响应时差（防时序枚举用户名）
         verify_password(body.password, DUMMY_HASH)
     if not user or not verify_password(body.password, user.hashed_password):
-        await log_login_attempt(db, body.username, False, client_ip)
+        # 已知用户按其所属租户归属；用户不存在写平台级（默认租户）安全事件
+        await log_login_attempt(db, body.username, False, client_ip,
+                                tenant_id=user.tenant_id if user else None)
         await record_login_failure(body.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -547,7 +573,8 @@ async def login_with_captcha(
         )
 
     if not user.is_active:
-        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用")
+        await log_login_attempt(db, user.username, False, client_ip, reason="账号已禁用",
+                                tenant_id=user.tenant_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="账号已被禁用",

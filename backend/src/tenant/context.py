@@ -50,6 +50,16 @@ def current_tenant_id() -> Optional[int]:
     return ctx.tenant_id
 
 
+def context_tenant_id() -> Optional[int]:
+    """返回上下文声明的租户 ID（忽略 bypass）。
+
+    bypass 只用于关闭「读过滤」（超管跨租户查看），写入仍应归属操作者所属
+    租户，因此 `before_flush` 的写入兜底使用本函数而非 `current_tenant_id()`。
+    """
+    ctx = _ctx.get()
+    return ctx.tenant_id if ctx else None
+
+
 def current_user_id() -> Optional[int]:
     ctx = _ctx.get()
     return ctx.user_id if ctx else None

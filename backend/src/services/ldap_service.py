@@ -428,6 +428,7 @@ class LDAPAuthService:
         now = utc_now()
         session = UserSession(
             user_id=user.id,
+            tenant_id=user.tenant_id,  # LDAP 登录无租户上下文，显式归属用户所属租户
             jti=jti,
             ip_address=client_ip,
             user_agent=user_agent,
@@ -442,7 +443,7 @@ class LDAPAuthService:
         )
         await db.execute(stmt)
         
-        # 记录审计日志
+        # 记录审计日志（归属用户所属租户，登录时无租户上下文需显式传入）
         from ..models import AuditLog
         stmt = insert(AuditLog).values(
             user=user.username,
@@ -450,7 +451,8 @@ class LDAPAuthService:
             resource="系统",
             detail="通过LDAP登录成功",
             ip_address=client_ip,
-            success="true"
+            success="true",
+            tenant_id=user.tenant_id,
         )
         await db.execute(stmt)
         

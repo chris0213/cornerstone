@@ -96,7 +96,11 @@ async def list_categories(
         .group_by(KnowledgeArticle.category)
     )).all())
     rows = (await db.execute(
-        select(KnowledgeCategory).order_by(KnowledgeCategory.sort_order, KnowledgeCategory.id)
+        select(KnowledgeCategory)
+        # 分类是平台共享的分类法（name 全局唯一，由迁移预置），按租户读取会让
+        # 新租户看不到任何分类；这里显式跨租户读取，文章计数仍按当前租户统计。
+        .execution_options(include_all_tenants=True)
+        .order_by(KnowledgeCategory.sort_order, KnowledgeCategory.id)
     )).scalars().all()
     return [
         {"id": c.id, "name": c.name, "description": c.description or "",
@@ -113,7 +117,9 @@ def _category_brief(c: KnowledgeCategory) -> dict:
 
 
 async def _category_name_taken(db: AsyncSession, name: str, exclude_id: Optional[int] = None) -> bool:
-    query = select(KnowledgeCategory).where(KnowledgeCategory.name == name)
+    # 分类名全局唯一（含跨租户），查重也要跨租户，否则会漏判并触发唯一约束错误
+    query = select(KnowledgeCategory).execution_options(include_all_tenants=True)
+    query = query.where(KnowledgeCategory.name == name)
     if exclude_id is not None:
         query = query.where(KnowledgeCategory.id != exclude_id)
     return (await db.execute(query)).scalars().first() is not None

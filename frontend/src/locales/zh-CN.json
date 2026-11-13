@@ -1142,6 +1142,7 @@
     "statusAssigned": "已分配",
     "statusReserved": "预留",
     "statusAvailable": "未分配",
+    "statusConflict": "冲突",
     "allStatus": "全部状态",
     "onlineLabel": "在线",
     "offlineLabel": "离线",
@@ -2450,6 +2451,8 @@
     "passwordChangedSuccess": "密码修改成功"
   },
   "settings": {
+    "tabGeneral": "基础设置",
+    "tabTenants": "租户",
     "companyLogo": "企业 Logo",
     "companyLogoDesc": "上传企业 Logo，将显示在系统登录页和顶部导航栏",
     "uploadLogo": "上传 Logo",
@@ -2825,5 +2828,35 @@
     "reports": "报告中心",
     "profile": "我的",
     "rack": "机柜可视化"
+  },
+  "tenants": {
+    "title": "租户管理",
+    "description": "平台超管可创建与停用租户；停用后该租户用户将无法登录，现有会话立即失效。",
+    "create": "新建租户",
+    "code": "租户编码",
+    "name": "租户名称",
+    "plan": "套餐",
+    "descriptionLabel": "描述",
+    "statusLabel": "状态",
+    "userCount": "用户数",
+    "createdAt": "创建时间",
+    "defaultTenant": "默认租户",
+    "active": "启用",
+    "suspended": "停用",
+    "enable": "启用",
+    "disable": "停用",
+    "fieldLabel": "所属租户",
+    "selectTenant": "选择租户（默认当前租户）",
+    "codePlaceholder": "如 acme，字母/数字/短横线",
+    "namePlaceholder": "如 Acme 分公司",
+    "codeRequired": "请填写租户编码",
+    "nameRequired": "请填写租户名称",
+    "createSuccess": "租户已创建",
+    "statusUpdated": "租户状态已更新",
+    "createFailed": "创建租户失败",
+    "updateFailed": "更新租户失败",
+    "loadFailed": "加载租户列表失败",
+    "disableConfirm": "停用后「{name}」的用户将无法登录，现有会话会被强制下线。确认停用？",
+    "enableConfirm": "确认启用「{name}」？启用后其用户可正常登录。"
   }
 }

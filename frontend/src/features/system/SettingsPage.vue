@@ -8,9 +8,15 @@ import api from '../../api/axios'
 import { getCompanyInfo, updateCompanyInfo, type CompanyInfo } from '../../api/reports'
 import { useI18n } from 'vue-i18n'
 import { useBrandStore } from '../../store/brand'
+import { useAuthStore } from '../../store/auth'
+import TenantManagement from './TenantManagement.vue'
 
 const { t } = useI18n()
 const brandStore = useBrandStore()
+const authStore = useAuthStore()
+const activeTab = ref('general')
+// 租户页签仅平台超管可见
+const isSuperuser = computed(() => !!authStore.user?.is_superuser)
 const currentLogo = ref<string>('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isLoading = ref(false)
@@ -309,6 +315,8 @@ const handleLogoRemove = async () => {
 
 <template>
   <div class="settings-page">
+    <el-tabs v-model="activeTab" class="settings-tabs">
+      <el-tab-pane :label="t('settings.tabGeneral')" name="general">
     <div class="settings-section">
       <div class="section-header">
         <el-icon class="section-icon"><Picture /></el-icon>
@@ -444,6 +452,12 @@ const handleLogoRemove = async () => {
         </el-form>
       </div>
     </div>
+
+      </el-tab-pane>
+      <el-tab-pane v-if="isSuperuser" :label="t('settings.tabTenants')" name="tenants">
+        <TenantManagement />
+      </el-tab-pane>
+    </el-tabs>
 
     <p class="build-info" :title="buildTime">{{ appVersion }} · {{ buildTime }}</p>
   </div>

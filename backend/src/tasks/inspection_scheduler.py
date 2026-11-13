@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models import InspectionTask
 from src.database import async_session
 from src.services.inspector import InspectorService
+from src.tenant.context import system_scope, tenant_scope
 
 logger = logging.getLogger("cornerstone")
 
@@ -26,25 +27,21 @@ async def run_scheduled_inspection(task_id: int):
         if not task or not task.is_enabled:
             return
 
-        try:
-            await InspectorService.run_inspection(
-                task=task,
-                trigger="scheduled",
-                operator="system",
-                db=db
-            )
-        except Exception as e:
-            logger.error(f"定时巡检任务 {task_id} 执行失败: {e}", exc_info=True)
-            # 更新任务状态为失败
-            await db.execute(
-                InspectionTask.__table__.update()
-                .where(InspectionTask.id == task_id)
-                .values({
-                    "last_run_at": utc_now(),
-                    "last_run_status": "failed"
-                })
-            )
-            await db.commit()
+        # 巡检结果属于租户业务数据：切换到任务所属租户执行，避免跨租户查询/写入
+        with tenant_scope(task.tenant_id):
+            try:
+                await InspectorService.run_inspection(
+                    task=task,
+                    trigger="scheduled",
+                    operator="system",
+                    db=db
+                )
+            except Exception as e:
+                logger.error(f"定时巡检任务 {task_id} 执行失败: {e}", exc_info=True)
+                # 更新任务状态为失败（ORM 赋值，保持租户上下文内的写入校验）
+                task.last_run_at = utc_now()
+                task.last_run_status = "failed"
+                await db.commit()
 
 
 def init_inspection_scheduler(app_scheduler: AsyncIOScheduler):
@@ -63,15 +60,16 @@ async def reload_inspection_tasks(db: AsyncSession):
         if job.id.startswith("inspection_"):
             scheduler.remove_job(job.id)
 
-    # 加载所有启用的巡检任务
-    result = await db.execute(
-        select(InspectionTask)
-        .where(InspectionTask.is_enabled == True)
-    )
-    tasks = result.scalars().all()
+    # 加载所有启用的巡检任务（调度器为进程级共享状态，显式系统作用域全量加载）
+    with system_scope():
+        result = await db.execute(
+            select(InspectionTask)
+            .where(InspectionTask.is_enabled == True)
+        )
+        tasks = result.scalars().all()
 
-    for task in tasks:
-        _register_task(task)
+        for task in tasks:
+            _register_task(task)
 
 
 def _register_task(task: InspectionTask) -> bool:
@@ -100,11 +98,12 @@ async def add_inspection_task(task_id: int, db: AsyncSession):
     if not scheduler:
         return
 
-    result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
-    task = result.scalar_one_or_none()
+    with system_scope():
+        result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
+        task = result.scalar_one_or_none()
 
-    if task and task.is_enabled:
-        _register_task(task)
+        if task and task.is_enabled:
+            _register_task(task)
 
 
 async def remove_inspection_task(task_id: int):

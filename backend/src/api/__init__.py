@@ -20,6 +20,7 @@ from .alerts import router as alerts_router
 from .permissions import router as permissions_router
 from .dashboard import router as dashboard_router
 from .system import router as system_router
+from .tenants import router as tenants_router
 from .import_export import router as import_export_router
 from .inspection import router as inspection_router
 from .ai import router as ai_router
@@ -51,6 +52,7 @@ api_router.include_router(alerts_router, prefix="/alerts", tags=["alerts"])
 api_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(system_router, prefix="/system", tags=["system"])
+api_router.include_router(tenants_router, prefix="/tenants", tags=["tenants"])
 api_router.include_router(import_export_router, prefix="/import-export", tags=["import-export"])
 api_router.include_router(inspection_router, tags=["inspection"])
 api_router.include_router(ai_router, prefix="/ai", tags=["ai"])

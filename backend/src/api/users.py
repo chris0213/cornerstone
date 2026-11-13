@@ -12,7 +12,7 @@ from sqlalchemy import select, insert, update, delete, func
 from sqlalchemy.orm import joinedload
 
 from ..database import get_db
-from ..models import User, Role, Permission, RolePermission, UserSession, AuditLog
+from ..models import User, Role, Permission, RolePermission, UserSession, AuditLog, Tenant
 from ..schemas import UserCreate, UserUpdate, UserResponse, ResetPasswordResponse, UserSessionResponse, RoleResponse, RoleCreate, PermissionResponse
 from ..utils.security import get_password_hash, validate_password
 from ..utils.ip_whitelist import get_client_ip_from_request
@@ -30,6 +30,15 @@ router = APIRouter()
 async def _can(db: AsyncSession, user: User, module: str, action: str) -> bool:
     """超级管理员直接放行，其余按角色权限判断。"""
     return user.is_superuser or await has_permission(db, user.id, module, action)
+
+
+async def _ensure_tenant_assignable(db: AsyncSession, tenant_id: int) -> None:
+    """校验目标租户可用于归属用户：存在、未删除、处于启用状态。"""
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is None or tenant.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="目标租户不存在或已删除")
+    if tenant.status != "active":
+        raise HTTPException(status_code=400, detail="目标租户已停用，不能新增或迁移用户")
 
 
 async def _ensure_role_allowed(db: AsyncSession, operator: User, role_id: int | None) -> None:
@@ -97,6 +106,7 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
         is_active=user.is_active,
         is_superuser=user.is_superuser,
         is_sso_user=user.is_sso_user,
+        tenant_id=user.tenant_id,
         last_login_at=user.last_login_at,
         last_login_ip=user.last_login_ip,
         avatar=avatar_url(user),
@@ -315,8 +325,15 @@ async def create_user(
     # 非超管不得创建超级管理员角色的账号
     await _ensure_role_allowed(db, current_user, user.role_id)
 
-    user_data = user.model_dump(exclude={"password"})
+    # 租户归属：仅超管可显式指定；普通调用者强制写为自身租户
+    tenant_id = current_user.tenant_id
+    if user.tenant_id is not None and current_user.is_superuser:
+        await _ensure_tenant_assignable(db, user.tenant_id)
+        tenant_id = user.tenant_id
+
+    user_data = user.model_dump(exclude={"password", "tenant_id"})
     user_data["hashed_password"] = get_password_hash(user.password)
+    user_data["tenant_id"] = tenant_id
     
     stmt = insert(User).values(**user_data).returning(User)
     result = await db.execute(stmt)
@@ -328,7 +345,7 @@ async def create_user(
         user=current_user.username,
         action="创建用户",
         resource="用户",
-        detail=f"创建用户 {new_user.username}",
+        detail=f"创建用户 {new_user.username}（租户 {tenant_id}）",
         ip_address=client_ip,
         success="true"
     )
@@ -365,6 +382,19 @@ async def update_user(
     if not current_user.is_superuser:
         update_data.pop("is_active", None)
         update_data.pop("role_id", None)
+
+    # 租户归属变更：仅超管可操作；变更后撤销旧会话，强制按新租户重新登录
+    tenant_moved_from = None
+    if "tenant_id" in update_data:
+        requested_tenant = update_data["tenant_id"]
+        if not current_user.is_superuser or not requested_tenant or requested_tenant == target_user.tenant_id:
+            update_data.pop("tenant_id", None)
+        else:
+            await _ensure_tenant_assignable(db, requested_tenant)
+            tenant_moved_from = target_user.tenant_id
+            await db.execute(
+                update(UserSession).where(UserSession.user_id == target_user.id).values(is_revoked=True)
+            )
     
     # 超管也不允许把「最后一个启用超管」改成其他角色
     if "role_id" in update_data and update_data["role_id"] != target_user.role_id and target_user.is_superuser and target_user.is_active:
@@ -387,11 +417,14 @@ async def update_user(
     # 记录审计日志（脱敏：只记字段名，不记字段值，避免敏感数据进日志）
     if update_data:
         client_ip = get_client_ip_from_request(request)
+        detail = f"编辑用户 {updated_user.username}，修改字段: {', '.join(update_data.keys())}"
+        if tenant_moved_from is not None:
+            detail += f"；租户归属 {tenant_moved_from} → {updated_user.tenant_id}"
         stmt = insert(AuditLog).values(
             user=current_user.username,
             action="编辑用户",
             resource="用户",
-            detail=f"编辑用户 {updated_user.username}，修改字段: {', '.join(update_data.keys())}",
+            detail=detail,
             ip_address=client_ip,
             success="true"
         )

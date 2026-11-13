@@ -7,6 +7,10 @@ from typing import Dict, List
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from ..tenant.bootstrap import DEFAULT_TENANT_ID
+from ..tenant.context import system_scope, tenant_scope
+from ..tenant.query import get_active_tenant_ids
+
 logger = logging.getLogger("cornerstone")
 
 # 备份保留策略：自动备份（scheduled/pre_change）保留天数，手动备份（manual）永久保留
@@ -31,26 +35,33 @@ async def cleanup_expired_backups():
 
     async with async_session() as db:
         try:
-            result = await db.execute(
-                select(Backup).where(Backup.trigger != "manual", Backup.created_at < cutoff)
-            )
-            expired = result.scalars().all()
-            if not expired:
+            # 备份记录属于租户业务数据：逐租户清理，避免把其他租户的备份文件误删
+            tenant_ids = await get_active_tenant_ids(db) or [DEFAULT_TENANT_ID]
+            total_removed = 0
+            removed_files = 0
+            for tenant_id in tenant_ids:
+                with tenant_scope(tenant_id):
+                    result = await db.execute(
+                        select(Backup).where(Backup.trigger != "manual", Backup.created_at < cutoff)
+                    )
+                    expired = result.scalars().all()
+                    for backup in expired:
+                        if backup.file_path:
+                            try:
+                                os.remove(backup.file_path)
+                                removed_files += 1
+                            except OSError:
+                                pass
+                        await db.delete(backup)
+                    total_removed += len(expired)
+                await db.commit()
+
+            if not total_removed:
                 logger.info("备份保留策略清理：无过期自动备份")
                 return
 
-            removed_files = 0
-            for backup in expired:
-                if backup.file_path:
-                    try:
-                        os.remove(backup.file_path)
-                        removed_files += 1
-                    except OSError:
-                        pass
-                await db.delete(backup)
-            await db.commit()
             logger.info(
-                f"备份保留策略清理完成：删除 {len(expired)} 条超过 {AUTO_BACKUP_RETENTION_DAYS} 天的自动备份"
+                f"备份保留策略清理完成：删除 {total_removed} 条超过 {AUTO_BACKUP_RETENTION_DAYS} 天的自动备份"
                 f"（含文件 {removed_files} 个），手动备份不受影响"
             )
         except Exception as e:
@@ -58,7 +69,25 @@ async def cleanup_expired_backups():
             await db.rollback()
 
 async def run_backup_task(task_id: int, trigger: str = "scheduled"):
-    """执行一次备份任务
+    """在任务所属租户的上下文中执行备份（定时/手动触发统一入口）。
+
+    调度器本身是系统作用域，先解析任务归属，再切换租户上下文，
+    避免备份记录、设备查询跨租户。
+    """
+    from sqlalchemy import select
+    from ..models import BackupTask
+    from ..database import async_session
+
+    async with async_session() as probe:
+        tenant_id = (
+            await probe.execute(select(BackupTask.tenant_id).where(BackupTask.id == task_id))
+        ).scalar_one_or_none()
+    with tenant_scope(tenant_id or DEFAULT_TENANT_ID):
+        await _run_backup_in_tenant(task_id, trigger)
+
+
+async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
+    """执行一次备份任务（调用方需已切换到任务所属租户上下文）
     
     Args:
         task_id: 任务ID
@@ -145,7 +174,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                         devices_with_ip.append((device, ip_address))
             elif task.site_id:
                 devices = await db_session.execute(
-                    Device.__table__.select().where(Device.site_id == task.site_id)
+                    select(Device).where(Device.site_id == task.site_id)
                 )
                 for device in devices.scalars():
                     ip_address = None
@@ -155,7 +184,7 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
                             ip_address = ip.address
                     devices_with_ip.append((device, ip_address))
             else:
-                devices = await db_session.execute(Device.__table__.select())
+                devices = await db_session.execute(select(Device))
                 for device in devices.scalars():
                     ip_address = None
                     if device.mgmt_ip_id:
@@ -308,11 +337,12 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
 
 async def execute_retention_policy(device_id: int, retention_count: int, retention_days: int, db_session):
     """执行保留策略，删除超出限制的旧备份"""
+    from sqlalchemy import select
     from ..models import Backup
     
     # 获取需要删除的备份（按版本号排序，保留最新的N个）
     backups = await db_session.execute(
-        Backup.__table__.select()
+        select(Backup)
         .where(Backup.device_id == device_id)
         .order_by(Backup.version.desc())
     )
@@ -365,14 +395,16 @@ async def reload_tasks(db_session):
         if job.id.startswith("backup_task_"):
             scheduler.remove_job(job.id)
     
-    # 加载并注册启用的任务
-    result = await db_session.execute(select(BackupTask).where(BackupTask.is_enabled))
-    tasks = result.scalars().all()
-    logger.info(f"找到 {len(tasks)} 个启用的备份任务")
-    
-    for task in tasks:
-        if task.cron_expr:
-            add_task_to_scheduler(task.id, task.cron_expr)
+    # 加载并注册启用的任务（调度器为进程级共享状态：必须全量加载，
+    # 且不能只摘除当前租户的 job，因此显式使用系统作用域）
+    with system_scope():
+        result = await db_session.execute(select(BackupTask).where(BackupTask.is_enabled))
+        tasks = result.scalars().all()
+        logger.info(f"找到 {len(tasks)} 个启用的备份任务")
+
+        for task in tasks:
+            if task.cron_expr:
+                add_task_to_scheduler(task.id, task.cron_expr)
     
     logger.info(f"重新加载完成，调度器当前任务: {[job.id for job in scheduler.get_jobs()]}")
 

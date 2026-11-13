@@ -845,7 +845,8 @@ class AlertService:
         for status, severity, count in rows:
             by_status["total"] += count
             if status in by_status:
-                by_status[status] = count
+                # 同一状态会有多个级别分组，必须累加，不能覆盖
+                by_status[status] += count
             if severity in by_severity:
                 by_severity[severity] += count
             if status in ("active", "acknowledged") and severity in open_by_severity:

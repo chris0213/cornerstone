@@ -81,9 +81,11 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     
-    # 写入请求级租户上下文：后续所有 ORM 查询自动带 tenant_id 条件
-    set_tenant(user.tenant_id, user.id)
-    
+    # 写入请求级租户上下文：后续所有 ORM 查询自动带 tenant_id 条件。
+    # 平台超管走系统作用域（bypass）：不受租户过滤限制，可跨租户查看和管理；
+    # 普通用户严格限定在自身租户内。
+    set_tenant(user.tenant_id, user.id, bypass=bool(user.is_superuser))
+
     return user
 
 async def get_current_active_user(
@@ -217,5 +219,6 @@ async def get_ws_user(
     if user is None or not user.is_active:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="用户不存在或已禁用")
     
-    set_tenant(user.tenant_id, user.id)
+    # 与 HTTP 鉴权保持同一规则：平台超管跨租户（系统作用域），普通用户限本租户
+    set_tenant(user.tenant_id, user.id, bypass=bool(user.is_superuser))
     return user

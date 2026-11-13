@@ -9,12 +9,16 @@ class UserCreate(BaseModel):
     display_name: Optional[str] = None
     role_id: Optional[int] = None
     is_active: bool = True
+    # 仅平台超管可指定；普通调用者会被强制写为自身租户
+    tenant_id: Optional[int] = None
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     display_name: Optional[str] = None
     role_id: Optional[int] = None
     is_active: Optional[bool] = None
+    # 仅平台超管可变更用户租户归属
+    tenant_id: Optional[int] = None
 
 class UserResponse(BaseModel):
     id: int
@@ -27,6 +31,7 @@ class UserResponse(BaseModel):
     is_active: bool
     is_superuser: bool
     is_sso_user: bool
+    tenant_id: Optional[int] = None
     last_login_at: Optional[datetime]
     last_login_ip: Optional[str]
     avatar: Optional[str]

@@ -256,6 +256,7 @@ class SSOService:
         now = utc_now()
         session = UserSession(
             user_id=user.id,
+            tenant_id=user.tenant_id,  # SSO 登录无租户上下文，显式归属用户所属租户
             jti=jti,
             ip_address=None,
             user_agent="SSO",
@@ -270,7 +271,7 @@ class SSOService:
         )
         await db.execute(stmt)
         
-        # 记录审计日志
+        # 记录审计日志（归属用户所属租户，登录时无租户上下文需显式传入）
         from ..models import AuditLog
         from sqlalchemy import insert
         stmt = insert(AuditLog).values(
@@ -278,7 +279,8 @@ class SSOService:
             action="用户登录",
             resource="系统",
             detail="通过SSO登录成功",
-            success="true"
+            success="true",
+            tenant_id=user.tenant_id,
         )
         await db.execute(stmt)
         

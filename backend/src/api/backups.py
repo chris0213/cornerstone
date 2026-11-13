@@ -27,6 +27,9 @@ router = APIRouter()
 # 存储WebSocket连接
 active_connections: dict = {}
 
+# 备份任务 ID → 发起租户：WS 订阅时校验，防止猜测 uuid 越权查看其他租户进度
+task_tenants: dict = {}
+
 # 凭证测试连接限流：记录每个凭证上次放行的 monotonic 时间戳
 # 仅在请求通过校验、真正发起连接前更新（无论连接结果成功或失败）
 _credential_test_last: dict[int, float] = {}
@@ -569,6 +572,7 @@ async def trigger_backup(
     # 创建任务ID
     task_id = str(uuid.uuid4())
     active_connections[task_id] = []
+    task_tenants[task_id] = getattr(current_user, "tenant_id", None)
     
     try:
         # 执行采集
@@ -654,6 +658,7 @@ async def trigger_backup(
     finally:
         if task_id in active_connections:
             del active_connections[task_id]
+        task_tenants.pop(task_id, None)
 
 # 批量触发备份
 @router.post("/trigger-batch")
@@ -665,6 +670,7 @@ async def trigger_batch_backup(
 ):
     task_id = str(uuid.uuid4())
     active_connections[task_id] = []
+    task_tenants[task_id] = getattr(current_user, "tenant_id", None)
     
     try:
         total = len(device_ids)
@@ -790,6 +796,7 @@ async def trigger_batch_backup(
     finally:
         if task_id in active_connections:
             del active_connections[task_id]
+        task_tenants.pop(task_id, None)
 
 # 还原配置到设备
 @router.post("/{backup_id}/restore")
@@ -936,11 +943,21 @@ async def websocket_scan(
     # 验证用户身份
     from .dependencies import get_ws_user
     try:
-        await get_ws_user(websocket, db)
+        user = await get_ws_user(websocket, db)
     except Exception as e:
         await websocket.close(code=1008, reason=str(e))
         return
-    
+
+    # 按租户过滤：普通用户只能订阅本租户发起的备份任务；平台超管可跨租户
+    task_tenant = task_tenants.get(task_id)
+    if (
+        not user.is_superuser
+        and task_tenant is not None
+        and user.tenant_id != task_tenant
+    ):
+        await websocket.close(code=1008, reason="无权订阅该备份任务")
+        return
+
     if task_id not in active_connections:
         active_connections[task_id] = []
     

@@ -988,6 +988,7 @@
     "statusAssigned": "Assigned",
     "statusReserved": "Reserved",
     "statusAvailable": "Available",
+    "statusConflict": "Conflict",
     "allStatus": "All Status",
     "onlineLabel": "Online",
     "offlineLabel": "Offline",
@@ -2023,6 +2024,8 @@
     "passwordChangedSuccess": "Password changed successfully"
   },
   "settings": {
+    "tabGeneral": "General",
+    "tabTenants": "Tenants",
     "companyLogo": "Company Logo",
     "companyLogoDesc": "Upload your company logo. It will appear on the login page and top navigation bar",
     "uploadLogo": "Upload Logo",
@@ -2449,5 +2452,35 @@
     "reports": "Report Center",
     "profile": "Profile",
     "rack": "Rack View"
+  },
+  "tenants": {
+    "title": "Tenant Management",
+    "description": "Platform super admins can create and suspend tenants. Suspending blocks all sign-ins and revokes existing sessions immediately.",
+    "create": "New Tenant",
+    "code": "Tenant Code",
+    "name": "Tenant Name",
+    "plan": "Plan",
+    "descriptionLabel": "Description",
+    "statusLabel": "Status",
+    "userCount": "Users",
+    "createdAt": "Created At",
+    "defaultTenant": "Default",
+    "active": "Active",
+    "suspended": "Suspended",
+    "enable": "Enable",
+    "disable": "Suspend",
+    "fieldLabel": "Tenant",
+    "selectTenant": "Select tenant (defaults to current tenant)",
+    "codePlaceholder": "e.g. acme, letters/numbers/hyphens",
+    "namePlaceholder": "e.g. Acme Branch",
+    "codeRequired": "Tenant code is required",
+    "nameRequired": "Tenant name is required",
+    "createSuccess": "Tenant created",
+    "statusUpdated": "Tenant status updated",
+    "createFailed": "Failed to create tenant",
+    "updateFailed": "Failed to update tenant",
+    "loadFailed": "Failed to load tenants",
+    "disableConfirm": "Suspending \"{name}\" blocks all its users from signing in and revokes existing sessions. Continue?",
+    "enableConfirm": "Enable \"{name}\"? Its users will be able to sign in again."
   }
 }

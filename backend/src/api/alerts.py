@@ -514,10 +514,11 @@ async def websocket_alerts(websocket: WebSocket, db: AsyncSession = Depends(get_
     from src.api.dependencies import get_ws_user
     from src.services.alert_ws import alert_ws_manager
 
-    # 先 accept 再验证身份（与 ipam /ws/scan 模式一致）
-    await alert_ws_manager.connect(websocket)
+    # 先 accept 再验证身份（与 ipam /ws/scan 模式一致）；
+    # 鉴权通过后才登记租户归属，未登记的连接不会收到任何推送
+    await websocket.accept()
     try:
-        await get_ws_user(websocket, db)
+        user = await get_ws_user(websocket, db)
     except Exception as e:
         try:
             await websocket.send_json({"type": "error", "message": f"认证失败: {e}"})
@@ -525,6 +526,9 @@ async def websocket_alerts(websocket: WebSocket, db: AsyncSession = Depends(get_
         finally:
             alert_ws_manager.disconnect(websocket)
         return
+
+    # 按租户推送：普通用户只收本租户告警，平台超管收全量
+    alert_ws_manager.register(websocket, user.tenant_id, bool(user.is_superuser))
 
     try:
         # 保持连接：等待客户端消息/断开（服务端只下发，不处理上行）
