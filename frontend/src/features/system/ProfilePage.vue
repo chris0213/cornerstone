@@ -257,8 +257,8 @@ async function handleFileSelect(event: Event) {
   
   if (!file) return
   
-  // 检查文件大小（限制 5MB）
-  if (file.size > 5 * 1024 * 1024) {
+  // 检查文件大小（与后端一致：200KB）
+  if (file.size > 200 * 1024) {
     ElMessage.error(t('profile.imageSizeLimit'))
     return
   }
@@ -311,6 +311,30 @@ function selectDefaultAvatar(avatar: string) {
   selectedAvatar.value = avatar
 }
 
+// 内置头像是 SVG，后端统一按位图处理，这里先栅格化为 256x256 PNG
+function svgToPngBlob(dataUri: string, size = 256): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('canvas not supported'))
+        return
+      }
+      ctx.drawImage(img, 0, 0, size, size)
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('canvas toBlob failed'))
+      }, 'image/png')
+    }
+    img.onerror = () => reject(new Error('image load failed'))
+    img.src = dataUri
+  })
+}
+
 async function confirmAvatar() {
   if (!selectedAvatar.value) {
     showAvatarPicker.value = false
@@ -319,10 +343,8 @@ async function confirmAvatar() {
   
   selecting.value = true
   try {
-    // 将 data URI 转换为 Blob
-    const response = await fetch(selectedAvatar.value)
-    const blob = await response.blob()
-    const file = new File([blob], 'avatar.svg', { type: 'image/svg+xml' })
+    const blob = await svgToPngBlob(selectedAvatar.value)
+    const file = new File([blob], 'avatar.png', { type: 'image/png' })
     
     const formData = new FormData()
     formData.append('avatar', file)

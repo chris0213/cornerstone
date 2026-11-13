@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import random
 import string
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile, Response
+from fastapi.responses import RedirectResponse
+from email.utils import format_datetime, parsedate_to_datetime
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update, delete, func
@@ -14,11 +16,35 @@ from ..models import User, Role, Permission, RolePermission, UserSession, AuditL
 from ..schemas import UserCreate, UserUpdate, UserResponse, ResetPasswordResponse, UserSessionResponse, RoleResponse, RoleCreate, PermissionResponse
 from ..utils.security import get_password_hash, validate_password
 from ..utils.ip_whitelist import get_client_ip_from_request
-from .dependencies import get_current_active_user, get_current_superuser, PageParams, pagination
+from .dependencies import get_current_active_user, require_permission, PageParams, pagination
 from .permissions import role_conflict, _audit
-from src.utils.timeutil import utc_now
+from ..services.permission_service import has_permission
+from ..services.avatar_service import (
+    MAX_AVATAR_BYTES, AvatarValidationError, avatar_etag, avatar_url, process_avatar,
+)
+from ..utils.timeutil import ensure_utc, utc_now
 
 router = APIRouter()
+
+
+async def _can(db: AsyncSession, user: User, module: str, action: str) -> bool:
+    """超级管理员直接放行，其余按角色权限判断。"""
+    return user.is_superuser or await has_permission(db, user.id, module, action)
+
+
+async def _ensure_role_allowed(db: AsyncSession, operator: User, role_id: int | None) -> None:
+    """非超管不得把用户提升为超级管理员角色，避免权限提升。"""
+    if role_id is None or operator.is_superuser:
+        return
+    role = await db.get(Role, role_id)
+    if role and role.name == "super_admin":
+        raise HTTPException(status_code=403, detail="只有超级管理员可以分配超级管理员角色")
+
+
+def _ensure_superuser_target(operator: User, target: User) -> None:
+    """非超管不得操作超级管理员账号。"""
+    if target.is_superuser and not operator.is_superuser:
+        raise HTTPException(status_code=403, detail="只有超级管理员可以操作超级管理员账号")
 
 # 用户设置相关 Schema
 class UserSettingsResponse(BaseModel):
@@ -73,21 +99,21 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
         is_sso_user=user.is_sso_user,
         last_login_at=user.last_login_at,
         last_login_ip=user.last_login_ip,
-        avatar=user.avatar,
+        avatar=avatar_url(user),
         created_at=user.created_at,
         updated_at=user.updated_at
     )
 
-@router.get("/", response_model=list[UserResponse])
+@router.get("/", response_model=list[UserResponse], dependencies=[Depends(require_permission("users:read"))])
 async def read_users(
     page: PageParams = Depends(pagination()),
     role: str = None,
     is_active: bool = None,
     keyword: str = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
-    """获取用户列表（仅super_admin可访问）"""
+    """获取用户列表（需要 users:read 权限）"""
     stmt = select(User)
     
     if role:
@@ -119,8 +145,8 @@ async def read_user(
     current_user: User = Depends(get_current_active_user)
 ):
     """获取单个用户信息"""
-    # 普通用户只能查看自己，管理员可以查看所有用户
-    if not current_user.is_superuser and current_user.id != user_id:
+    # 本人可查看自己；查看他人需要 users:read
+    if current_user.id != user_id and not await _can(db, current_user, "users", "read"):
         raise HTTPException(status_code=403, detail="没有足够的权限")
     
     result = await db.execute(select(User).where(User.id == user_id))
@@ -165,12 +191,101 @@ async def update_user_settings(
     
     return UserSettingsResponse(locale=current_user.locale or "zh-CN")
 
-@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{user_id}/avatar")
+async def upload_user_avatar(
+    request: Request,
+    user_id: int,
+    avatar: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """上传头像：本人或 users:write；服务端缩放到 256x256 后存库。"""
+    if current_user.id != user_id and not await _can(db, current_user, "users", "write"):
+        raise HTTPException(status_code=403, detail="没有足够的权限")
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if current_user.id != user_id:
+        _ensure_superuser_target(current_user, user)
+
+    raw = await avatar.read(MAX_AVATAR_BYTES + 1)
+    if len(raw) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=413, detail=f"头像不能超过 {MAX_AVATAR_BYTES // 1024}KB")
+
+    try:
+        data, content_type = process_avatar(raw)
+    except AvatarValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    user.avatar_data = data
+    user.avatar_content_type = content_type
+    user.avatar_version = (user.avatar_version or 0) + 1
+    user.avatar_updated_at = utc_now()
+    await _audit(
+        db, request, current_user.username, "更新用户头像",
+        f"目标用户：{user.username}，版本：{user.avatar_version}，大小：{len(data)} 字节",
+    )
+    await db.commit()
+    await db.refresh(user)
+    return {"avatar_url": avatar_url(user), "version": user.avatar_version}
+
+
+@router.get("/{user_id}/avatar")
+async def get_user_avatar(
+    user_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """读取头像（公开只读，供 <img> 直接加载），支持 ETag/Last-Modified/304。"""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 历史数据只有外部 URL 时直接跳转，保持兼容
+    if not user.avatar_data:
+        if user.avatar:
+            return RedirectResponse(user.avatar)
+        raise HTTPException(status_code=404, detail="未设置头像")
+
+    etag = avatar_etag(user)
+    last_modified = ensure_utc(user.avatar_updated_at) if user.avatar_updated_at else None
+    headers = {"ETag": etag, "Cache-Control": "public, max-age=86400"}
+    if last_modified:
+        headers["Last-Modified"] = format_datetime(last_modified, usegmt=True)
+
+    inm = request.headers.get("if-none-match")
+    if inm:
+        tags = [t.strip() for t in inm.split(",")]
+        tags = [t[2:] if t.startswith("W/") else t for t in tags]
+        if "*" in tags or etag in tags:
+            return Response(status_code=304, headers=headers)
+
+    ims = request.headers.get("if-modified-since")
+    if ims and last_modified:
+        try:
+            since = parsedate_to_datetime(ims)
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=timezone.utc)
+            if last_modified <= since + timedelta(seconds=1):
+                return Response(status_code=304, headers=headers)
+        except (TypeError, ValueError, OverflowError):
+            pass
+
+    return Response(
+        content=user.avatar_data,
+        media_type=user.avatar_content_type or "image/webp",
+        headers=headers,
+    )
+
+
+@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("users:write"))])
+@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False, dependencies=[Depends(require_permission("users:write"))])
 async def create_user(
     request: Request,
     user: UserCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """创建用户（仅超级管理员）"""
     # 检查用户名是否已存在
@@ -196,7 +311,10 @@ async def create_user(
         role = role_result.scalar_one_or_none()
         if role:
             user.role_id = role.id
-    
+
+    # 非超管不得创建超级管理员角色的账号
+    await _ensure_role_allowed(db, current_user, user.role_id)
+
     user_data = user.model_dump(exclude={"password"})
     user_data["hashed_password"] = get_password_hash(user.password)
     
@@ -228,14 +346,18 @@ async def update_user(
     current_user: User = Depends(get_current_active_user)
 ):
     """编辑用户"""
-    # 普通用户只能更新自己，管理员可以更新所有用户
-    if not current_user.is_superuser and current_user.id != user_id:
+    # 本人可编辑自己；编辑他人需要 users:write
+    if current_user.id != user_id and not await _can(db, current_user, "users", "write"):
         raise HTTPException(status_code=403, detail="没有足够的权限")
     
     result = await db.execute(select(User).where(User.id == user_id))
     target_user = result.scalar_one_or_none()
     if target_user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    if current_user.id != user_id:
+        _ensure_superuser_target(current_user, target_user)
+        await _ensure_role_allowed(db, current_user, user.role_id)
     
     update_data = user.model_dump(exclude_unset=True)
     
@@ -278,14 +400,14 @@ async def update_user(
     await db.commit()
     return await build_user_response(db, updated_user)
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("users:delete"))])
 async def delete_user(
     request: Request,
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
-    """删除用户（仅super_admin可访问）"""
+    """删除用户（需要 users:delete 权限）"""
     # 不允许删除自己
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="不能删除自己")
@@ -294,6 +416,8 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    _ensure_superuser_target(current_user, user)
     
     # 检查是否是最后一个超级管理员
     if user.is_superuser:
@@ -326,12 +450,12 @@ async def delete_user(
     await db.execute(delete(User).where(User.id == user_id))
     await db.commit()
 
-@router.patch("/{user_id}/toggle", response_model=UserResponse)
+@router.patch("/{user_id}/toggle", response_model=UserResponse, dependencies=[Depends(require_permission("users:write"))])
 async def toggle_user_status(
     request: Request,
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """启用/停用用户"""
     # 不允许停用自己
@@ -342,6 +466,8 @@ async def toggle_user_status(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    _ensure_superuser_target(current_user, user)
     
     # 检查是否是最后一个超级管理员
     if user.is_superuser:
@@ -382,14 +508,14 @@ async def toggle_user_status(
     await db.commit()
     return await build_user_response(db, updated_user)
 
-@router.post("/{user_id}/reset-password", response_model=ResetPasswordResponse)
+@router.post("/{user_id}/reset-password", response_model=ResetPasswordResponse, dependencies=[Depends(require_permission("users:write"))])
 async def reset_password(
     request: Request,
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
-    """重置用户密码（仅super_admin可访问）"""
+    """重置用户密码（需要 users:write 权限）"""
     # 不允许重置自己的密码（应使用change-password接口）
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="请使用个人设置中的修改密码功能")
@@ -398,6 +524,8 @@ async def reset_password(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    _ensure_superuser_target(current_user, user)
     
     # 重置密码同样会使当前会话失效，需保护最后一个启用超管
     if user.is_superuser and user.is_active:
@@ -440,9 +568,12 @@ async def reset_password(
 async def get_user_sessions(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
-    """查看用户登录会话列表"""
+    """查看用户登录会话列表：本人或 users:read"""
+    if current_user.id != user_id and not await _can(db, current_user, "users", "read"):
+        raise HTTPException(status_code=403, detail="没有足够的权限")
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
@@ -454,12 +585,12 @@ async def get_user_sessions(
     
     return sessions
 
-@router.post("/{user_id}/revoke-sessions")
+@router.post("/{user_id}/revoke-sessions", dependencies=[Depends(require_permission("users:write"))])
 async def revoke_user_sessions(
     request: Request,
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """强制用户所有会话下线"""
     # 不允许强制自己下线
@@ -470,6 +601,8 @@ async def revoke_user_sessions(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    _ensure_superuser_target(current_user, user)
     
     stmt = update(UserSession).where(
         UserSession.user_id == user_id,
@@ -493,19 +626,21 @@ async def revoke_user_sessions(
     
     return {"message": "已强制用户所有会话下线"}
 
-@router.delete("/{user_id}/sessions/{session_id}")
+@router.delete("/{user_id}/sessions/{session_id}", dependencies=[Depends(require_permission("users:write"))])
 async def revoke_user_session(
     request: Request,
     user_id: int,
     session_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """吊销用户单个会话"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    _ensure_superuser_target(current_user, user)
     
     stmt = select(UserSession).where(
         UserSession.id == session_id,
@@ -537,7 +672,7 @@ async def revoke_user_session(
     
     return {"message": "会话已吊销"}
 
-@router.get("/roles/", response_model=list[RoleResponse])
+@router.get("/roles/", response_model=list[RoleResponse], dependencies=[Depends(require_permission("system:admin"))])
 async def get_roles(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
@@ -569,12 +704,12 @@ async def get_roles(
     
     return role_responses
 
-@router.post("/roles/", response_model=RoleResponse)
+@router.post("/roles/", response_model=RoleResponse, dependencies=[Depends(require_permission("system:admin"))])
 async def create_role(
     request: Request,
     role_create: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """创建角色"""
     # 检查角色名是否已存在
@@ -628,13 +763,13 @@ async def create_role(
         "updated_at": role.updated_at
     }
 
-@router.put("/roles/{role_id}", response_model=RoleResponse)
+@router.put("/roles/{role_id}", response_model=RoleResponse, dependencies=[Depends(require_permission("system:admin"))])
 async def update_role(
     request: Request,
     role_id: int,
     role_update: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """更新角色信息"""
     stmt = select(Role).where(Role.id == role_id)
@@ -702,12 +837,12 @@ async def update_role(
         "updated_at": role.updated_at
     }
 
-@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("system:admin"))])
 async def delete_role(
     request: Request,
     role_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)
+    current_user: User = Depends(get_current_active_user)
 ):
     """删除角色（内置角色与使用中的角色禁止删除）"""
     stmt = select(Role).where(Role.id == role_id)
@@ -736,7 +871,7 @@ async def delete_role(
     await db.execute(delete(Role).where(Role.id == role_id))
     await db.commit()
 
-@router.get("/permissions/", response_model=list[PermissionResponse])
+@router.get("/permissions/", response_model=list[PermissionResponse], dependencies=[Depends(require_permission("system:admin"))])
 async def get_permissions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)

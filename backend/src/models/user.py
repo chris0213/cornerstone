@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -62,7 +62,12 @@ class User(Base):
     mobile = Column(String(50))                                       # 手机号码
     last_login_at = Column(UTCDateTime)                  # 最后登录时间
     last_login_ip = Column(String(50))                               # 最后登录IP
-    avatar = Column(String(255))                                     # 头像URL（可选）
+    avatar = Column(String(255))                                     # 旧头像URL（兼容历史数据）
+    # 头像存库：二进制 + MIME + 版本（版本用于 URL 缓存失效）
+    avatar_data = Column(LargeBinary)                                # 缩放后的头像二进制
+    avatar_content_type = Column(String(50))                         # 头像 MIME 类型
+    avatar_version = Column(Integer, nullable=False, default=0, server_default="0")
+    avatar_updated_at = Column(UTCDateTime)                          # 头像最后更新时间（Last-Modified）
     locale = Column(String(10), default="zh-CN")                      # 语言偏好 zh-CN / en-US
     created_at = Column(UTCDateTime, server_default=func.now())
     updated_at = Column(UTCDateTime, onupdate=func.now())

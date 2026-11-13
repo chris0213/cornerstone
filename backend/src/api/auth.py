@@ -37,6 +37,7 @@ from ..utils.security import (
 )
 from ..config import settings
 from ..services.permission_service import get_user_permissions
+from ..services.avatar_service import avatar_url
 from ..services.sso_service import sso_service, SSOException
 from .dependencies import get_current_active_user
 from src.utils.timeutil import utc_now
@@ -314,7 +315,7 @@ async def read_users_me(
         "is_sso_user": current_user.is_sso_user,
         "last_login_at": current_user.last_login_at,
         "last_login_ip": current_user.last_login_ip,
-        "avatar": current_user.avatar,
+        "avatar": avatar_url(current_user),
         "created_at": current_user.created_at,
         "updated_at": current_user.updated_at
     }
