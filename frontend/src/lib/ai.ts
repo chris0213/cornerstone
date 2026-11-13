@@ -224,11 +224,15 @@ const defaultServices: AIServiceConfig[] = [
  }
 ];
 
+// 后端当前生效的 AI 配置 id（来自 GET /ai/config），用于更新而非重复创建
+let backendConfigId: number | null = null;
+
 async function loadAIServicesFromBackend(): Promise<AIServiceConfig[]> {
   try {
     const response = await api.get('/ai/config');
     const data = response.data;
     if (data.provider) {
+      backendConfigId = data.id ?? null;
       return [{
         name: data.description || getProviderDisplayName(data.provider),
         provider: data.provider as AIServiceConfig['provider'],
@@ -246,13 +250,22 @@ async function loadAIServicesFromBackend(): Promise<AIServiceConfig[]> {
 
 async function saveAIServiceToBackend(service: AIServiceConfig) {
   try {
-    await api.put('/ai/config', {
+    const payload = {
+      name: service.name || getProviderDisplayName(service.provider),
       provider: service.provider,
       model: service.model,
       api_url: service.apiBase,
       api_key: service.apiKey || '',
-      description: service.name
-    });
+      description: service.name,
+      enabled: service.enabled
+    };
+    // 后端只有 PUT /ai/config/{id} 与 POST /ai/config，不能 PUT /ai/config
+    if (backendConfigId) {
+      await api.put(`/ai/config/${backendConfigId}`, payload);
+    } else {
+      const response = await api.post('/ai/config', payload);
+      backendConfigId = response.data?.id ?? null;
+    }
   } catch (error) {
     console.error('Failed to save AI config to backend:', error);
   }

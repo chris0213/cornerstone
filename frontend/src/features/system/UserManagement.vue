@@ -493,7 +493,7 @@ async function handleAddRole() {
  return;
  }
  try {
- await api.post('/api/v1/roles/', addRoleForm);
+ await api.post('/api/v1/users/roles/', addRoleForm);
  ElMessage.success(t('system.roleCreated'));
  showAddRoleModal.value = false;
  addRoleForm.name = '';
@@ -508,7 +508,7 @@ async function handleAddRole() {
 }
 async function handleEditRole() {
  try {
- await api.put(`/api/v1/roles/${editRoleForm.id}`, {
+ await api.put(`/api/v1/users/roles/${editRoleForm.id}`, {
  display_name: editRoleForm.display_name,
  description: editRoleForm.description,
  permissions: editRoleForm.permissions
