@@ -62,6 +62,21 @@ PERMISSIONS = [
     {"module": "inspection", "action": "read", "display_name": "智能巡检-查看", "description": "查看智能巡检任务与结果"},
     {"module": "inspection", "action": "write", "display_name": "智能巡检-管理", "description": "创建、编辑、删除、启停、执行巡检任务"},
 
+    # VLAN 管理
+    {"module": "vlans", "action": "read", "display_name": "VLAN管理-查看", "description": "查看 VLAN 与 VLAN 组"},
+    {"module": "vlans", "action": "write", "display_name": "VLAN管理-新增编辑", "description": "新增和编辑 VLAN/VLAN 组"},
+    {"module": "vlans", "action": "delete", "display_name": "VLAN管理-删除", "description": "删除 VLAN/VLAN 组"},
+
+    # 链路监控
+    {"module": "monitoring", "action": "read", "display_name": "链路监控-查看", "description": "查看监控状态与历史"},
+    {"module": "monitoring", "action": "write", "display_name": "链路监控-操作", "description": "触发监控、Ping 探测与调度控制"},
+
+    # 事件时间线
+    {"module": "timeline", "action": "read", "display_name": "事件时间线-查看", "description": "查看全局事件时间线"},
+
+    # AI 助手
+    {"module": "ai", "action": "read", "display_name": "AI助手-使用", "description": "使用 AI 检索、分析与查看自己的会话日志"},
+
     # 系统管理
     {"module": "system", "action": "read", "display_name": "系统管理-查看", "description": "查看系统设置"},
     {"module": "system", "action": "write", "display_name": "系统管理-编辑", "description": "编辑系统设置"},
@@ -104,6 +119,9 @@ ROLES = [
             "alerts:read", "alerts:write",
             "knowledge:write",
             "inspection:read", "inspection:write",
+            "vlans:read", "vlans:write", "vlans:delete",
+            "monitoring:read", "monitoring:write",
+            "timeline:read", "ai:read",
             "logs:read"
         ]
     },
@@ -118,6 +136,9 @@ ROLES = [
             "alerts:read",
             "reports:read",
             "inspection:read",
+            "monitoring:read",
+            "timeline:read",
+            "ai:read",
             "logs:read"
         ]
     }

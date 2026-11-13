@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from ..database import get_db
-from ..api.dependencies import get_current_active_user, require_super_admin, PageParams, pagination
+from ..api.dependencies import get_current_active_user, require_super_admin, PageParams, pagination, require_permission
 from ..models import User, Device, Backup, Circuit, Prefix, IPAddress, AIChatLog
 from ..models.alert import AlertRecord
 from ..models.audit_log import AuditLog
@@ -118,7 +118,7 @@ class AIPredictionResponse(BaseModel):
 
 # ── 接口 ──────────────────────────────────────
 
-@router.post("/search", response_model=SearchResponse)
+@router.post("/search", response_model=SearchResponse, dependencies=[Depends(require_permission("ai:read"))])
 async def ai_search(
     req: SearchRequest,
     request: Request,
@@ -294,7 +294,7 @@ def _build_chat_log_filters(current_user: User, keyword: str, data_type: str, us
     return conds
 
 
-@router.get("/chat-logs")
+@router.get("/chat-logs", dependencies=[Depends(require_permission("ai:read"))])
 async def get_chat_logs(
     page: PageParams = Depends(pagination(default_limit=50)),
     keyword: str = "",
@@ -353,7 +353,7 @@ def _csv_cell(value) -> str:
     return s
 
 
-@router.get("/chat-logs/export")
+@router.get("/chat-logs/export", dependencies=[Depends(require_permission("ai:read"))])
 async def export_chat_logs(
     request: Request,
     keyword: str = "",
@@ -746,7 +746,7 @@ async def test_ai_config(
     return result
 
 
-@router.get("/backups/{backup_id}/analysis", response_model=BackupAnalysisResponse)
+@router.get("/backups/{backup_id}/analysis", response_model=BackupAnalysisResponse, dependencies=[Depends(require_permission("ai:read"))])
 async def get_backup_analysis(
     backup_id: int,
     db: AsyncSession = Depends(get_db),
@@ -1046,7 +1046,7 @@ async def _call_ai_for_prediction(
 
 # ── AI 预测接口 ──────────────────────────────
 
-@router.post("/summary", response_model=AIPredictionResponse)
+@router.post("/summary", response_model=AIPredictionResponse, dependencies=[Depends(require_permission("ai:read"))])
 async def ai_summary(
     req: AIPredictionRequest,
     db: AsyncSession = Depends(get_db),
@@ -1074,7 +1074,7 @@ async def ai_summary(
     )
 
 
-@router.post("/trend", response_model=AIPredictionResponse)
+@router.post("/trend", response_model=AIPredictionResponse, dependencies=[Depends(require_permission("ai:read"))])
 async def ai_trend(
     req: AIPredictionRequest,
     db: AsyncSession = Depends(get_db),
@@ -1181,7 +1181,7 @@ async def ai_trend(
     )
 
 
-@router.post("/root-cause", response_model=AIPredictionResponse)
+@router.post("/root-cause", response_model=AIPredictionResponse, dependencies=[Depends(require_permission("ai:read"))])
 async def ai_root_cause(
     req: AIPredictionRequest,
     db: AsyncSession = Depends(get_db),

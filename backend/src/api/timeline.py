@@ -5,14 +5,14 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..api.dependencies import get_current_active_user
+from ..api.dependencies import get_current_active_user, require_permission
 from ..models import InspectionDeviceResult, Backup, AuditLog, Device, Circuit
 from ..models.user import User
 
 router = APIRouter(tags=["timeline"])
 
 
-@router.get("/events")
+@router.get("/events", dependencies=[Depends(require_permission("timeline:read"))])
 async def get_timeline_events(
     start_time: datetime | None = None,
     end_time: datetime | None = None,

@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db, async_session
-from src.api.dependencies import PageParams, pagination
+from src.api.dependencies import PageParams, pagination, require_permission
 from src.api.dependencies import get_current_active_user
 from src.models.site import Site
 from src.models.circuit import Circuit
@@ -26,7 +26,7 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 
-@router.get("/site-graph")
+@router.get("/site-graph", dependencies=[Depends(require_permission("topology:read"))])
 async def get_site_graph(db: AsyncSession = Depends(get_db)):
     """获取站点间拓扑数据"""
     # 获取所有站点
@@ -142,7 +142,7 @@ async def get_site_graph(db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.get("/device-graph")
+@router.get("/device-graph", dependencies=[Depends(require_permission("topology:read"))])
 async def get_device_graph(
     site_id: Optional[int] = Query(None, description="站点 ID，不提供则返回所有设备"),
     db: AsyncSession = Depends(get_db)
@@ -399,7 +399,7 @@ async def get_device_graph(
 
 
 # 设备连接关系 CRUD API
-@router.get("/device-links", response_model=List[DeviceLinkResponse])
+@router.get("/device-links", response_model=List[DeviceLinkResponse], dependencies=[Depends(require_permission("topology:read"))])
 async def read_device_links(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db)
@@ -410,7 +410,7 @@ async def read_device_links(
     return result.scalars().all()
 
 
-@router.get("/device-links/{link_id}", response_model=DeviceLinkResponse)
+@router.get("/device-links/{link_id}", response_model=DeviceLinkResponse, dependencies=[Depends(require_permission("topology:read"))])
 async def read_device_link(
     link_id: int,
     db: AsyncSession = Depends(get_db)
@@ -424,7 +424,7 @@ async def read_device_link(
     return link
 
 
-@router.post("/device-links", response_model=DeviceLinkResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/device-links", response_model=DeviceLinkResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("topology:write"))])
 async def create_device_link(
     link: DeviceLinkCreate,
     db: AsyncSession = Depends(get_db)
@@ -495,7 +495,7 @@ async def create_device_link(
     return db_link
 
 
-@router.put("/device-links/{link_id}", response_model=DeviceLinkResponse)
+@router.put("/device-links/{link_id}", response_model=DeviceLinkResponse, dependencies=[Depends(require_permission("topology:write"))])
 async def update_device_link(
     link_id: int,
     link_update: DeviceLinkUpdate,
@@ -518,7 +518,7 @@ async def update_device_link(
     return db_link
 
 
-@router.delete("/device-links/{link_id}")
+@router.delete("/device-links/{link_id}", dependencies=[Depends(require_permission("topology:delete"))])
 async def delete_device_link(
     link_id: int,
     db: AsyncSession = Depends(get_db)
@@ -535,7 +535,7 @@ async def delete_device_link(
     return {"message": "Device link deleted successfully"}
 
 
-@router.put("/circuits/{circuit_id}/connect")
+@router.put("/circuits/{circuit_id}/connect", dependencies=[Depends(require_permission("topology:write"))])
 async def update_circuit_connection(
     circuit_id: int,
     connected_device_id: Optional[int] = None,
@@ -571,7 +571,7 @@ async def update_circuit_connection(
     }
 
 
-@router.get("/site-devices")
+@router.get("/site-devices", dependencies=[Depends(require_permission("topology:read"))])
 async def get_site_devices(
     site_id: int = Query(..., description="站点 ID"),
     db: AsyncSession = Depends(get_db)
@@ -593,7 +593,7 @@ async def get_site_devices(
     return devices
 
 
-@router.post("/discover-lldp")
+@router.post("/discover-lldp", dependencies=[Depends(require_permission("topology:write"))])
 async def discover_lldp_neighbors(
     db: AsyncSession = Depends(get_db),
 ):
@@ -633,7 +633,7 @@ async def discover_lldp_neighbors(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/discover-mac")
+@router.post("/discover-mac", dependencies=[Depends(require_permission("topology:write"))])
 async def discover_mac_endpoints(
     db: AsyncSession = Depends(get_db),
 ):
@@ -667,7 +667,7 @@ async def discover_mac_endpoints(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/discovery-tasks/{task_id}")
+@router.get("/discovery-tasks/{task_id}", dependencies=[Depends(require_permission("topology:read"))])
 async def read_discovery_task(
     task_id: str,
 ):
@@ -681,7 +681,7 @@ async def read_discovery_task(
 
 
 # 未知接入终端 API
-@router.get("/unknown-endpoints")
+@router.get("/unknown-endpoints", dependencies=[Depends(require_permission("topology:read"))])
 async def read_unknown_endpoints(
     device_id: Optional[int] = Query(None, description="按接入设备过滤"),
     db: AsyncSession = Depends(get_db)
@@ -716,7 +716,7 @@ async def read_unknown_endpoints(
     return endpoints
 
 
-@router.post("/unknown-endpoints/{endpoint_id}/accept")
+@router.post("/unknown-endpoints/{endpoint_id}/accept", dependencies=[Depends(require_permission("topology:write"))])
 async def accept_unknown_endpoint(
     endpoint_id: int,
     payload: dict,
@@ -846,7 +846,7 @@ async def accept_unknown_endpoint(
     }
 
 
-@router.delete("/unknown-endpoints/{endpoint_id}")
+@router.delete("/unknown-endpoints/{endpoint_id}", dependencies=[Depends(require_permission("topology:delete"))])
 async def delete_unknown_endpoint(
     endpoint_id: int,
     db: AsyncSession = Depends(get_db)

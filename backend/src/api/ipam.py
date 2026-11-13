@@ -17,7 +17,7 @@ from ..schemas import (
     PrefixCreate, PrefixUpdate, PrefixResponse,
     IPAddressCreate, IPAddressUpdate, IPAddressResponse, IPExpiringResponse
 )
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 from ..services.scanner import probe_single_ip, scan_prefix, set_scan_task, get_scan_task, remove_scan_task, parse_custom_ports, get_prefix_scan_lock
 
 router = APIRouter()
@@ -250,7 +250,7 @@ class ScanManager:
 scan_manager = ScanManager()
 
 # Aggregate routes
-@router.get("/aggregates/", response_model=list[AggregateResponse])
+@router.get("/aggregates/", response_model=list[AggregateResponse], dependencies=[Depends(require_permission("ipam:read"))])
 async def read_aggregates(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
@@ -259,7 +259,7 @@ async def read_aggregates(
     result = await db.execute(select(Aggregate).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
-@router.post("/aggregates/", response_model=AggregateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/aggregates/", response_model=AggregateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("ipam:write"))])
 async def create_aggregate(
     aggregate: AggregateCreate,
     db: AsyncSession = Depends(get_db),
@@ -270,7 +270,7 @@ async def create_aggregate(
     await db.commit()
     return result.scalar_one()
 
-@router.put("/aggregates/{aggregate_id}", response_model=AggregateResponse)
+@router.put("/aggregates/{aggregate_id}", response_model=AggregateResponse, dependencies=[Depends(require_permission("ipam:write"))])
 async def update_aggregate(
     aggregate_id: int,
     aggregate: AggregateUpdate,
@@ -285,7 +285,7 @@ async def update_aggregate(
     await db.commit()
     return aggregate
 
-@router.delete("/aggregates/{aggregate_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/aggregates/{aggregate_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("ipam:delete"))])
 async def delete_aggregate(
     aggregate_id: int,
     db: AsyncSession = Depends(get_db),
@@ -302,7 +302,7 @@ async def delete_aggregate(
     await db.commit()
 
 # Prefix routes
-@router.get("/prefixes/", response_model=list[PrefixResponse])
+@router.get("/prefixes/", response_model=list[PrefixResponse], dependencies=[Depends(require_permission("ipam:read"))])
 async def read_prefixes(
     page: PageParams = Depends(pagination()),
     site_id: int | None = None,
@@ -345,7 +345,7 @@ async def read_prefixes(
         out.append(item)
     return out
 
-@router.post("/prefixes/", response_model=PrefixResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/prefixes/", response_model=PrefixResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("ipam:write"))])
 async def create_prefix(
     prefix: PrefixCreate,
     db: AsyncSession = Depends(get_db),
@@ -362,7 +362,7 @@ async def create_prefix(
 
     return created
 
-@router.put("/prefixes/{prefix_id}", response_model=PrefixResponse)
+@router.put("/prefixes/{prefix_id}", response_model=PrefixResponse, dependencies=[Depends(require_permission("ipam:write"))])
 async def update_prefix(
     prefix_id: int,
     prefix: PrefixUpdate,
@@ -382,7 +382,7 @@ async def update_prefix(
 
     return prefix_obj
 
-@router.delete("/prefixes/{prefix_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/prefixes/{prefix_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("ipam:delete"))])
 async def delete_prefix(
     prefix_id: int,
     db: AsyncSession = Depends(get_db),
@@ -403,7 +403,7 @@ async def delete_prefix(
     await reload_ipam_scan(prefix_id, db)
 
 # IP Address routes
-@router.get("/addresses/", response_model=list[IPAddressResponse])
+@router.get("/addresses/", response_model=list[IPAddressResponse], dependencies=[Depends(require_permission("ipam:read"))])
 async def read_addresses(
     page: PageParams = Depends(pagination()),
     prefix_id: int | None = None,
@@ -447,7 +447,7 @@ async def read_addresses(
     result = await db.execute(stmt)
     return result.scalars().all()
 
-@router.post("/addresses/", response_model=IPAddressResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/addresses/", response_model=IPAddressResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("ipam:write"))])
 async def create_address(
     address: IPAddressCreate,
     db: AsyncSession = Depends(get_db),
@@ -458,7 +458,7 @@ async def create_address(
     await db.commit()
     return result.scalar_one()
 
-@router.put("/addresses/{address_id}", response_model=IPAddressResponse)
+@router.put("/addresses/{address_id}", response_model=IPAddressResponse, dependencies=[Depends(require_permission("ipam:write"))])
 async def update_address(
     address_id: int,
     address: IPAddressUpdate,
@@ -473,7 +473,7 @@ async def update_address(
     await db.commit()
     return address
 
-@router.delete("/addresses/{address_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/addresses/{address_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("ipam:delete"))])
 async def delete_address(
     address_id: int,
     db: AsyncSession = Depends(get_db),
@@ -491,7 +491,7 @@ async def delete_address(
 
 # === IP扫描相关接口 ===
 
-@router.post("/prefixes/{prefix_id}/scan")
+@router.post("/prefixes/{prefix_id}/scan", dependencies=[Depends(require_permission("ipam:scan_exec"))])
 async def scan_prefix_addresses(
     prefix_id: int,
     tcp_ports: List[int] = [22, 80, 443, 445, 3389],
@@ -505,7 +505,7 @@ async def scan_prefix_addresses(
     return {"task_id": task_id, "message": "扫描任务已启动"}
 
 
-@router.get("/scan/tasks")
+@router.get("/scan/tasks", dependencies=[Depends(require_permission("ipam:read"))])
 async def get_scan_tasks(
     current_user: dict = Depends(get_current_active_user)
 ):
@@ -533,8 +533,12 @@ async def websocket_scan(
 
     # 验证用户身份
     from .dependencies import get_ws_user
+    from ..services.permission_service import has_permission
     try:
-        await get_ws_user(websocket, db)
+        ws_user = await get_ws_user(websocket, db)
+        # 扫描进度包含内网探测结果，需与触发扫描一致的权限
+        if not ws_user.is_superuser and not await has_permission(db, ws_user.id, "ipam", "scan_exec"):
+            raise PermissionError("缺少权限: ipam:scan_exec")
         logger.info(f"[scan] WS auth ok task_id={task_id}")
     except Exception as e:
         logger.warning(f"[scan] WS auth failed task_id={task_id}: {e}")
@@ -560,7 +564,7 @@ async def websocket_scan(
 
 # === IP到期相关接口 ===
 
-@router.get("/addresses/expiring")
+@router.get("/addresses/expiring", dependencies=[Depends(require_permission("ipam:read"))])
 async def get_expiring_addresses(
     days: int = 30,
     db: AsyncSession = Depends(get_db),
@@ -596,7 +600,7 @@ async def get_expiring_addresses(
     return {"code": 0, "message": "ok", "data": expiring_list}
 
 
-@router.post("/addresses/{address_id}/release")
+@router.post("/addresses/{address_id}/release", dependencies=[Depends(require_permission("ipam:write"))])
 async def release_address(
     address_id: int,
     db: AsyncSession = Depends(get_db),
@@ -624,7 +628,7 @@ async def release_address(
     return {"code": 0, "message": "IP地址已成功释放", "data": result.scalar_one()}
 
 
-@router.get("/prefixes/{prefix_id}/next-available")
+@router.get("/prefixes/{prefix_id}/next-available", dependencies=[Depends(require_permission("ipam:read"))])
 async def get_next_available_ip(
     prefix_id: int,
     db: AsyncSession = Depends(get_db),

@@ -15,7 +15,7 @@ from ..schemas.circuit_incident import (
     CircuitIncidentLogResponse,
     CircuitIncidentStats
 )
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
@@ -31,7 +31,7 @@ async def log_audit(db: AsyncSession, user: str, action: str, resource: str, det
     )
 
 
-@router.get("/circuits/{circuit_id}/incidents", response_model=list[CircuitIncidentResponse])
+@router.get("/circuits/{circuit_id}/incidents", response_model=list[CircuitIncidentResponse], dependencies=[Depends(require_permission("circuits:read"))])
 async def get_circuit_incidents(
     circuit_id: int,
     db: AsyncSession = Depends(get_db),
@@ -47,7 +47,7 @@ async def get_circuit_incidents(
     return result.scalars().all()
 
 
-@router.post("/circuits/{circuit_id}/incidents", response_model=CircuitIncidentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/circuits/{circuit_id}/incidents", response_model=CircuitIncidentResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("circuits:write"))])
 async def create_circuit_incident(
     circuit_id: int,
     incident: CircuitIncidentCreate,
@@ -73,7 +73,7 @@ async def create_circuit_incident(
     return new_incident
 
 
-@router.get("/incidents/{incident_id}", response_model=CircuitIncidentResponse)
+@router.get("/incidents/{incident_id}", response_model=CircuitIncidentResponse, dependencies=[Depends(require_permission("circuits:read"))])
 async def get_incident(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
@@ -86,7 +86,7 @@ async def get_incident(
     return incident
 
 
-@router.put("/incidents/{incident_id}", response_model=CircuitIncidentResponse)
+@router.put("/incidents/{incident_id}", response_model=CircuitIncidentResponse, dependencies=[Depends(require_permission("circuits:write"))])
 async def update_incident(
     incident_id: int,
     incident_update: CircuitIncidentUpdate,
@@ -108,7 +108,7 @@ async def update_incident(
     return result.scalar_one()
 
 
-@router.post("/incidents/{incident_id}/resolve", response_model=CircuitIncidentResponse)
+@router.post("/incidents/{incident_id}/resolve", response_model=CircuitIncidentResponse, dependencies=[Depends(require_permission("circuits:write"))])
 async def resolve_incident(
     incident_id: int,
     resolve_data: CircuitIncidentResolve,
@@ -142,7 +142,7 @@ async def resolve_incident(
     return result.scalar_one()
 
 
-@router.post("/incidents/{incident_id}/logs", response_model=CircuitIncidentLogResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/incidents/{incident_id}/logs", response_model=CircuitIncidentLogResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("circuits:write"))])
 async def add_incident_log(
     incident_id: int,
     log: CircuitIncidentLogCreate,
@@ -167,7 +167,7 @@ async def add_incident_log(
     return result.scalar_one()
 
 
-@router.get("/incidents/{incident_id}/logs", response_model=list[CircuitIncidentLogResponse])
+@router.get("/incidents/{incident_id}/logs", response_model=list[CircuitIncidentLogResponse], dependencies=[Depends(require_permission("circuits:read"))])
 async def get_incident_logs(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
@@ -183,7 +183,7 @@ async def get_incident_logs(
     return result.scalars().all()
 
 
-@router.get("/incidents/", response_model=list[CircuitIncidentResponse])
+@router.get("/incidents/", response_model=list[CircuitIncidentResponse], dependencies=[Depends(require_permission("circuits:read"))])
 async def get_all_incidents(
     status: str = None,
     severity: str = None,
@@ -203,7 +203,7 @@ async def get_all_incidents(
     return result.scalars().all()
 
 
-@router.get("/circuits/{circuit_id}/incidents/stats", response_model=CircuitIncidentStats)
+@router.get("/circuits/{circuit_id}/incidents/stats", response_model=CircuitIncidentStats, dependencies=[Depends(require_permission("circuits:read"))])
 async def get_circuit_incident_stats(
     circuit_id: int,
     db: AsyncSession = Depends(get_db),

@@ -6,14 +6,14 @@ from typing import List, Optional
 from ..database import get_db
 from ..models import VlanGroup, Vlan, Prefix
 from ..schemas import VlanGroupCreate, VlanGroupUpdate, VlanGroupResponse, VlanCreate, VlanUpdate, VlanResponse, PrefixResponse
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
 
 # === VLAN组相关接口 ===
 
-@router.get("/vlans/groups/", response_model=list[VlanGroupResponse])
+@router.get("/vlans/groups/", response_model=list[VlanGroupResponse], dependencies=[Depends(require_permission("vlans:read"))])
 async def read_vlan_groups(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
@@ -24,7 +24,7 @@ async def read_vlan_groups(
     return result.scalars().all()
 
 
-@router.post("/vlans/groups/", response_model=VlanGroupResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/vlans/groups/", response_model=VlanGroupResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("vlans:write"))])
 async def create_vlan_group(
     vlan_group: VlanGroupCreate,
     db: AsyncSession = Depends(get_db),
@@ -37,7 +37,8 @@ async def create_vlan_group(
     return result.scalar_one()
 
 
-@router.put("/vlans/groups/{group_id}/", response_model=VlanGroupResponse)
+@router.put("/vlans/groups/{group_id}/", response_model=VlanGroupResponse, dependencies=[Depends(require_permission("vlans:write"))])
+@router.put("/vlans/groups/{group_id}", response_model=VlanGroupResponse, include_in_schema=False, dependencies=[Depends(require_permission("vlans:write"))])
 async def update_vlan_group(
     group_id: int,
     vlan_group: VlanGroupUpdate,
@@ -54,7 +55,8 @@ async def update_vlan_group(
     return vlan_group
 
 
-@router.delete("/vlans/groups/{group_id}/", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/vlans/groups/{group_id}/", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("vlans:delete"))])
+@router.delete("/vlans/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False, dependencies=[Depends(require_permission("vlans:delete"))])
 async def delete_vlan_group(
     group_id: int,
     db: AsyncSession = Depends(get_db),
@@ -81,7 +83,7 @@ async def delete_vlan_group(
 
 # === VLAN相关接口 ===
 
-@router.get("/vlans/", response_model=list[VlanResponse])
+@router.get("/vlans/", response_model=list[VlanResponse], dependencies=[Depends(require_permission("vlans:read"))])
 async def read_vlans(
     group_id: Optional[int] = None,
     site_id: Optional[int] = None,
@@ -104,7 +106,7 @@ async def read_vlans(
     return result.scalars().all()
 
 
-@router.post("/vlans/", response_model=VlanResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/vlans/", response_model=VlanResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("vlans:write"))])
 async def create_vlan(
     vlan: VlanCreate,
     db: AsyncSession = Depends(get_db),
@@ -144,7 +146,7 @@ async def create_vlan(
     return result.scalar_one()
 
 
-@router.put("/vlans/{vlan_id}", response_model=VlanResponse)
+@router.put("/vlans/{vlan_id}", response_model=VlanResponse, dependencies=[Depends(require_permission("vlans:write"))])
 async def update_vlan(
     vlan_id: int,
     vlan: VlanUpdate,
@@ -192,7 +194,7 @@ async def update_vlan(
     return result.scalar_one()
 
 
-@router.delete("/vlans/{vlan_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/vlans/{vlan_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("vlans:delete"))])
 async def delete_vlan(
     vlan_id: int,
     db: AsyncSession = Depends(get_db),
@@ -222,7 +224,7 @@ async def delete_vlan(
     await db.commit()
 
 
-@router.get("/vlans/{vlan_id}/prefixes", response_model=list[PrefixResponse])
+@router.get("/vlans/{vlan_id}/prefixes", response_model=list[PrefixResponse], dependencies=[Depends(require_permission("vlans:read"))])
 async def get_vlan_prefixes(
     vlan_id: int,
     db: AsyncSession = Depends(get_db),

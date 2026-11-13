@@ -4,7 +4,7 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.api.dependencies import get_current_active_user
+from src.api.dependencies import get_current_active_user, require_permission
 from src.models.device import Device
 from src.models.link_monitor import LinkMonitor
 from src.models.ip_address import IPAddress
@@ -20,7 +20,7 @@ from src.services.scheduler_service import (
 router = APIRouter(tags=["monitoring"])
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(require_permission("monitoring:write"))])
 async def run_monitor(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_active_user),
@@ -30,7 +30,7 @@ async def run_monitor(
     return {"message": "监控任务已执行"}
 
 
-@router.get("/devices")
+@router.get("/devices", dependencies=[Depends(require_permission("monitoring:read"))])
 async def get_device_monitor_status(
     device_id: Optional[int] = Query(None, description="设备ID"),
     db: AsyncSession = Depends(get_db),
@@ -74,7 +74,7 @@ async def get_device_monitor_status(
     ]
 
 
-@router.get("/history/{device_id}")
+@router.get("/history/{device_id}", dependencies=[Depends(require_permission("monitoring:read"))])
 async def get_device_monitor_history(
     device_id: int,
     limit: int = Query(100, description="返回记录数"),
@@ -103,7 +103,7 @@ async def get_device_monitor_history(
     ]
 
 
-@router.get("/summary")
+@router.get("/summary", dependencies=[Depends(require_permission("monitoring:read"))])
 async def get_monitor_summary(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_active_user),
@@ -132,7 +132,7 @@ async def get_monitor_summary(
     return summary
 
 
-@router.post("/ping/{target_ip}")
+@router.post("/ping/{target_ip}", dependencies=[Depends(require_permission("monitoring:write"))])
 async def ping_target(
     target_ip: str,
     current_user=Depends(get_current_active_user),
@@ -149,7 +149,7 @@ async def ping_target(
     }
 
 
-@router.get("/scheduler/status")
+@router.get("/scheduler/status", dependencies=[Depends(require_permission("monitoring:read"))])
 async def get_scheduler_status(current_user=Depends(get_current_active_user)):
     """获取定时任务调度器状态"""
     return {
@@ -158,7 +158,7 @@ async def get_scheduler_status(current_user=Depends(get_current_active_user)):
     }
 
 
-@router.post("/scheduler/interval")
+@router.post("/scheduler/interval", dependencies=[Depends(require_permission("monitoring:write"))])
 async def set_scheduler_interval(
     interval_minutes: int = Query(..., ge=1, le=60, description="定时任务间隔（分钟）"),
     current_user=Depends(get_current_active_user),
@@ -171,7 +171,7 @@ async def set_scheduler_interval(
     return {"message": f"定时任务间隔已设置为{interval_minutes}分钟"}
 
 
-@router.post("/scheduler/start")
+@router.post("/scheduler/start", dependencies=[Depends(require_permission("monitoring:write"))])
 async def start_monitor_scheduler(
     interval_minutes: int = Query(5, ge=1, le=60),
     current_user=Depends(get_current_active_user),
@@ -184,7 +184,7 @@ async def start_monitor_scheduler(
     return {"message": f"定时任务调度器已启动，间隔{interval_minutes}分钟"}
 
 
-@router.post("/scheduler/stop")
+@router.post("/scheduler/stop", dependencies=[Depends(require_permission("monitoring:write"))])
 async def stop_monitor_scheduler(current_user=Depends(get_current_active_user)):
     """停止定时任务调度器"""
     stop_scheduler()

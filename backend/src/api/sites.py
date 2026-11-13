@@ -5,11 +5,11 @@ from sqlalchemy import select, insert, update, delete
 from ..database import get_db
 from ..models import Site, Circuit, Device, Vlan, VlanGroup, Prefix, BackupTask, InspectionResult, InspectionTask, InspectionDeviceResult, DeviceFingerprint, IPAddress, Backup, LinkMonitor, DeviceLink, AlertRecord, AlertRule, Credential
 from ..schemas import SiteCreate, SiteUpdate, SiteResponse
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
-@router.get("/", response_model=list[SiteResponse])
+@router.get("/", response_model=list[SiteResponse], dependencies=[Depends(require_permission("sites:read"))])
 async def read_sites(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
@@ -18,7 +18,7 @@ async def read_sites(
     result = await db.execute(select(Site).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
-@router.get("/{site_id}", response_model=SiteResponse)
+@router.get("/{site_id}", response_model=SiteResponse, dependencies=[Depends(require_permission("sites:read"))])
 async def read_site(
     site_id: int,
     db: AsyncSession = Depends(get_db),
@@ -30,7 +30,7 @@ async def read_site(
         raise HTTPException(status_code=404, detail="Site not found")
     return site
 
-@router.post("/", response_model=SiteResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=SiteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sites:write"))])
 async def create_site(
     site: SiteCreate,
     db: AsyncSession = Depends(get_db),
@@ -41,7 +41,7 @@ async def create_site(
     await db.commit()
     return result.scalar_one()
 
-@router.put("/{site_id}", response_model=SiteResponse)
+@router.put("/{site_id}", response_model=SiteResponse, dependencies=[Depends(require_permission("sites:write"))])
 async def update_site(
     site_id: int,
     site: SiteUpdate,
@@ -58,7 +58,7 @@ async def update_site(
     await db.commit()
     return result.scalar_one()
 
-@router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("sites:delete"))])
 async def delete_site(
     site_id: int,
     db: AsyncSession = Depends(get_db),

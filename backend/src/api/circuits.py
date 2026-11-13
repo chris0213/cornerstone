@@ -7,7 +7,7 @@ from uuid import uuid4
 from ..database import get_db
 from ..models import Circuit, CircuitChange
 from ..schemas import CircuitCreate, CircuitUpdate, CircuitResponse
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ def _circuit_snapshot(circuit: Circuit) -> str:
     return str({c.name: getattr(circuit, c.name) for c in circuit.__table__.columns})
 
 
-@router.get("/", response_model=list[CircuitResponse])
+@router.get("/", response_model=list[CircuitResponse], dependencies=[Depends(require_permission("circuits:read"))])
 async def read_circuits(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
@@ -27,7 +27,7 @@ async def read_circuits(
     return result.scalars().all()
 
 
-@router.get("/{circuit_id}", response_model=CircuitResponse)
+@router.get("/{circuit_id}", response_model=CircuitResponse, dependencies=[Depends(require_permission("circuits:read"))])
 async def read_circuit(
     circuit_id: int,
     db: AsyncSession = Depends(get_db),
@@ -40,7 +40,7 @@ async def read_circuit(
     return circuit
 
 
-@router.post("/", response_model=CircuitResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=CircuitResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("circuits:write"))])
 async def create_circuit(
     circuit: CircuitCreate,
     db: AsyncSession = Depends(get_db),
@@ -67,7 +67,7 @@ async def create_circuit(
     return new_circuit
 
 
-@router.put("/{circuit_id}", response_model=CircuitResponse)
+@router.put("/{circuit_id}", response_model=CircuitResponse, dependencies=[Depends(require_permission("circuits:write"))])
 async def update_circuit(
     circuit_id: int,
     circuit: CircuitUpdate,
@@ -110,7 +110,7 @@ async def update_circuit(
     return result.scalar_one()
 
 
-@router.delete("/{circuit_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{circuit_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("circuits:delete"))])
 async def delete_circuit(
     circuit_id: int,
     db: AsyncSession = Depends(get_db),
@@ -143,7 +143,7 @@ async def delete_circuit(
     await db.commit()
 
 
-@router.get("/{circuit_id}/changes")
+@router.get("/{circuit_id}/changes", dependencies=[Depends(require_permission("circuits:read"))])
 async def get_circuit_changes(
     circuit_id: int,
     db: AsyncSession = Depends(get_db),

@@ -9,12 +9,12 @@ from ..schemas import (
     DeviceCreate, DeviceUpdate, DeviceResponse
 )
 from ..utils import backup_config
-from .dependencies import get_current_active_user, PageParams, pagination
+from .dependencies import get_current_active_user, PageParams, pagination, require_permission
 
 router = APIRouter()
 
 # Device routes
-@router.get("/", response_model=list[DeviceResponse])
+@router.get("/", response_model=list[DeviceResponse], dependencies=[Depends(require_permission("devices:read"))])
 async def read_devices(
     page: PageParams = Depends(pagination()),
     db: AsyncSession = Depends(get_db),
@@ -23,7 +23,7 @@ async def read_devices(
     result = await db.execute(select(Device).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
-@router.get("/{device_id}", response_model=DeviceResponse)
+@router.get("/{device_id}", response_model=DeviceResponse, dependencies=[Depends(require_permission("devices:read"))])
 async def read_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
@@ -35,7 +35,7 @@ async def read_device(
         raise HTTPException(status_code=404, detail="Device not found")
     return device
 
-@router.post("/", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("devices:write"))])
 async def create_device(
     device: DeviceCreate,
     db: AsyncSession = Depends(get_db),
@@ -53,7 +53,7 @@ async def create_device(
     await db.commit()
     return result.scalar_one()
 
-@router.put("/{device_id}", response_model=DeviceResponse)
+@router.put("/{device_id}", response_model=DeviceResponse, dependencies=[Depends(require_permission("devices:write"))])
 async def update_device(
     device_id: int,
     device: DeviceUpdate,
@@ -74,7 +74,7 @@ async def update_device(
     await db.commit()
     return device
 
-@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("devices:delete"))])
 async def delete_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
@@ -101,7 +101,7 @@ async def delete_device(
     await db.execute(delete(Device).where(Device.id == device_id))
     await db.commit()
 
-@router.post("/{device_id}/probe")
+@router.post("/{device_id}/probe", dependencies=[Depends(require_permission("devices:write"))])
 async def probe_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
@@ -145,7 +145,7 @@ async def probe_device(
     }
 
 
-@router.post("/{device_id}/backup")
+@router.post("/{device_id}/backup", dependencies=[Depends(require_permission("backups:backup_exec"))])
 async def backup_device_config(
     device_id: int,
     db: AsyncSession = Depends(get_db),

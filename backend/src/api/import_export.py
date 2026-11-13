@@ -9,7 +9,7 @@ import io
 from ..database import get_db
 from ..models import User
 from ..utils.ip_whitelist import get_client_ip_from_request
-from ..api.dependencies import get_current_active_user
+from ..api.dependencies import get_current_active_user, require_permission
 from ..services.import_export_service import (
     DeviceImportExport,
     IPAddressImportExport,
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== 设备导入导出 ====================
 
-@router.get("/devices/export")
+@router.get("/devices/export", dependencies=[Depends(require_permission("devices:export"))])
 async def export_devices(
     format: str = Query("excel", description="导出格式: excel 或 csv"),
     db: AsyncSession = Depends(get_db),
@@ -52,7 +52,7 @@ async def export_devices(
         raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
-@router.post("/devices/import")
+@router.post("/devices/import", dependencies=[Depends(require_permission("devices:write"))])
 async def import_devices(
     request: Request,
     file: UploadFile = File(...),
@@ -91,7 +91,7 @@ async def import_devices(
         raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
-@router.get("/devices/template")
+@router.get("/devices/template", dependencies=[Depends(require_permission("devices:read"))])
 async def download_device_template():
     """下载设备导入模板"""
     from openpyxl import Workbook
@@ -143,7 +143,7 @@ async def download_device_template():
 
 # ==================== 子网导入导出 ====================
 
-@router.get("/prefixes/export")
+@router.get("/prefixes/export", dependencies=[Depends(require_permission("ipam:export"))])
 async def export_prefixes(
     format: str = Query("excel", description="导出格式: excel 或 csv"),
     db: AsyncSession = Depends(get_db),
@@ -160,7 +160,7 @@ async def export_prefixes(
         raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
-@router.get("/prefixes/template")
+@router.get("/prefixes/template", dependencies=[Depends(require_permission("ipam:read"))])
 async def get_prefix_template():
     """下载子网导入模板"""
     from openpyxl import Workbook
@@ -209,7 +209,7 @@ async def get_prefix_template():
     )
 
 
-@router.post("/prefixes/import")
+@router.post("/prefixes/import", dependencies=[Depends(require_permission("ipam:write"))])
 async def import_prefixes(
     request: Request,
     file: UploadFile = File(...),
@@ -241,7 +241,7 @@ async def import_prefixes(
 
 # ==================== IP地址导入导出 ====================
 
-@router.get("/ip-addresses/export")
+@router.get("/ip-addresses/export", dependencies=[Depends(require_permission("ipam:export"))])
 async def export_ip_addresses(
     prefix_id: int = Query(None, description="子网ID，不传则导出所有"),
     format: str = Query("excel", description="导出格式: excel 或 csv"),
@@ -271,7 +271,7 @@ async def export_ip_addresses(
         raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
-@router.post("/ip-addresses/import")
+@router.post("/ip-addresses/import", dependencies=[Depends(require_permission("ipam:write"))])
 async def import_ip_addresses(
     request: Request,
     file: UploadFile = File(...),
@@ -312,7 +312,7 @@ async def import_ip_addresses(
         raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
-@router.get("/ip-addresses/template")
+@router.get("/ip-addresses/template", dependencies=[Depends(require_permission("ipam:read"))])
 async def download_ip_address_template():
     """下载IP地址导入模板"""
     from openpyxl import Workbook
@@ -364,7 +364,7 @@ async def download_ip_address_template():
 
 # ==================== 电路导入导出 ====================
 
-@router.get("/circuits/export")
+@router.get("/circuits/export", dependencies=[Depends(require_permission("circuits:export"))])
 async def export_circuits(
     format: str = Query("excel", description="导出格式: excel 或 csv"),
     db: AsyncSession = Depends(get_db),
@@ -393,7 +393,7 @@ async def export_circuits(
         raise HTTPException(status_code=500, detail="导出失败，请稍后重试")
 
 
-@router.post("/circuits/import")
+@router.post("/circuits/import", dependencies=[Depends(require_permission("circuits:write"))])
 async def import_circuits(
     request: Request,
     file: UploadFile = File(...),
@@ -432,7 +432,7 @@ async def import_circuits(
         raise HTTPException(status_code=500, detail="导入失败，请稍后重试")
 
 
-@router.get("/circuits/template")
+@router.get("/circuits/template", dependencies=[Depends(require_permission("circuits:read"))])
 async def download_circuit_template():
     """下载电路导入模板"""
     from openpyxl import Workbook
