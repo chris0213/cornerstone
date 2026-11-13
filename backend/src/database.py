@@ -79,3 +79,7 @@ Base = declarative_base()
 async def get_db():
     async with async_session() as session:
         yield session
+
+
+# 注册租户行级过滤与写入兜底事件（导入即生效，见 src/tenant/session.py）
+from .tenant import session as _tenant_session  # noqa: E402,F401

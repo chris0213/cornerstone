@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Tex
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Backup(Base):
+class Backup(TenantMixin, Base):
     __tablename__ = "backups"
     
     id = Column(Integer, primary_key=True, index=True)

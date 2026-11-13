@@ -1,9 +1,10 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class DiscoveryUnknownEndpoint(Base):
+class DiscoveryUnknownEndpoint(TenantMixin, Base):
     """拓扑发现中无法与既有设备关联的未知接入终端
     例如交换机接入端口下学习到、但未录入资产的服务器/终端
     """

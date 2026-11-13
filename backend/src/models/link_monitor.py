@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Ind
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class LinkMonitor(Base):
+class LinkMonitor(TenantMixin, Base):
     """链路监控数据表"""
     __tablename__ = "link_monitor"
     

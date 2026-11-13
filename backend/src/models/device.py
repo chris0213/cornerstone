@@ -3,8 +3,9 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Device(Base):
+class Device(TenantMixin, Base):
     __tablename__ = "devices"
     
     id = Column(Integer, primary_key=True, index=True)

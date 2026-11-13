@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, DateTime, Text
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class MonthlyReport(Base):
+class MonthlyReport(TenantMixin, Base):
     """月报生成记录"""
     __tablename__ = "monthly_reports"
 

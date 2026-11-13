@@ -3,9 +3,10 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class Rack(Base):
+class Rack(TenantMixin, Base):
     """机柜（42U 标准）"""
     __tablename__ = "racks"
 

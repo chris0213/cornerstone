@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Site(Base):
+class Site(TenantMixin, Base):
     __tablename__ = "sites"
     
     id = Column(Integer, primary_key=True, index=True)

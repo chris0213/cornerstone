@@ -14,6 +14,7 @@ from .tasks.ipam_scheduler import init_ipam_scheduler, reload_ipam_scan
 from .tasks.log_cleanup import start_log_cleanup_scheduler
 from .database import async_session
 from .database import get_db
+from .tenant.context import reset_tenant, set_tenant
 
 app = FastAPI(
     title=settings.app_name,
@@ -39,6 +40,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 租户上下文中间件：请求开始时复位、结束时清理，避免上下文串请求
+# （真正的租户值由 get_current_user 在鉴权成功后写入）
+@app.middleware("http")
+async def tenant_context_middleware(request: Request, call_next):
+    token = set_tenant(None)
+    try:
+        return await call_next(request)
+    finally:
+        reset_tenant(token)
 
 # IP白名单中间件：只允许配置的IP访问
 @app.middleware("http")
@@ -115,7 +126,11 @@ async def startup_event():
     from .models.knowledge import KnowledgeArticle
     
     # 初始化权限和角色
+    from .tenant.bootstrap import ensure_default_tenant
     async with async_session() as session:
+        await ensure_default_tenant(session)
+        logger.info("Default tenant ensured")
+
         await init_permissions(session)
         logger.info("Permissions initialized")
         

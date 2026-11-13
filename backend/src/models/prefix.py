@@ -3,8 +3,9 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Prefix(Base):
+class Prefix(TenantMixin, Base):
     __tablename__ = "prefixes"
     
     id = Column(Integer, primary_key=True, index=True)

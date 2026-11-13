@@ -3,9 +3,10 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boo
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from src.database import Base, JSONType, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class AlertRule(Base):
+class AlertRule(TenantMixin, Base):
     """告警规则"""
     __tablename__ = "alert_rules"
     
@@ -33,7 +34,7 @@ class AlertRule(Base):
     device = relationship("Device", back_populates="alert_rules")
 
 
-class AlertRecord(Base):
+class AlertRecord(TenantMixin, Base):
     """告警记录"""
     __tablename__ = "alert_records"
     __table_args__ = (
@@ -66,7 +67,7 @@ class AlertRecord(Base):
     resolved_user = relationship("User", foreign_keys=[resolved_by])
 
 
-class AlertNotification(Base):
+class AlertNotification(TenantMixin, Base):
     """告警通知记录"""
     __tablename__ = "alert_notifications"
     

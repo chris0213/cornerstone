@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Bool
 from sqlalchemy.sql import func
 
 from ..database import Base, JSONType, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class InspectionTask(Base):
+class InspectionTask(TenantMixin, Base):
     """巡检任务配置"""
     __tablename__ = "inspection_tasks"
     
@@ -45,7 +46,7 @@ class InspectionTask(Base):
     updated_at = Column(UTCDateTime, onupdate=func.now())
 
 
-class InspectionResult(Base):
+class InspectionResult(TenantMixin, Base):
     """单次巡检执行记录"""
     __tablename__ = "inspection_results"
     
@@ -69,7 +70,7 @@ class InspectionResult(Base):
     ai_summary = Column(JSONType, nullable=True, comment="AI异常二次研判结论")
 
 
-class InspectionDeviceResult(Base):
+class InspectionDeviceResult(TenantMixin, Base):
     """单台设备的巡检结果"""
     __tablename__ = "inspection_device_results"
     
@@ -102,7 +103,7 @@ class InspectionDeviceResult(Base):
     scanned_at = Column(UTCDateTime)
 
 
-class DeviceFingerprint(Base):
+class DeviceFingerprint(TenantMixin, Base):
     """设备指纹快照（每次全量扫描后更新）"""
     __tablename__ = "device_fingerprints"
     

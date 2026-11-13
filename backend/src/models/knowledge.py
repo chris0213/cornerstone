@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Index
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class KnowledgeCategory(Base):
+class KnowledgeCategory(TenantMixin, Base):
     """知识库分类（可管理；预置：故障处理/配置手册/操作SOP/常见问题/其他）"""
     __tablename__ = "knowledge_categories"
 
@@ -15,7 +16,7 @@ class KnowledgeCategory(Base):
     created_at = Column(UTCDateTime, server_default=func.now())
 
 
-class KnowledgeArticle(Base):
+class KnowledgeArticle(TenantMixin, Base):
     """知识库文章（运维经验沉淀：故障处理 / 配置手册 / 操作 SOP / FAQ）"""
     __tablename__ = "knowledge_articles"
     __table_args__ = (

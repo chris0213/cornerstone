@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.sql import func
 
 from ..database import Base, JSONType, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class CircuitIncident(Base):
+class CircuitIncident(TenantMixin, Base):
     __tablename__ = "circuit_incidents"
     __table_args__ = (
         Index('ix_circuit_incidents_status_started', 'status', 'started_at'),
@@ -28,7 +29,7 @@ class CircuitIncident(Base):
     updated_at = Column(UTCDateTime, onupdate=func.now())
 
 
-class CircuitIncidentLog(Base):
+class CircuitIncidentLog(TenantMixin, Base):
     __tablename__ = "circuit_incident_logs"
     
     id = Column(Integer, primary_key=True, index=True)

@@ -76,6 +76,8 @@ async def client(test_engine):
 
     # 初始化基础数据
     async with TestSession() as session:
+        from src.tenant.bootstrap import ensure_default_tenant
+        await ensure_default_tenant(session)
         await init_permissions(session)
         await init_roles(session)
         await init_default_admin(session)

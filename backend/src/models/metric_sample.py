@@ -12,9 +12,10 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Ind
 from sqlalchemy.sql import func
 
 from src.database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class MetricSample(Base):
+class MetricSample(TenantMixin, Base):
     """设备指标采样点（滚动基线用）"""
     __tablename__ = "metric_samples"
 

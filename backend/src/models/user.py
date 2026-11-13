@@ -3,6 +3,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 class Role(Base):
     """角色"""
@@ -12,6 +13,7 @@ class Role(Base):
     name = Column(String(50), unique=True, nullable=False)           # super_admin / engineer / viewer
     display_name = Column(String(50), nullable=False)                 # 超级管理员 / IT运维工程师 / 只读查看者
     description = Column(String(255))
+    tenant_id = Column(Integer, nullable=True, index=True)  # NULL=平台内置角色模板
     is_builtin = Column(Boolean, default=False)                      # True=内置角色不可删除
     created_at = Column(UTCDateTime, server_default=func.now())
     updated_at = Column(UTCDateTime, onupdate=func.now())
@@ -42,7 +44,7 @@ class RolePermission(Base):
     role = relationship("Role", back_populates="permissions")
     permission = relationship("Permission", back_populates="roles")
 
-class User(Base):
+class User(TenantMixin, Base):
     """用户"""
     __tablename__ = "users"
     
@@ -74,7 +76,7 @@ class User(Base):
     
     role = relationship("Role", back_populates="users")
 
-class UserSession(Base):
+class UserSession(TenantMixin, Base):
     """登录会话记录（用于强制下线）"""
     __tablename__ = "user_sessions"
     

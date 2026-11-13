@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueCons
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Credential(Base):
+class Credential(TenantMixin, Base):
     __tablename__ = "credentials"
     
     id = Column(Integer, primary_key=True, index=True)

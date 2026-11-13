@@ -3,9 +3,10 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class AIChatLog(Base):
+class AIChatLog(TenantMixin, Base):
     """AI 运维助手聊天日志
 
     仅记录「用户提问 + AI 回答（已脱敏）」，不存储底层查询返回的明细行，

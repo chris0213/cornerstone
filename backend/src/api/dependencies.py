@@ -9,6 +9,7 @@ from typing import List
 
 from ..database import get_db
 from ..models import User, UserSession
+from ..tenant.context import set_tenant
 from ..utils.security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
@@ -79,6 +80,9 @@ async def get_current_user(
     
     if user is None:
         raise credentials_exception
+    
+    # 写入请求级租户上下文：后续所有 ORM 查询自动带 tenant_id 条件
+    set_tenant(user.tenant_id, user.id)
     
     return user
 
@@ -213,4 +217,5 @@ async def get_ws_user(
     if user is None or not user.is_active:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="用户不存在或已禁用")
     
+    set_tenant(user.tenant_id, user.id)
     return user

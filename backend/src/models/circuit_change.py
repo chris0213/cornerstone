@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class CircuitChange(Base):
+class CircuitChange(TenantMixin, Base):
     __tablename__ = "circuit_changes"
     
     id = Column(Integer, primary_key=True, index=True)

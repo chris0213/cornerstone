@@ -2,9 +2,10 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
 
-class BackupAnalysis(Base):
+class BackupAnalysis(TenantMixin, Base):
     """备份变更 AI 分析结果"""
     __tablename__ = "backup_analyses"
 

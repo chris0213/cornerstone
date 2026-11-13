@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, U
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class BackupTask(Base):
+class BackupTask(TenantMixin, Base):
     __tablename__ = "backup_tasks"
     
     id = Column(Integer, primary_key=True, index=True)

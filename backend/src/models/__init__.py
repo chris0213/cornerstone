@@ -1,3 +1,4 @@
+from .tenant import Tenant
 from .user import User, Role, Permission, RolePermission, UserSession
 from .site import Site
 from .circuit import Circuit
@@ -27,6 +28,7 @@ from .ai_chat_log import AIChatLog
 from .knowledge import KnowledgeArticle, KnowledgeCategory
 
 __all__ = [
+    'Tenant',
     'User', 'Role', 'Permission', 'RolePermission', 'UserSession',
     'Site', 'Circuit', 'CircuitChange', 'CircuitIncident', 'CircuitIncidentLog',
     'Aggregate', 'Prefix', 'IPAddress', 'Rack',

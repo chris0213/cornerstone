@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class Aggregate(Base):
+class Aggregate(TenantMixin, Base):
     __tablename__ = "aggregates"
     
     id = Column(Integer, primary_key=True, index=True)

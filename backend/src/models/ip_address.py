@@ -2,8 +2,9 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, I
 from sqlalchemy.sql import func
 
 from ..database import Base, UTCDateTime
+from ..tenant.mixin import TenantMixin
 
-class IPAddress(Base):
+class IPAddress(TenantMixin, Base):
     __tablename__ = "ip_addresses"
     __table_args__ = (
         Index('ix_ip_addresses_prefix_status', 'prefix_id', 'status'),
