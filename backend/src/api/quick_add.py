@@ -51,7 +51,16 @@ class QuickAddDeviceResponse(BaseModel):
     device_id: int | None = None
 
 
-async def test_device_connection(ip_address: str, vendor: str, username: str, password: str, 
+async def test_device_connection(ip_address: str, vendor: str, username: str, password: str,
+                                 port: int = 22, enable_password: str | None = None) -> tuple[bool, str, dict | None]:
+    # netmiko 为同步阻塞库（conn_timeout 10s + read_timeout 10s），必须下放线程池执行，
+    # 否则一次测试连接会把整个事件循环卡住约 25 秒
+    return await asyncio.to_thread(
+        _test_device_connection_sync, ip_address, vendor, username, password, port, enable_password
+    )
+
+
+def _test_device_connection_sync(ip_address: str, vendor: str, username: str, password: str,
                                  port: int = 22, enable_password: str | None = None) -> tuple[bool, str, dict | None]:
     try:
         if vendor not in VENDOR_MAP:
