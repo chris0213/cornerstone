@@ -78,12 +78,19 @@ async def run_backup_task(task_id: int, trigger: str = "scheduled"):
     from ..models import BackupTask
     from ..database import async_session
 
-    async with async_session() as probe:
-        tenant_id = (
-            await probe.execute(select(BackupTask.tenant_id).where(BackupTask.id == task_id))
-        ).scalar_one_or_none()
-    with tenant_scope(tenant_id or DEFAULT_TENANT_ID):
-        await _run_backup_in_tenant(task_id, trigger)
+    # 手动触发时端点已同步置位 running_tasks[task_id]：
+    # 若租户探测或执行本身抛异常，必须复位标志，否则任务永远卡在「执行中」无法再次触发
+    try:
+        async with async_session() as probe:
+            tenant_id = (
+                await probe.execute(select(BackupTask.tenant_id).where(BackupTask.id == task_id))
+            ).scalar_one_or_none()
+        with tenant_scope(tenant_id or DEFAULT_TENANT_ID):
+            await _run_backup_in_tenant(task_id, trigger)
+    except Exception as e:
+        running_tasks[task_id] = False
+        logger.error(f"备份任务 {task_id} 执行异常，已复位运行标志: {e}")
+        raise
 
 
 async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
@@ -99,12 +106,19 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
     from ..models import BackupTask, Device, Credential, Backup, IPAddress
     from ..services.backup_collector import collect_device_config, detect_config_change, \
         calculate_hash, save_config_to_file
-    from ..utils.crypto import decrypt_password
+    from ..utils.crypto import decrypt_password_strict
     from ..database import async_session
 
     async def _notify_failure(db, summary: str):
-        """备份失败时推送通知（渠道未配置/发送异常均不影响备份流程）"""
+        """备份失败时推送通知（渠道未配置/发送异常均不影响备份流程）
+
+        受任务级 notify_on_fail 开关控制；task 在闭包定义时尚未加载，
+        依赖 expire_on_commit=False 保证首次调用时（task 已加载）可安全读取。
+        """
         from ..services.alert_service import AlertService
+        if not task.notify_on_fail:
+            logger.info(f"备份任务 {task_id} 已关闭失败通知（notify_on_fail=false），跳过")
+            return
         await AlertService.send_backup_failure_notification(db, task_id, task.name, summary)
     
     # 防重复执行守卫（仅定时触发）：手动触发的检查+置位已在端点内同步完成，
@@ -139,24 +153,29 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                 await _notify_failure(db_session, "凭证不存在")
                 return
             
-            # 解密凭证密码
-            credential_dict = {
-                "username": credential.username,
-                "password": decrypt_password(credential.password),
-                "port": credential.port,
-                "protocol": credential.protocol,
-                "enable_password": decrypt_password(credential.enable_password),
-                "auth_type": credential.auth_type,
-                "private_key": decrypt_password(credential.private_key),
-                "jump_host": credential.jump_host,
-                "jump_port": credential.jump_port,
-                "jump_username": credential.jump_username,
-                "jump_password": decrypt_password(credential.jump_password),
-            }
-            
-            # 检查凭证解密是否成功
-            if not credential_dict["password"]:
-                logger.warning(f"备份任务 {task_id} 凭证解密失败，密码为空")
+            # 解密凭证密码（严格模式：解密失败立即中止任务，
+            # 绝不带空密码去连生产设备——空密码重试可能触发设备侧账号锁定）
+            try:
+                credential_dict = {
+                    "username": credential.username,
+                    "password": decrypt_password_strict(credential.password),
+                    "port": credential.port,
+                    "protocol": credential.protocol,
+                    "enable_password": decrypt_password_strict(credential.enable_password),
+                    "auth_type": credential.auth_type,
+                    "private_key": decrypt_password_strict(credential.private_key),
+                    "jump_host": credential.jump_host,
+                    "jump_port": credential.jump_port,
+                    "jump_username": credential.jump_username,
+                    "jump_password": decrypt_password_strict(credential.jump_password),
+                }
+            except ValueError as e:
+                logger.error(f"备份任务 {task_id} 凭证解密失败，中止执行（不使用空密码连接设备）: {e}")
+                task.last_run_at = utc_now()
+                task.last_run_status = "failed"
+                await db_session.commit()
+                await _notify_failure(db_session, "凭证解密失败（密钥可能不一致），已中止任务")
+                return
             
             # 获取设备列表（包含管理IP）
             devices_with_ip = []
@@ -241,25 +260,36 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
             success_count = 0
             failed_count = 0
             failed_details = []
+            changed_devices = []  # 本次检测到配置变更的设备（用于 notify_on_change 变更通知）
+            succeeded_device_ids = []  # 本次备份成功的设备（用于任务级保留策略清理）
             
             for device_id, result in results:
                 # 如果result为None，说明设备没有管理IP，跳过
                 if result is None:
                     continue
                 
-                # 获取设备当前版本号
-                latest_backup = await db_session.execute(
-                    select(Backup)
+                # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
+                latest_any = await db_session.execute(
+                    select(Backup.version)
                     .where(Backup.device_id == device_id)
                     .order_by(Backup.version.desc())
                     .limit(1)
                 )
-                latest_backup = latest_backup.scalar_one_or_none()
-                new_version = (latest_backup.version if latest_backup else 0) + 1
-                
+                latest_any_row = latest_any.first()
+                new_version = (latest_any_row[0] if latest_any_row else 0) + 1
+
+                # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
+                latest_success = await db_session.execute(
+                    select(Backup)
+                    .where(Backup.device_id == device_id, Backup.status == "success")
+                    .order_by(Backup.version.desc())
+                    .limit(1)
+                )
+                latest_backup = latest_success.scalar_one_or_none()
+
                 # 计算哈希
                 content_hash = calculate_hash(result.config_content) if result.success else ""
-                
+
                 # 检测变更
                 has_change = False
                 change_summary = ""
@@ -267,7 +297,13 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                     old_content = latest_backup.content
                     if latest_backup.file_path:
                         from ..services.backup_collector import load_config_from_file
-                        old_content = load_config_from_file(latest_backup.file_path)
+                        try:
+                            old_content = load_config_from_file(latest_backup.file_path)
+                        except Exception:
+                            # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
+                            logger.warning(
+                                f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
+                            )
                     
                     if old_content:
                         change_result = detect_config_change(old_content, result.config_content)
@@ -301,6 +337,10 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                 
                 if result.success:
                     success_count += 1
+                    succeeded_device_ids.append(device_id)
+                    if has_change:
+                        device = next((d for d, _ in devices_with_ip if d.id == device_id), None)
+                        changed_devices.append(device.name if device else f"设备{device_id}")
                 else:
                     failed_count += 1
                     device = next((d for d, _ in devices_with_ip if d.id == device_id), None)
@@ -330,38 +370,69 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                     if failed_details:
                         summary += "\n" + "\n".join(failed_details)
                     await _notify_failure(db_session, summary)
+
+                # 配置变更通知（受任务级 notify_on_change 开关控制）
+                if changed_devices and task.notify_on_change:
+                    from ..services.alert_service import AlertService
+                    summary = f"检测到 {len(changed_devices)} 台设备配置变更：{('、'.join(changed_devices))}"
+                    await AlertService.send_backup_change_notification(db_session, task_id, task.name, summary)
+
+                # 任务级保留策略：按任务配置的数量/天数清理本次成功设备的旧自动备份
+                if succeeded_device_ids:
+                    for did in set(succeeded_device_ids):
+                        await execute_retention_policy(
+                            did, task.retention_count, task.retention_days, db_session
+                        )
             
             logger.info(f"备份任务 {task_id} 执行完成: success={success_count}, failed={failed_count}")
     finally:
         running_tasks[task_id] = False
 
 async def execute_retention_policy(device_id: int, retention_count: int, retention_days: int, db_session):
-    """执行保留策略，删除超出限制的旧备份"""
+    """执行任务级保留策略：按数量（保留最新 N 个）和按天数双重限制清理自动备份。
+
+    与全局清理策略语义一致：手动备份（manual）永久保留，不参与任务级清理。
+    参数为 None/<=0 表示对应维度不限制（保持向后兼容）。
+    """
+    import os
     from sqlalchemy import select
     from ..models import Backup
-    
-    # 获取需要删除的备份（按版本号排序，保留最新的N个）
-    backups = await db_session.execute(
+    from ..utils.timeutil import ensure_utc
+
+    # 任务级清理只针对自动备份；manual 备份由用户显式管理，永不自动删除
+    result = await db_session.execute(
         select(Backup)
-        .where(Backup.device_id == device_id)
+        .where(Backup.device_id == device_id, Backup.trigger != "manual")
         .order_by(Backup.version.desc())
     )
-    backups = [b for b in backups.scalars()]
-    
-    # 删除超出保留数量的备份
-    if len(backups) > retention_count:
-        to_delete = backups[retention_count:]
-        for backup in to_delete:
-            # 删除文件（如果存在）
-            if backup.file_path and backup.file_path:
-                import os
-                try:
-                    os.remove(backup.file_path)
-                except:
-                    pass
-            await db_session.delete(backup)
-    
-    await db_session.commit()
+    backups = result.scalars().all()
+    to_delete = []
+
+    # 按数量清理：保留最新的 retention_count 个版本
+    if retention_count and retention_count > 0 and len(backups) > retention_count:
+        to_delete.extend(backups[retention_count:])
+
+    # 按天数清理：删除创建时间早于 retention_days 天的备份
+    if retention_days and retention_days > 0:
+        cutoff = ensure_utc(utc_now()) - timedelta(days=retention_days)
+        to_delete.extend(b for b in backups if b.created_at < cutoff)
+
+    # 去重（同一备份可能同时命中两个维度）
+    seen_ids = set()
+    for backup in to_delete:
+        if backup.id in seen_ids:
+            continue
+        seen_ids.add(backup.id)
+        if backup.file_path:
+            try:
+                os.remove(backup.file_path)
+            except OSError:
+                pass
+        await db_session.delete(backup)
+
+    if seen_ids:
+        await db_session.commit()
+        logger.info(f"设备 {device_id} 任务级保留策略：清理 {len(seen_ids)} 个过期自动备份")
 
 def add_task_to_scheduler(task_id: int, cron_expr: str):
     """添加任务到调度器"""

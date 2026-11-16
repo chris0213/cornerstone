@@ -1,6 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from datetime import datetime
 from typing import List, Dict, Optional, Any
+
+# SNMP 团体字对生产网络设备具备凭据效力，响应一律脱敏为掩码；
+# 前端/后端更新时检测到掩码值即视为"未修改"，不得写回数据库。
+SNMP_COMMUNITY_MASK = "******"
 
 
 class InspectionTaskCreate(BaseModel):
@@ -83,6 +87,11 @@ class InspectionTaskResponse(BaseModel):
     snmp_version: str
     snmp_timeout: int
     snmp_retries: int
+
+    @field_serializer("snmp_community")
+    def _mask_snmp_community(self, value: Optional[str]) -> Optional[str]:
+        """团体字属设备凭据，任何响应不得明文外泄"""
+        return SNMP_COMMUNITY_MASK if value else value
     
     # TCP探测配置
     tcp_ports: List[int]

@@ -42,11 +42,15 @@ async def _sync_scheduler(coro) -> None:
         logging.getLogger("cornerstone").error(f"巡检任务调度器同步失败: {e}", exc_info=True)
 
 
+# SNMP 团体字在 API 响应中的掩码值，前端/后端均不得将其写回数据库
+SNMP_COMMUNITY_MASK = "******"
+
+
 # 巡检任务管理
 @router.get("/tasks", response_model=List[InspectionTaskResponse])
 async def get_inspection_tasks(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_active_user)
+    current_user = Depends(require_permission("inspection:read"))
 ):
     """获取任务列表"""
     result = await db.execute(select(InspectionTask).order_by(InspectionTask.created_at.desc()))
@@ -57,7 +61,7 @@ async def get_inspection_tasks(
 async def get_inspection_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("inspection:read"))
 ):
     """获取单个任务"""
     result = await db.execute(select(InspectionTask).where(InspectionTask.id == task_id))
@@ -103,6 +107,9 @@ async def update_inspection_task(
         raise HTTPException(status_code=404, detail="巡检任务不存在")
 
     update_data = task.model_dump(exclude_unset=True)
+    # 掩码值视为"未修改"，防止脱敏回显被原样写回数据库
+    if update_data.get("snmp_community") == SNMP_COMMUNITY_MASK:
+        update_data.pop("snmp_community")
     for key, value in update_data.items():
         setattr(existing, key, value)
 

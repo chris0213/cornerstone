@@ -710,19 +710,20 @@ class AlertService:
         logger.info(f"自定义Webhook通知: {message}")
     
     @staticmethod
-    async def send_backup_failure_notification(
-        db: AsyncSession, task_id: int, task_name: str, summary: str
+    async def send_backup_notification(
+        db: AsyncSession, task_id: int, task_name: str, title: str, summary: str
     ):
-        """备份任务失败时推送通知（钉钉/企业微信/飞书/邮件）
+        """备份任务通知统一入口（钉钉/企业微信/飞书/邮件）
 
         逐渠道隔离异常，单渠道失败不影响其他渠道，且不向调用方抛出异常。
         发送结果落 alert_notifications（record_id=None, channel='backup:<id>'）。
+        title 例：备份失败 / 配置变更。
         """
         from src.utils.notification_store import get_notification_config, is_channel_enabled, is_email_ready
 
         try:
             config = await get_notification_config(db)
-            message = f"【备份失败】任务 {task_id}（{task_name}）：{summary}"
+            message = f"【{title}】任务 {task_id}（{task_name}）：{summary}"
             errors = []
             sent = False
 
@@ -756,13 +757,27 @@ class AlertService:
             await db.commit()
 
             if sent:
-                logger.info(f"[备份通知] 任务 {task_id} 失败通知已发送: {summary}")
+                logger.info(f"[备份通知] 任务 {task_id} {title}通知已发送: {summary}")
             elif not errors:
-                logger.warning("[备份通知] 未配置任何通知渠道（钉钉/企业微信/飞书/邮件），跳过备份失败通知")
+                logger.warning("[备份通知] 未配置任何通知渠道（钉钉/企业微信/飞书/邮件），跳过通知")
             if errors:
                 logger.error(f"[备份通知] 任务 {task_id} 部分渠道发送失败: {'; '.join(errors)}")
         except Exception as e:
-            logger.error(f"[备份通知] 任务 {task_id} 失败通知发送异常（不影响备份流程）: {e}")
+            logger.error(f"[备份通知] 任务 {task_id} {title}通知发送异常（不影响备份流程）: {e}")
+
+    @staticmethod
+    async def send_backup_failure_notification(
+        db: AsyncSession, task_id: int, task_name: str, summary: str
+    ):
+        """备份任务失败时推送通知（保留原签名，内部复用统一入口）"""
+        await AlertService.send_backup_notification(db, task_id, task_name, "备份失败", summary)
+
+    @staticmethod
+    async def send_backup_change_notification(
+        db: AsyncSession, task_id: int, task_name: str, summary: str
+    ):
+        """备份发现配置变更时推送通知（受任务 notify_on_change 开关控制，调用方负责判断）"""
+        await AlertService.send_backup_notification(db, task_id, task_name, "配置变更", summary)
 
     @staticmethod
     async def acknowledge_alert(db: AsyncSession, alert_id: int, user_id: int):

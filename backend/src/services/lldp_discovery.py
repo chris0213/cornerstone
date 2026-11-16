@@ -11,7 +11,7 @@ from src.models.device_link import DeviceLink
 from src.models.credential import Credential
 from src.models.ip_address import IPAddress
 from src.utils.device_connection import connect_device, get_lldp_neighbors
-from src.utils.crypto import decrypt_password
+from src.utils.crypto import decrypt_password, decrypt_password_strict
 
 logger = logging.getLogger("cornerstone")
 
@@ -42,15 +42,15 @@ def get_netmiko_device_type(vendor: str) -> str:
 
 def build_device_info(device: Device, ip_address: str, cred: Credential) -> dict:
     """
-    构建 netmiko 连接参数（密码需解密）
+    构建 netmiko 连接参数（密码严格解密：失败抛 ValueError，绝不带空密码连设备）
     """
     return {
         "ip": ip_address,
         "username": cred.username,
-        "password": decrypt_password(cred.password) if cred.password else None,
+        "password": decrypt_password_strict(cred.password) if cred.password else None,
         "device_type": get_netmiko_device_type(device.vendor),
         "port": cred.port or 22,
-        "secret": decrypt_password(cred.enable_password) if cred.enable_password else None,
+        "secret": decrypt_password_strict(cred.enable_password) if cred.enable_password else None,
     }
 
 
@@ -343,9 +343,14 @@ async def run_full_discovery(
         if not ip_addr:
             return device, None, "没有配置管理IP"
         others = [c for c in credentials if c.id != primary.id][: MAX_CREDENTIAL_ATTEMPTS - 1]
-        device_infos = [
-            build_device_info(device, ip_addr, cred) for cred in [primary, *others]
-        ]
+        try:
+            device_infos = [
+                build_device_info(device, ip_addr, cred) for cred in [primary, *others]
+            ]
+        except ValueError as e:
+            # 凭证解密失败：跳过该设备，绝不携带空密码尝试 SSH（防触发设备账号锁定）
+            logger.warning(f"设备 {device.name} 凭证解密失败，跳过: {e}")
+            return device, None, "凭证解密失败，已跳过"
         async with semaphore:
             try:
                 neighbors, err = await asyncio.to_thread(collect_lldp_neighbors_sync, device_infos)

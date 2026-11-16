@@ -19,7 +19,7 @@ ProgressCallback = Callable[[str, int, int, str], Awaitable[None]]
 
 
 class DiscoveryTask:
-    def __init__(self, task_id: str, task_type: str, total: int):
+    def __init__(self, task_id: str, task_type: str, total: int, tenant_id: Optional[int] = None):
         self.id = task_id
         self.type = task_type              # lldp / mac
         self.status = "running"            # running / completed / failed
@@ -31,6 +31,8 @@ class DiscoveryTask:
         self.error: Optional[str] = None
         self.created_at = utc_now()
         self.finished_at: Optional[datetime] = None
+        # 发起人租户归属：轮询接口据此做归属校验（None=超管/系统发起，仅超管可见）
+        self.tenant_id = tenant_id
         # 持有后台协程的 asyncio.Task 强引用（防 GC 提前回收；同类型任务互斥由此保证）
         self.asyncio_task: Optional[asyncio.Task] = None
 
@@ -77,8 +79,8 @@ class DiscoveryTaskManager:
             for t in self._tasks.values()
         )
 
-    def create(self, task_type: str, total: int) -> DiscoveryTask:
-        task = DiscoveryTask(str(uuid.uuid4())[:8], task_type, total)
+    def create(self, task_type: str, total: int, tenant_id: Optional[int] = None) -> DiscoveryTask:
+        task = DiscoveryTask(str(uuid.uuid4())[:8], task_type, total, tenant_id=tenant_id)
         self._register(task)
         return task
 

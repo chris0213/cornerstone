@@ -59,35 +59,51 @@ def encrypt_password(plain_text: str) -> str:
 
 def decrypt_password(cipher_text: str) -> str:
     """解密密码，返回明文。自动兼容新旧两种密钥格式。
-    
+
     如果解密失败（如密钥不一致），记录警告并返回空字符串，
     避免因密钥问题导致整个备份任务失败。
+
+    注意：对生产设备 SSH 而言，解密失败应使用 decrypt_password_strict
+    立即中止，而不是拿空密码去重试登录（可能触发设备账号锁定）。
+    """
+    try:
+        return decrypt_password_strict(cipher_text)
+    except ValueError:
+        import logging
+        logging.getLogger("cornerstone").warning(
+            "凭证解密失败，密钥可能不一致，请检查 .env 中的 CREDENTIAL_SECRET_KEY 设置"
+        )
+        return ""
+
+
+def decrypt_password_strict(cipher_text: str) -> str:
+    """严格版解密：失败抛 ValueError，绝不静默返回空串。
+
+    适用场景：SSH 登录生产设备前的凭证准备。空密码重试可能触发设备侧
+    账号锁定 / 入侵防护，把管理账号锁死——宁可不连，不可错连。
     """
     if not cipher_text:
         return ""
     try:
         return _fernet.decrypt(cipher_text.encode()).decode()
-    except Exception as e:
-        # 尝试旧格式密钥（向上兼容已加密的数据）
-        global _legacy_fernet
-        if _legacy_fernet is None:
-            try:
-                from cryptography.fernet import Fernet as _Fernet
-                key_bytes = _fernet._encryption_key if hasattr(_fernet, '_encryption_key') else None
-                if key_bytes:
-                    _legacy_fernet = _Fernet(base64.urlsafe_b64decode(key_bytes))
-            except Exception:
-                _legacy_fernet = False
-        if _legacy_fernet:
-            try:
-                return _legacy_fernet.decrypt(cipher_text.encode()).decode()
-            except Exception:
-                pass
-        # 记录警告但不抛出异常，避免因密钥问题导致整个备份任务失败
-        import logging
-        logger = logging.getLogger("cornerstone")
-        logger.warning(f"凭证解密失败，密钥可能不一致，请检查 .env 中的 CREDENTIAL_SECRET_KEY 设置")
-        return ""
+    except Exception:
+        pass
+    # 尝试旧格式密钥（向上兼容已加密的数据）
+    global _legacy_fernet
+    if _legacy_fernet is None:
+        try:
+            from cryptography.fernet import Fernet as _Fernet
+            key_bytes = _fernet._encryption_key if hasattr(_fernet, '_encryption_key') else None
+            if key_bytes:
+                _legacy_fernet = _Fernet(base64.urlsafe_b64decode(key_bytes))
+        except Exception:
+            _legacy_fernet = False
+    if _legacy_fernet:
+        try:
+            return _legacy_fernet.decrypt(cipher_text.encode()).decode()
+        except Exception:
+            pass
+    raise ValueError("凭证解密失败：密钥可能不一致，请检查 CREDENTIAL_SECRET_KEY")
 
 
 # ==================== 通用敏感串加解密（AI api_key 等） ====================

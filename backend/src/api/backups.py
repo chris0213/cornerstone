@@ -5,6 +5,7 @@ from sqlalchemy import select, insert, delete, update, desc, func
 from datetime import datetime, timezone
 import ipaddress
 import time
+import logging
 
 import json
 import uuid
@@ -16,11 +17,13 @@ from ..schemas import BackupResponse, CredentialResponse, CredentialCreate, Cred
 from ..services.backup_collector import collect_device_config, detect_config_change, \
     calculate_hash, save_config_to_file, load_config_from_file, apply_config_to_device, \
     test_device_connection
-from ..utils.crypto import encrypt_password, decrypt_password
+from ..utils.crypto import encrypt_password, decrypt_password_strict
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.timeutil import ensure_utc
 from .dependencies import get_current_active_user, require_permission, require_super_admin, PageParams, pagination
+
+logger = logging.getLogger("cornerstone")
 
 router = APIRouter()
 
@@ -33,6 +36,28 @@ task_tenants: dict = {}
 # 凭证测试连接限流：记录每个凭证上次放行的 monotonic 时间戳
 # 仅在请求通过校验、真正发起连接前更新（无论连接结果成功或失败）
 _credential_test_last: dict[int, float] = {}
+
+
+def _decrypt_credential_dict(credential) -> dict:
+    """Credential ORM 对象 → 连接用凭证 dict（严格解密）。
+
+    任一字段解密失败抛 ValueError，由调用方转为 400/任务失败，
+    绝不携带空密码去连接生产设备（空密码重试可能触发设备侧账号锁定）。
+    """
+    return {
+        "username": credential.username,
+        "password": decrypt_password_strict(credential.password),
+        "port": credential.port,
+        "protocol": credential.protocol,
+        "enable_password": decrypt_password_strict(credential.enable_password),
+        "auth_type": credential.auth_type,
+        "private_key": decrypt_password_strict(credential.private_key),
+        "jump_host": credential.jump_host,
+        "jump_port": credential.jump_port,
+        "jump_username": credential.jump_username,
+        "jump_password": decrypt_password_strict(credential.jump_password),
+    }
+
 
 
 async def _check_credential_test_target(test_ip: str, db_conn) -> None:
@@ -315,20 +340,11 @@ async def test_credential(
     # 放行：立即更新限流时间戳（不论连接成功或失败）
     _mark_credential_test(credential_id)
 
-    # 解密凭证
-    credential_dict = {
-        "username": credential.username,
-        "password": decrypt_password(credential.password),
-        "port": credential.port,
-        "protocol": credential.protocol,
-        "enable_password": decrypt_password(credential.enable_password),
-        "auth_type": credential.auth_type,
-        "private_key": decrypt_password(credential.private_key),
-        "jump_host": credential.jump_host,
-        "jump_port": credential.jump_port,
-        "jump_username": credential.jump_username,
-        "jump_password": decrypt_password(credential.jump_password),
-    }
+    # 解密凭证（严格模式：解密失败直接 400，不拿空密码去连设备）
+    try:
+        credential_dict = _decrypt_credential_dict(credential)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # 测试连接
     device_dict = {
@@ -370,7 +386,7 @@ async def read_backups(
     trigger: str = None,
     has_change: bool = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     query = select(Backup, Device.name.label('device_name')).join(Device, Backup.device_id == Device.id, isouter=True)
     if device_id:
@@ -402,7 +418,7 @@ async def get_backup_diff(
     backup_id_a: int = Query(...),
     backup_id_b: int = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result_a = await db.execute(select(Backup).where(Backup.id == backup_id_a))
     backup_a = result_a.scalar_one_or_none()
@@ -442,7 +458,7 @@ async def get_backup_diff(
 async def read_backup(
     backup_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result = await db.execute(select(Backup).where(Backup.id == backup_id))
     backup = result.scalar_one_or_none()
@@ -450,12 +466,12 @@ async def read_backup(
         raise HTTPException(status_code=404, detail="Backup not found")
     return backup
 
-# 获取备份配置内容
+# 获取备份配置内容（含 SNMP community、VPN PSK 等敏感信息，要求读取权限）
 @router.get("/{backup_id}/content")
 async def get_backup_content(
     backup_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:read"))
 ):
     result = await db.execute(select(Backup).where(Backup.id == backup_id))
     backup = result.scalar_one_or_none()
@@ -476,7 +492,7 @@ async def update_backup_tag(
     backup_id: int,
     tag: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:write"))
 ):
     result = await db.execute(select(Backup).where(Backup.id == backup_id))
     backup = result.scalar_one_or_none()
@@ -498,7 +514,7 @@ async def delete_backup(
     request: Request,
     backup_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:delete"))
 ):
     result = await db.execute(select(Backup).where(Backup.id == backup_id))
     backup = result.scalar_one_or_none()
@@ -527,7 +543,7 @@ async def trigger_backup(
     device_id: int = Body(..., embed=True),
     tag: str = Body("", embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:backup_exec"))
 ):
     # 获取设备
     result = await db.execute(select(Device).where(Device.id == device_id))
@@ -553,22 +569,13 @@ async def trigger_backup(
     
     if not credential:
         raise HTTPException(status_code=400, detail="No credential found")
-    
-    # 解密凭证
-    credential_dict = {
-        "username": credential.username,
-        "password": decrypt_password(credential.password),
-        "port": credential.port,
-        "protocol": credential.protocol,
-        "enable_password": decrypt_password(credential.enable_password),
-        "auth_type": credential.auth_type,
-        "private_key": decrypt_password(credential.private_key),
-        "jump_host": credential.jump_host,
-        "jump_port": credential.jump_port,
-        "jump_username": credential.jump_username,
-        "jump_password": decrypt_password(credential.jump_password),
-    }
-    
+
+    # 解密凭证（严格模式：解密失败直接 400，不拿空密码去连设备）
+    try:
+        credential_dict = _decrypt_credential_dict(credential)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # 创建任务ID
     task_id = str(uuid.uuid4())
     active_connections[task_id] = []
@@ -584,22 +591,35 @@ async def trigger_backup(
         
         result = await collect_device_config(device_dict, credential_dict)
         
-        # 获取当前版本号
-        latest_backup = await db.execute(
-            select(Backup).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
+        # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
+        latest_any = await db.execute(
+            select(Backup.version).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
         )
-        latest_backup = latest_backup.scalar_one_or_none()
-        new_version = (latest_backup.version if latest_backup else 0) + 1
-        
+        latest_any_row = latest_any.first()
+        new_version = (latest_any_row[0] if latest_any_row else 0) + 1
+
+        # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
+        latest_success = await db.execute(
+            select(Backup).where(Backup.device_id == device_id, Backup.status == "success").order_by(desc(Backup.version)).limit(1)
+        )
+        latest_backup = latest_success.scalar_one_or_none()
+
         # 计算哈希和检测变更
         content_hash = calculate_hash(result.config_content) if result.success else ""
         has_change = False
         change_summary = ""
-        
+
         if result.success and latest_backup:
             old_content = latest_backup.content
             if latest_backup.file_path:
-                old_content = load_config_from_file(latest_backup.file_path)
+                try:
+                    old_content = load_config_from_file(latest_backup.file_path)
+                except Exception:
+                    # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
+                    import logging
+                    logging.getLogger("cornerstone").warning(
+                        f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
+                    )
             
             if old_content:
                 change_result = detect_config_change(old_content, result.config_content)
@@ -634,7 +654,7 @@ async def trigger_backup(
         await db.commit()
         await db.refresh(backup)
         
-        # 发送WebSocket消息
+        # 发送WebSocket消息（与批量端点 done 消息结构对齐：success/failed 为计数）
         message = {
             "type": "done",
             "total": 1,
@@ -642,7 +662,6 @@ async def trigger_backup(
             "failed": 1 if not result.success else 0,
             "device_id": device_id,
             "device_name": device.name,
-            "success": result.success,
             "has_change": has_change,
             "change_summary": change_summary
         }
@@ -666,7 +685,7 @@ async def trigger_batch_backup(
     device_ids: list[int] = Body(...),
     tag: str = Body("", embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(require_permission("backups:backup_exec"))
 ):
     task_id = str(uuid.uuid4())
     active_connections[task_id] = []
@@ -702,21 +721,13 @@ async def trigger_batch_backup(
             
             if not credential:
                 continue
-            
-            # 解密凭证
-            credential_dict = {
-                "username": credential.username,
-                "password": decrypt_password(credential.password),
-                "port": credential.port,
-                "protocol": credential.protocol,
-                "enable_password": decrypt_password(credential.enable_password),
-                "auth_type": credential.auth_type,
-                "private_key": decrypt_password(credential.private_key),
-                "jump_host": credential.jump_host,
-                "jump_port": credential.jump_port,
-                "jump_username": credential.jump_username,
-                "jump_password": decrypt_password(credential.jump_password),
-            }
+
+            # 解密凭证（严格模式：单台解密失败跳过该设备，不拿空密码去连）
+            try:
+                credential_dict = _decrypt_credential_dict(credential)
+            except ValueError as e:
+                logger.warning(f"批量备份：设备 {device_id} 凭证解密失败，跳过: {e}")
+                continue
             
             # 发送进度消息
             for conn in active_connections.get(task_id, []):
@@ -736,21 +747,21 @@ async def trigger_batch_backup(
             
             result = await collect_device_config(device_dict, credential_dict)
             
-            # 创建备份记录（简化处理）
+            # 创建备份记录（失败设备同样落库留痕，便于排查与历史统计）
+            latest_backup = await db.execute(
+                select(Backup).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
+            )
+            latest_backup = latest_backup.scalar_one_or_none()
+            new_version = (latest_backup.version if latest_backup else 0) + 1
+
             if result.success:
-                latest_backup = await db.execute(
-                    select(Backup).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
-                )
-                latest_backup = latest_backup.scalar_one_or_none()
-                new_version = (latest_backup.version if latest_backup else 0) + 1
-                
                 content_hash = calculate_hash(result.config_content)
                 content = result.config_content
                 file_path = ""
                 if len(content) > 100 * 1024:
                     file_path = save_config_to_file(device_id, 0, content)
                     content = ""
-                
+
                 backup = Backup(
                     device_id=device_id,
                     version=new_version,
@@ -765,9 +776,25 @@ async def trigger_batch_backup(
                     tag=tag,
                 )
                 db.add(backup)
-                
+
                 success_count += 1
             else:
+                backup = Backup(
+                    device_id=device_id,
+                    version=new_version,
+                    content="",
+                    content_hash="",
+                    file_path="",
+                    trigger="manual",
+                    operator=current_user.username,
+                    status="failed",
+                    error_message=result.error_message,
+                    duration_ms=result.duration_ms,
+                    size=0,
+                    tag=tag,
+                )
+                db.add(backup)
+
                 failed_count += 1
             
             # 发送结果消息
@@ -815,8 +842,6 @@ async def restore_backup(
     2. 目标 IP 必须是该设备登记的管理 IP，防止把 A 设备配置刷到 B 设备；
     3. 还原前自动触发一次当前配置的新备份，失败可回退。
     """
-    import logging
-    logger = logging.getLogger("cornerstone")
     logger.info(f"========== 开始还原备份 {backup_id} ==========")
 
     # 获取备份记录
@@ -866,22 +891,13 @@ async def restore_backup(
     
     if not config_content:
         raise HTTPException(status_code=400, detail="Backup content is empty")
-    
-    # 解密凭证
-    credential_dict = {
-        "username": credential.username,
-        "password": decrypt_password(credential.password),
-        "port": credential.port,
-        "protocol": credential.protocol,
-        "enable_password": decrypt_password(credential.enable_password),
-        "auth_type": credential.auth_type,
-        "private_key": decrypt_password(credential.private_key),
-        "jump_host": credential.jump_host,
-        "jump_port": credential.jump_port,
-        "jump_username": credential.jump_username,
-        "jump_password": decrypt_password(credential.jump_password),
-    }
-    
+
+    # 解密凭证（严格模式：解密失败直接 400，绝不携带空密码触碰生产设备）
+    try:
+        credential_dict = _decrypt_credential_dict(credential)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # 还原前自动备份当前配置（失败可回退；失败不阻断还原但记录日志）
     try:
         pre_result = await collect_device_config(
@@ -920,11 +936,16 @@ async def restore_backup(
     
     # 应用配置到设备
     result = await apply_config_to_device(device_dict, credential_dict, config_content)
-    
-    if result.success:
-        client_ip = get_client_ip_from_request(request)
-        await audit_log(db, current_user.id, "backup", backup_id, "restore", {"device_id": backup.device_id}, client_ip)
-    
+
+    # 审计：成功与失败都留痕（还原是对生产设备的高危操作，失败尝试同样需要追溯）
+    client_ip = get_client_ip_from_request(request)
+    await audit_log(
+        db, current_user.id, "backup", backup_id,
+        "restore_success" if result.success else "restore_failed",
+        {"device_id": backup.device_id, "error": None if result.success else result.error_message},
+        client_ip
+    )
+
     return {
         "success": result.success,
         "message": result.error_message if not result.success else "配置还原成功",

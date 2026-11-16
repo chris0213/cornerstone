@@ -1,6 +1,7 @@
 import hashlib
 import difflib
 import os
+import sys
 import time
 import asyncio
 import logging
@@ -24,7 +25,7 @@ VENDOR_MAP = {
     "aruba": "aruba_os",
 }
 
-# telnet 凭证对应的 netmiko device_type（仅 test_device_connection 的测试连接路径使用）。
+# telnet 凭证对应的 netmiko device_type（测试连接/采集/还原三条路径共用）。
 # netmiko 4.x 未提供 telnet 驱动的厂商不在表内，保持原 SSH 类型。
 TELNET_DEVICE_TYPE_MAP = {
     "cisco_ios": "cisco_ios_telnet",
@@ -171,8 +172,14 @@ async def ping_host(host: str, timeout: float = 2.0) -> bool:
             )
         else:
             # Linux/Mac: ping -c 1 -W timeout host
+            # Linux 的 -W 单位为秒且要求正整数：小数超时 int() 取整为 0 会立即超时失败，
+            # 故向上取整且至少 1 秒；macOS 的 -W 单位为毫秒
+            if sys.platform == "darwin":
+                wait_arg = str(max(1, int(timeout * 1000)))
+            else:
+                wait_arg = str(max(1, int(timeout) + (1 if timeout % 1 else 0)))
             proc = await asyncio.create_subprocess_exec(
-                "ping", "-c", "1", "-W", str(int(timeout)), host,
+                "ping", "-c", "1", "-W", wait_arg, host,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -185,14 +192,17 @@ async def test_device_connection(device: Dict, credential: Dict) -> CollectResul
     """
     轻量级设备连接测试（仅测试连通性，不采集完整配置）
     device: {id, ip_address, vendor}
-    credential: {username, password, port, protocol, enable_password, 
+    credential: {username, password, port, protocol, enable_password,
                  jump_host, jump_port, jump_username, jump_password,
                  auth_type, private_key}
+
+    稳定性：netmiko 为同步阻塞库，连接段放入 to_thread 执行，
+    避免连接超时 10s + 读取超时 15s 卡死事件循环（与采集路径一致）。
     """
     import time
     start_time = time.time()
     ip_address = device.get("ip_address", "")
-    
+
     try:
         # 1. Ping检测设备可达性（快速检测）
         if not await ping_host(device.get("ip_address", ""), timeout=0.5):
@@ -201,80 +211,84 @@ async def test_device_connection(device: Dict, credential: Dict) -> CollectResul
                 error_message="设备不可达",
                 duration_ms=int((time.time() - start_time) * 1000)
             )
-        
-        # 2. 构造Netmiko连接参数
+
+        # 2. 阻塞段放入线程执行
+        return await asyncio.to_thread(_test_device_connection_sync, device, credential, start_time)
+    except Exception as e:
+        logger.error(f"设备 {ip_address} 连接测试发生错误: {str(e)}")
+        return CollectResult(
+            success=False,
+            error_message=f"测试异常: {str(e)}",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+
+
+def _test_device_connection_sync(device: Dict, credential: Dict, start_time: float) -> CollectResult:
+    """测试连接的同步实现（仅供 test_device_connection 在线程中调用）"""
+    ip_address = device.get("ip_address", "")
+
+    try:
+        # 构造Netmiko连接参数
         vendor = device.get("vendor", "huawei_vrp").lower()
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
 
-        # telnet 凭证：按厂商切换到对应 telnet 驱动（仅影响本测试连接函数，备份采集路径不受影响）
+        # telnet 凭证：按厂商切换到对应 telnet 驱动，并用纯 telnet 参数连接
         if credential.get("protocol") == "telnet":
             device_type = TELNET_DEVICE_TYPE_MAP.get(device_type, device_type)
-        
-        # 创建临时SSH配置文件以支持旧设备的密钥交换算法
-        import tempfile
-        ssh_config_content = f"""
-Host {device.get("ip_address")}
-    KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
-            f.write(ssh_config_content)
-            ssh_config_path = f.name
-        
-        # 构建基础连接参数
-        conn_params: Dict = {
-            "device_type": device_type,
-            "host": device.get("ip_address"),
-            "username": credential.get("username"),
-            "password": credential.get("password"),
-            "port": credential.get("port", 22),
-            "conn_timeout": 10,  # 连接超时
-            "read_timeout_override": 15,  # 读取超时
-            "allow_agent": False,
-            "ssh_config_file": ssh_config_path,
-        }
-        
-        # 处理enable密码
-        if credential.get("enable_password"):
-            conn_params["secret"] = credential.get("enable_password")
-        
-        # 处理SSH密钥认证
-        if credential.get("auth_type") == "key" and credential.get("private_key"):
-            conn_params["use_keys"] = True
-            conn_params["key_file"] = None
-            conn_params["password"] = None
-            # 将私钥写入临时文件
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
-                f.write(credential["private_key"])
-                conn_params["key_file"] = f.name
-        
-        # 3. 使用Netmiko连接设备
+            conn_params = _build_telnet_conn_params(device_type, device.get("ip_address"), credential)
+            conn_params["conn_timeout"] = 10
+            conn_params["read_timeout_override"] = 15
+            ssh_config_path = None
+        else:
+            # SSH 协议：接入统一构造器（TOFU 主机密钥校验 + KEX 兼容 + enable/密钥认证处理）
+            conn_params, ssh_config_path = _build_ssh_conn_params(device_type, device.get("ip_address"), credential)
+            conn_params.setdefault("conn_timeout", 10)
+            conn_params.setdefault("read_timeout_override", 15)
+
+        def _cleanup() -> None:
+            """清理临时文件（key_file + ssh_config），telnet 路径两者均为 None"""
+            key_file = conn_params.get("key_file")
+            if key_file:
+                try:
+                    os.unlink(key_file)
+                except FileNotFoundError:
+                    pass
+            if ssh_config_path:
+                try:
+                    os.unlink(ssh_config_path)
+                except FileNotFoundError:
+                    pass
+
+        # 使用Netmiko连接设备
         from netmiko import Netmiko
         from netmiko.exceptions import NetMikoAuthenticationException, NetMikoTimeoutException
-        
+        from paramiko.ssh_exception import BadHostKeyException
+
         try:
             with Netmiko(**conn_params) as ssh:
                 # 进入enable模式（如果需要）
                 if credential.get("enable_password"):
                     ssh.enable()
-                
-                # 清理临时文件
-                if "key_file" in conn_params and conn_params["key_file"]:
-                    os.unlink(conn_params["key_file"])
-                os.unlink(ssh_config_path)
-                
+
+                _cleanup()
                 return CollectResult(
                     success=True,
                     config_content="连接测试成功",
                     duration_ms=int((time.time() - start_time) * 1000)
                 )
+        except BadHostKeyException as e:
+            logger.error(f"设备 {ip_address} SSH 主机密钥变更，拒绝连接: {e}")
+            _cleanup()
+            return CollectResult(
+                success=False,
+                error_message=(f"SSH主机密钥校验失败（{e.hostname}）：设备密钥与首次记录不一致。"
+                               "若确认是设备重装/换钥属正常变更，请管理员删除 data/ssh_host_keys/known_hosts "
+                               "中该设备的记录后重试"),
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
         except NetMikoAuthenticationException:
             logger.error(f"设备 {ip_address} 认证失败")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
+            _cleanup()
             return CollectResult(
                 success=False,
                 error_message="认证失败",
@@ -282,25 +296,21 @@ Host {device.get("ip_address")}
             )
         except NetMikoTimeoutException:
             logger.error(f"设备 {ip_address} 连接超时")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
+            _cleanup()
             return CollectResult(
                 success=False,
                 error_message="连接超时",
                 duration_ms=int((time.time() - start_time) * 1000)
             )
         except Exception as e:
-            logger.error(f"设备 {ip_address} 配置应用失败: {str(e)}")
-            if "key_file" in conn_params and conn_params.get("key_file"):
-                os.unlink(conn_params["key_file"])
-            os.unlink(ssh_config_path)
+            logger.error(f"设备 {ip_address} 连接测试失败: {str(e)}")
+            _cleanup()
             return CollectResult(
                 success=False,
                 error_message=str(e),
                 duration_ms=int((time.time() - start_time) * 1000)
             )
-    
+
     except Exception as e:
         logger.error(f"设备 {ip_address} 连接测试发生错误: {str(e)}")
         return CollectResult(
@@ -344,6 +354,77 @@ async def collect_device_config(device: Dict, credential: Dict) -> CollectResult
         )
 
 
+def _build_telnet_conn_params(device_type: str, host: str, credential: Dict) -> Dict:
+    """构造 telnet 凭证的纯 telnet 连接参数（测试连接/采集/还原三条路径共用）。
+
+    telnet 不涉及 SSH 主机密钥：不执行 TOFU 探测，也不生成临时 ssh_config。
+    """
+    return {
+        "device_type": device_type,
+        "host": host,
+        "username": credential.get("username"),
+        "password": credential.get("password"),
+        "port": credential.get("port") or 23,
+    }
+
+
+def _build_ssh_conn_params(device_type: str, host: str, credential: Dict) -> Tuple[Dict, str]:
+    """构造统一的 Netmiko 连接参数（三处 SSH 路径共用）。
+
+    - 主机密钥：TOFU 严格校验（ssh_strict=True + 项目级 known_hosts），
+      首次连接先无凭证探测记录密钥，之后密钥不一致一律拒绝。
+    - 旧设备 KEX 兼容：临时 ssh_config 仅保留 KexAlgorithms（paramiko 实际
+      不读取该文件，KEX 兼容最终由 disabled_algorithms/paramiko 内建协商完成，
+      保留文件是为了未来切换 OpenSSH 类后端时不丢失兼容配置）。
+    - 返回 (conn_params, 临时ssh_config路径)；调用方负责清理该临时文件。
+    """
+    import tempfile
+
+    port = int(credential.get("port", 22) or 22)
+
+    # TOFU：首次连接先记录主机密钥（无凭证探测，失败按连接超时处理）
+    record_ssh_host_key(host, port)
+
+    ssh_config_content = f"""
+Host {host}
+    KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1
+"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
+        f.write(ssh_config_content)
+        ssh_config_path = f.name
+
+    conn_params: Dict = {
+        "device_type": device_type,
+        "host": host,
+        "username": credential.get("username"),
+        "password": credential.get("password"),
+        "port": port,
+        "allow_agent": False,
+        "ssh_config_file": ssh_config_path,
+        # 主机密钥严格校验：known_hosts 无记录 → RejectPolicy 拒绝；
+        # 有记录但密钥不一致 → paramiko 抛 BadHostKeyException 拒绝。
+        "ssh_strict": True,
+        "alt_host_keys": True,
+        "alt_key_file": _ssh_known_hosts_path(),
+    }
+
+    # 处理enable密码
+    if credential.get("enable_password"):
+        conn_params["secret"] = credential.get("enable_password")
+
+    # 处理SSH密钥认证
+    if credential.get("auth_type") == "key" and credential.get("private_key"):
+        conn_params["use_keys"] = True
+        conn_params["key_file"] = None
+        conn_params["password"] = None
+        # 将私钥写入临时文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
+            f.write(credential["private_key"])
+            conn_params["key_file"] = f.name
+
+    return conn_params, ssh_config_path
+
+
 def _collect_device_config_sync(device: Dict, credential: Dict, start_time: float) -> CollectResult:
     """采集配置的同步实现（仅供 collect_device_config 在线程中调用）"""
     ssh_config_path = None
@@ -352,51 +433,25 @@ def _collect_device_config_sync(device: Dict, credential: Dict, start_time: floa
         # 构造Netmiko连接参数
         vendor = device.get("vendor", "huawei_vrp").lower()
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
+        host = device.get("ip_address")
 
-        # 创建临时SSH配置文件以支持旧设备的密钥交换算法
-        import tempfile
-        ssh_config_content = f"""
-Host {device.get("ip_address")}
-    KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
-            f.write(ssh_config_content)
-            ssh_config_path = f.name
-
-        # 构建基础连接参数
-        conn_params: Dict = {
-            "device_type": device_type,
-            "host": device.get("ip_address"),
-            "username": credential.get("username"),
-            "password": credential.get("password"),
-            "port": credential.get("port", 22),
-            "conn_timeout": 30,
-            "read_timeout_override": 60,
-            "allow_agent": False,
-            "ssh_config_file": ssh_config_path,
-        }
-
-        # 处理enable密码
-        if credential.get("enable_password"):
-            conn_params["secret"] = credential.get("enable_password")
-
-        # 处理SSH密钥认证
-        if credential.get("auth_type") == "key" and credential.get("private_key"):
-            conn_params["use_keys"] = True
-            conn_params["key_file"] = None
-            conn_params["password"] = None
-            # 将私钥写入临时文件
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
-                f.write(credential["private_key"])
-                conn_params["key_file"] = f.name
-                key_file_path = f.name
+        # telnet 凭证：按厂商切换到对应 telnet 驱动，并用纯 telnet 参数连接
+        if credential.get("protocol") == "telnet":
+            device_type = TELNET_DEVICE_TYPE_MAP.get(device_type, device_type)
+            conn_params = _build_telnet_conn_params(device_type, host, credential)
+            conn_params["conn_timeout"] = 30
+            conn_params["read_timeout_override"] = 60
+        else:
+            # SSH 协议：统一构造器（含 TOFU 主机密钥校验）
+            conn_params, ssh_config_path = _build_ssh_conn_params(device_type, host, credential)
+            key_file_path = conn_params.get("key_file")
+            conn_params.setdefault("conn_timeout", 30)
+            conn_params.setdefault("read_timeout_override", 60)
 
         # 使用Netmiko连接设备
         from netmiko import Netmiko
         from netmiko.exceptions import NetMikoAuthenticationException, NetMikoTimeoutException
+        from paramiko.ssh_exception import BadHostKeyException
 
         with Netmiko(**conn_params) as ssh:
             # 进入enable模式（如果需要）
@@ -412,6 +467,15 @@ Host {device.get("ip_address")}
                 config_content=output,
                 duration_ms=int((time.time() - start_time) * 1000)
             )
+    except BadHostKeyException as e:
+        logger.error(f"设备 {device.get('ip_address', '')} SSH 主机密钥变更，拒绝连接: {e}")
+        return CollectResult(
+            success=False,
+            error_message=(f"SSH主机密钥校验失败（{e.hostname}）：设备密钥与首次记录不一致。"
+                           "若确认是设备重装/换钥属正常变更，请管理员删除 data/ssh_host_keys/known_hosts "
+                           "中该设备的记录后重试"),
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
     except NetMikoAuthenticationException:
         logger.error(f"设备 {device.get('ip_address', '')} 认证失败")
         return CollectResult(
@@ -510,20 +574,134 @@ def load_config_from_file(file_path: str) -> str:
     with open(file_path, 'r', encoding='utf-8') as f:
         return f.read()
 
-# 还原前危险命令黑名单（不区分大小写、按行首命令词匹配）。
+
+# ==================== SSH 主机密钥校验（TOFU：Trust On First Use） ====================
+# 背景：此前三处 SSH 连接依赖临时 ssh_config 里的 StrictHostKeyChecking no，
+# 但 netmiko 的 _use_ssh_config 只应用 port/username/hostname/sock 四个字段，
+# 该指令对 paramiko 完全无效——真实行为是 netmiko 默认 AutoAddPolicy：
+# 接受任意主机密钥，中间人可伪装生产设备窃取管理凭证。
+#
+# 现改为 TOFU 模式：
+#   1. 首次连接前用「无凭证裸 Transport 探测」记录设备主机密钥到
+#      data/ssh_host_keys/known_hosts（OpenSSH known_hosts 格式）；
+#   2. 之后每次连接通过 netmiko 原生参数 ssh_strict=True + alt_host_keys 严格校验，
+#      密钥不一致抛 BadHostKeyException 直接拒绝（不下发任何命令、不发送凭证）。
+#   3. 设备重装/换钥匙后需管理员人工核实并删除 known_hosts 中对应行，防止误放行。
+# 注：临时 ssh_config 中的指令仅对 OpenSSH 二进制生效（paramiko 忽略），
+#     真正的强校验以 conn_params 中的 ssh_strict/alt_host_keys 为准。
+
+def _ssh_known_hosts_path() -> str:
+    base = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'ssh_host_keys')
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, 'known_hosts')
+
+
+def _host_key_entry_name(host: str, port: int) -> str:
+    """known_hosts 条目名，与 paramiko 内部约定一致（非 22 端口用 [host]:port）"""
+    host = (host or "").strip()
+    if not host:
+        raise ValueError("SSH 主机地址为空，无法进行主机密钥校验")
+    return host if port == 22 else f"[{host}]:{port}"
+
+
+def _host_key_recorded(entry_name: str) -> bool:
+    import paramiko
+    hk = paramiko.hostkeys.HostKeys()
+    try:
+        hk.load(_ssh_known_hosts_path())
+    except (FileNotFoundError, IOError):
+        return False
+    return hk.lookup(entry_name) is not None
+
+
+def record_ssh_host_key(host: str, port: int) -> None:
+    """TOFU 首次记录设备主机密钥（幂等：已记录直接返回）。
+
+    探测使用无凭证的裸 Transport——只协商密钥、不发送任何登录凭证，
+    即使此时存在中间人也仅记录到攻击者的密钥（首次信任窗口，与 OpenSSH TOFU 一致），
+    后续任何密钥不一致都会被严格校验拦截。
+    探测失败（不可达/超时）统一转为 NetMikoTimeoutException，由调用方按「连接超时」处理。
+    """
+    import paramiko
+    from netmiko.exceptions import NetMikoTimeoutException
+
+    entry_name = _host_key_entry_name(host, int(port or 22))
+    if _host_key_recorded(entry_name):
+        return
+    transport = None
+    try:
+        transport = paramiko.Transport((host, int(port or 22)))
+        transport.start_client(timeout=15)
+        server_key = transport.get_remote_server_key()
+        hk = paramiko.hostkeys.HostKeys()
+        try:
+            hk.load(_ssh_known_hosts_path())
+        except (FileNotFoundError, IOError):
+            pass
+        hk.add(entry_name, server_key.get_name(), server_key)
+        hk.save(_ssh_known_hosts_path())
+        logger.info(f"TOFU 首次记录 SSH 主机密钥: {entry_name} ({server_key.get_name()})")
+    except Exception as e:
+        logger.warning(f"SSH 主机密钥探测失败 {entry_name}: {e}")
+        raise NetMikoTimeoutException(f"SSH 主机密钥获取失败（{entry_name}）: {e}")
+    finally:
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+# 还原前危险命令黑名单（不区分大小写）。
 # 目的：即使备份文件被人工篡改或粘入越权内容，也杜绝 reload/reboot/擦除类操作，
-# 这是防止"还原导致设备重启"的最后防线。
+# 这是防止"还原导致设备重启/清配置"的最后防线。
+#
+# 匹配规则：对每行提取"有效命令首词序列"后再匹配，从而拦截厂商前缀变体：
+#   - Cisco 配置模式：  do reload / do write erase
+#   - FortiGate：       execute reboot / execute restore default
+#   - Juniper：         request system reboot / request system zeroize
+#   - 华为 VRP：        reboot / reset saved-configuration / factory-reset
+# 注意：接口级 shutdown（管理性关闭接口）是正常配置内容，不在此列——
+# 若拦截会导致含禁用接口的正常备份永远无法还原。
+# 纯文本描述行（如注释）在过滤前已剔除，不受影响。
 DANGEROUS_CONFIG_PATTERNS = (
     "reload", "reboot", "erase", "write erase", "format",
     "delete flash", "delete /force", "boot system", "factory-reset",
-    "restore default", "reset saved-configuration",
+    "restore default", "reset saved-configuration", "zeroize",
 )
+
+# 厂商 CLI 中常见的"上下文前缀"：拦截时先剥离这些词再匹配真实命令动词，
+# 使 "do reload" / "execute reboot" / "request system reboot" 与裸命令同等对待。
+_DANGEROUS_PREFIX_WORDS = (
+    "do", "execute", "request", "run", "undo", "no", "system",
+)
+
+
+def _effective_dangerous_key(line: str) -> str:
+    """提取一行配置的有效匹配键：剥离厂商上下文前缀词后的命令串（小写）。
+
+    例：
+      "do reload"             -> "reload"
+      "execute reboot"        -> "reboot"
+      "request system reboot" -> "reboot"（request、system 均为前缀词）
+      "write erase"           -> "write erase"
+      "interface GigabitEthernet0/0" -> 原样返回（无危险词，不命中）
+    """
+    tokens = line.strip().lower().split()
+    # 最多剥离 3 层前缀（request system reboot 这类两层已覆盖，留余量防嵌套）
+    for _ in range(3):
+        if len(tokens) > 1 and tokens[0] in _DANGEROUS_PREFIX_WORDS:
+            tokens = tokens[1:]
+        else:
+            break
+    return " ".join(tokens)
 
 
 def filter_dangerous_config_lines(config_content: str) -> tuple[List[str], List[str]]:
     """过滤还原内容中的危险命令行。
 
     返回 (安全配置行列表, 被拦截的行列表)。注释/空行在过滤前已剔除。
+    匹配采用"前缀词剥离后的行首匹配"：既覆盖裸命令，也覆盖 do/execute/request 等变体；
+    不会误伤行中间恰好包含敏感词的普通配置（如描述文本）。
     """
     kept: List[str] = []
     blocked: List[str] = []
@@ -531,8 +709,8 @@ def filter_dangerous_config_lines(config_content: str) -> tuple[List[str], List[
         stripped = line.strip()
         if not stripped or stripped.startswith('!') or stripped.startswith('#'):
             continue
-        lowered = stripped.lower()
-        if any(lowered.startswith(p) for p in DANGEROUS_CONFIG_PATTERNS):
+        key = _effective_dangerous_key(stripped)
+        if key and any(key.startswith(p) for p in DANGEROUS_CONFIG_PATTERNS):
             blocked.append(stripped)
             continue
         kept.append(stripped)
@@ -616,46 +794,18 @@ def _apply_config_to_device_sync(device: Dict, credential: Dict,
         # 构造Netmiko连接参数
         device_type = VENDOR_MAP.get(vendor, "huawei_vrp")
 
-        # 创建临时SSH配置文件以支持旧设备的密钥交换算法
-        import tempfile
-        ssh_config_content = f"""
-Host {device.get("ip_address")}
-    KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_ssh_config', delete=False) as f:
-            f.write(ssh_config_content)
-            ssh_config_path = f.name
-
-        # 构建基础连接参数
-        conn_params: Dict = {
-            "device_type": device_type,
-            "host": device.get("ip_address"),
-            "username": credential.get("username"),
-            "password": credential.get("password"),
-            "port": credential.get("port", 22),
-            "conn_timeout": 30,
-            "read_timeout_override": 120,
-            "allow_agent": False,
-            "ssh_config_file": ssh_config_path,
-        }
-
-        # 处理enable密码
-        if credential.get("enable_password"):
-            conn_params["secret"] = credential.get("enable_password")
-
-        # 处理SSH密钥认证
-        if credential.get("auth_type") == "key" and credential.get("private_key"):
-            conn_params["use_keys"] = True
-            conn_params["key_file"] = None
-            conn_params["password"] = None
-            # 将私钥写入临时文件
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as f:
-                f.write(credential["private_key"])
-                conn_params["key_file"] = f.name
-                key_file_path = f.name
+        # telnet 凭证：按厂商切换到对应 telnet 驱动，并用纯 telnet 参数连接
+        if credential.get("protocol") == "telnet":
+            device_type = TELNET_DEVICE_TYPE_MAP.get(device_type, device_type)
+            conn_params = _build_telnet_conn_params(device_type, device.get("ip_address"), credential)
+            conn_params["conn_timeout"] = 30
+            conn_params["read_timeout_override"] = 120
+        else:
+            # SSH 协议：统一构造器（含 TOFU 主机密钥校验）
+            conn_params, ssh_config_path = _build_ssh_conn_params(device_type, device.get("ip_address"), credential)
+            key_file_path = conn_params.get("key_file")
+            conn_params.setdefault("conn_timeout", 30)
+            conn_params.setdefault("read_timeout_override", 120)
 
         # 获取厂商配置命令
         config_cmds = CONFIG_COMMANDS.get(vendor, CONFIG_COMMANDS["huawei_vrp"])
@@ -664,6 +814,7 @@ Host {device.get("ip_address")}
         # 使用Netmiko连接设备
         from netmiko import Netmiko
         from netmiko.exceptions import NetMikoAuthenticationException, NetMikoTimeoutException
+        from paramiko.ssh_exception import BadHostKeyException
 
         logger.info(f"正在使用Netmiko连接设备 {ip_address}...")
         with Netmiko(**conn_params) as ssh:
@@ -761,6 +912,15 @@ Host {device.get("ip_address")}
         return CollectResult(
             success=False,
             error_message="连接超时",
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    except BadHostKeyException as e:
+        logger.error(f"设备 {ip_address} SSH 主机密钥变更，拒绝还原: {e}")
+        return CollectResult(
+            success=False,
+            error_message=(f"SSH主机密钥校验失败（{e.hostname}）：设备密钥与首次记录不一致，已中止还原。"
+                           "若确认是设备重装/换钥属正常变更，请管理员删除 data/ssh_host_keys/known_hosts "
+                           "中该设备的记录后重试"),
             duration_ms=int((time.time() - start_time) * 1000)
         )
     except Exception as e:

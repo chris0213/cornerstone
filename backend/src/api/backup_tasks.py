@@ -421,11 +421,11 @@ async def get_task_history(
     
     backups = result.scalars().all()
     
-    # 按日期分组统计
+    # 按日期分组统计（按「日」聚合，同一设备的多次备份归入同一天）
     history = {}
     for backup in backups:
-        # 分组时间同样统一为带 offset 的 UTC ISO，避免手工 +8 偏移
-        date_str = ensure_utc(backup.created_at).isoformat()
+        # 统一 UTC 后取日期部分（YYYY-MM-DD），展示层由前端本地化
+        date_str = ensure_utc(backup.created_at).strftime("%Y-%m-%d")
         if date_str not in history:
             history[date_str] = {"success": 0, "failed": 0, "total": 0, "backups": []}
         history[date_str]["total"] += 1

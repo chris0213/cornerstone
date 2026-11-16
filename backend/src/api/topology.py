@@ -16,6 +16,7 @@ from src.models.device import Device
 from src.models.device_link import DeviceLink
 from src.models.ip_address import IPAddress
 from src.models.discovery import DiscoveryUnknownEndpoint
+from src.models.user import User
 from src.schemas import DeviceLinkCreate, DeviceLinkUpdate, DeviceLinkResponse
 
 # 整个 topology 路由统一要求登录（含拓扑图、连接关系、发现任务、未知接入等全部接口）
@@ -79,14 +80,14 @@ async def get_site_graph(db: AsyncSession = Depends(get_db)):
         else:
             circuit_counts[circuit.site_id] = 1
         
-        # 确定专线类型
+        # 确定专线类型（type 可能为 NULL，判空防 AttributeError）
         type_map = {
             "internet": "internet",
             "mpls": "mpls",
             "sdwan": "sdwan",
             "fiber": "fiber",
         }
-        circuit_type = type_map.get(circuit.type.lower(), "internet")
+        circuit_type = type_map.get((circuit.type or "").lower(), "internet")
         
         # 确定带宽标签
         bandwidth = circuit.bandwidth or 0
@@ -596,6 +597,7 @@ async def get_site_devices(
 @router.post("/discover-lldp", dependencies=[Depends(require_permission("topology:write"))])
 async def discover_lldp_neighbors(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """启动 LLDP/CDP 邻居发现后台任务，返回 task_id（进度经 /discovery-tasks/{id} 轮询）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -611,15 +613,17 @@ async def discover_lldp_neighbors(
         result = await db.execute(select(Device).where(Device.status != "offline"))
         devices = result.scalars().all()
         if not devices:
-            raise Exception("没有可用设备")
+            raise ValueError("没有可用设备")
         credentials = await get_all_credentials(db)
         if not credentials:
-            raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
+            raise ValueError("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
         devices_with_ip = [d for d in devices if d.mgmt_ip_id]
         if not devices_with_ip:
             raise ValueError("没有设备配置了管理IP，无法进行LLDP发现")
 
-        task = manager.create("lldp", total=len(devices_with_ip))
+        # 记录发起人租户：轮询接口据此做归属校验
+        task = manager.create("lldp", total=len(devices_with_ip),
+                              tenant_id=getattr(current_user, "tenant_id", None))
         # 必须在当前（uvicorn 主）事件循环内直接跑后台协程：async_session 的连接池
         # 绑定主 loop，此前用 run_in_executor + asyncio.run 新开 loop 导致
         # "Future attached to a different loop"。SSH 同步采集已由 to_thread 下放线程池，
@@ -636,6 +640,7 @@ async def discover_lldp_neighbors(
 @router.post("/discover-mac", dependencies=[Depends(require_permission("topology:write"))])
 async def discover_mac_endpoints(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """启动 MAC/ARP 表发现后台任务（发现交换机下挂服务器等不开 LLDP 的终端）"""
     from src.services.discovery_task_manager import manager, run_discovery_task
@@ -651,12 +656,13 @@ async def discover_mac_endpoints(
         devices = result.scalars().all()
         credentials = await get_all_credentials(db)
         if not credentials:
-            raise Exception("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
+            raise ValueError("系统中没有配置任何设备凭证，请先在系统设置中添加SSH登录凭证")
         scannable = [d for d in devices if d.mgmt_ip_id]
         if not scannable:
             raise ValueError("没有可扫描的网络设备（需为交换机/路由器配置管理IP）")
 
-        task = manager.create("mac", total=len(scannable))
+        task = manager.create("mac", total=len(scannable),
+                              tenant_id=getattr(current_user, "tenant_id", None))
         # 同 discover-lldp：主 loop 内直接跑后台协程，避免跨 loop 使用连接池
         task.asyncio_task = asyncio.create_task(
             run_discovery_task(task, run_mac_discovery, async_session)
@@ -670,13 +676,17 @@ async def discover_mac_endpoints(
 @router.get("/discovery-tasks/{task_id}", dependencies=[Depends(require_permission("topology:read"))])
 async def read_discovery_task(
     task_id: str,
+    current_user: User = Depends(get_current_active_user),
 ):
-    """轮询发现任务进度与结果"""
+    """轮询发现任务进度与结果（租户归属校验：普通用户仅可查看本租户发起的任务）"""
     from src.services.discovery_task_manager import manager
 
     task = manager.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="发现任务不存在（服务可能已重启，请重新发起发现）")
+    if not current_user.is_superuser and task.tenant_id != current_user.tenant_id:
+        # 不暴露任务是否存在：统一 404
+        raise HTTPException(status_code=404, detail="发现任务不存在")
     return task.to_dict()
 
 

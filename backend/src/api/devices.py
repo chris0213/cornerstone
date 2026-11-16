@@ -171,12 +171,17 @@ async def backup_device_config(
     if credential is None:
         raise HTTPException(status_code=400, detail="No credential found for device")
     
-    from ..utils.crypto import decrypt_password
-    
+    from ..utils.crypto import decrypt_password_strict
+
+    try:
+        password_plain = decrypt_password_strict(credential.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     device_info = {
         "ip": mgmt_ip.address,
         "username": credential.username,
-        "password": decrypt_password(credential.password),
+        "password": password_plain,
         "device_type": device.vendor or "cisco_ios",
         "port": credential.port or 22,
     }
