@@ -1231,6 +1231,7 @@
     "logs": "Audit Logs",
     "logsSettings": "Log Settings",
     "offsiteSync": "Offsite Backup Sync",
+    "databaseBackup": "Database Backups",
     "aiSettings": "AI Settings",
     "aiChatLogs": "AI Chat Logs",
     "aiChatLogsRetention": "Retained for 30 days; visible to the user and super administrators only",

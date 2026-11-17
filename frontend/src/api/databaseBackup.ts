@@ -1,0 +1,26 @@
+import api from './axios'
+
+export interface DatabaseBackupFile {
+  name: string
+  size_bytes: number
+  size_mb: number
+  modified_at: number
+}
+
+export interface DatabaseBackupList {
+  dir: string
+  exists: boolean
+  files: DatabaseBackupFile[]
+}
+
+export const listDatabaseBackups = async (): Promise<DatabaseBackupList> => {
+  const { data } = await api.get('/database-backups/files')
+  return data
+}
+
+export const downloadDatabaseBackup = async (name: string): Promise<Blob> => {
+  const { data } = await api.get(`/database-backups/files/${encodeURIComponent(name)}/download`, {
+    responseType: 'blob',
+  })
+  return data
+}

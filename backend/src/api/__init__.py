@@ -14,6 +14,7 @@ from .users import router as users_router
 from .audit_logs import router as audit_logs_router
 from .settings import router as settings_router
 from .offsite_sync import router as offsite_sync_router
+from .database_backup import router as database_backup_router
 from .vlans import router as vlans_router
 from .topology import router as topology_router
 from .monitoring import router as monitoring_router
@@ -48,6 +49,7 @@ api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(audit_logs_router, prefix="/logs", tags=["logs"])
 api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
 api_router.include_router(offsite_sync_router, prefix="/offsite-sync", tags=["offsite-sync"])
+api_router.include_router(database_backup_router, prefix="/database-backups", tags=["database-backups"])
 api_router.include_router(topology_router, prefix="/topology", tags=["topology"])
 api_router.include_router(monitoring_router, prefix="/monitor", tags=["monitoring"])
 api_router.include_router(alerts_router, prefix="/alerts", tags=["alerts"])
