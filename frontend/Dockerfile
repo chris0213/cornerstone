@@ -25,6 +25,11 @@ ENV APP_VERSION=$APP_VERSION
 # 当前代码库存在历史 TS 类型错误，生产镜像先执行 Vite 构建，避免 Docker 部署被 vue-tsc 阻塞。
 RUN npx vite build
 
+# 预压缩静态资源：nginx 开 gzip_static 直接发 .gz，省运行时压缩 CPU
+# index.html 不压缩（SPA 每次都要最新，且体积小），只压 js/css/svg/ttf
+RUN find /app/dist -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.ttf' \) \
+    -exec gzip -k -9 {} \;
+
 # ===== 运行阶段（Nginx）=====
 FROM nginx:1.27-alpine AS runtime
 

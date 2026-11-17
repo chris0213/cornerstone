@@ -20,7 +20,8 @@ async def read_devices(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_active_user)
 ):
-    result = await db.execute(select(Device).offset(page.skip).limit(page.limit))
+    # PostgreSQL 无 ORDER BY 时分页结果顺序不稳定（翻页可能重复/漏行），按主键排序保证稳定
+    result = await db.execute(select(Device).order_by(Device.id).offset(page.skip).limit(page.limit))
     return result.scalars().all()
 
 @router.get("/{device_id}", response_model=DeviceResponse, dependencies=[Depends(require_permission("devices:read"))])
