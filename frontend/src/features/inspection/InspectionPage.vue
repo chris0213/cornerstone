@@ -269,14 +269,18 @@ async function saveTask() {
  return;
  }
  
- // 兼容：将 tcp_ports 文本输入转为 number[]
- const payload: any = { ...taskForm.value };
- if (typeof payload.tcp_ports === 'string') {
-   payload.tcp_ports = payload.tcp_ports
-     .split(/[,，\s]+/)
-     .map((s: string) => parseInt(s, 10))
-     .filter((n: number) => Number.isFinite(n) && n > 0);
- }
+  // 兼容：将 tcp_ports 文本输入转为 number[]
+  const payload: any = { ...taskForm.value };
+  if (typeof payload.tcp_ports === 'string') {
+    payload.tcp_ports = payload.tcp_ports
+      .split(/[,，\s]+/)
+      .map((s: string) => parseInt(s, 10))
+      .filter((n: number) => Number.isFinite(n) && n > 0);
+  }
+  // 后端团体字已脱敏回显：掩码值表示未修改，更新时不下发该字段
+  if (editingTask.value && payload.snmp_community === '******') {
+    delete payload.snmp_community;
+  }
  
  loading.value = true;
  try {
