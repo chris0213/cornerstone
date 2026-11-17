@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import os
 import re
+import socket
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -171,6 +172,18 @@ async def is_external_blocked(db: AsyncSession) -> bool:
 _LOCAL_DOMAIN_SUFFIXES = (".local", ".internal", ".lan", ".corp", ".home", ".localdomain")
 
 
+def _ip_is_blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
+    """内网/回环/link-local/保留/组播/未指定地址一律拦截（含 169.254.169.254 元数据地址）。"""
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 def validate_ai_api_url(url: str) -> str | None:
     """校验 AI api_url。合法返回 None，否则返回错误信息。
 
@@ -199,18 +212,30 @@ def validate_ai_api_url(url: str) -> str | None:
         if hostname not in allowed_hosts:
             return f"api_url 域名不在白名单中: {hostname}"
 
-    # 主机若是 IP 字面量，拒绝内网/回环/link-local/保留段
+    # 主机若是 IP 字面量，直接拒绝内网/回环/link-local/保留段
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
-        return None  # 普通域名且通过白名单检查
-    if (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    ):
-        return f"api_url 不允许使用内网/保留 IP: {hostname}"
+        ip = None
+    if ip is not None:
+        if _ip_is_blocked(ip):
+            return f"api_url 不允许使用内网/保留 IP: {hostname}"
+        return None
+
+    # 普通域名：解析全部 A/AAAA 记录并逐一检查，防止域名指向 169.254.169.254/内网 IP，
+    # 也顺带兜住十进制等可被 getaddrinfo 归一化的 IP 变体写法。
+    # 解析失败（NXDOMAIN/无网络）保持放行——无法证明其指向私网；真正防 DNS 重绑定需
+    # 请求期锁定解析结果，配置期校验为尽力拦截，配合 AI_API_ALLOWED_HOSTS 白名单才是强缓解。
+    try:
+        infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return None
+    for info in infos:
+        addr = info[4][0]
+        try:
+            resolved = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if _ip_is_blocked(resolved):
+            return f"api_url 域名解析到内网/保留地址，已拒绝: {hostname} -> {addr}"
     return None

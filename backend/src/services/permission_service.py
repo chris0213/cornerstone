@@ -229,7 +229,17 @@ async def init_default_admin(db: AsyncSession):
         admin_role = result.scalar_one_or_none()
         
         if admin_role:
-            initial_password = os.environ.get("INITIAL_ADMIN_PASSWORD", "password")
+            # 不再默认弱口令 "password"：漏配 .env 时生成一次性随机强密码并打印，
+            # 避免上线即弱口令超管。生产应在 .env 设置 INITIAL_ADMIN_PASSWORD。
+            initial_password = os.environ.get("INITIAL_ADMIN_PASSWORD")
+            if not initial_password:
+                import secrets
+                initial_password = secrets.token_urlsafe(24)
+                print(
+                    "[seed] 未设置 INITIAL_ADMIN_PASSWORD，已为 admin 生成一次性随机密码："
+                    f"{initial_password}\n"
+                    "       请立即登录并修改密码；该密码不会再次显示。"
+                )
             hashed_password = pwd_context.hash(initial_password)
             admin_user = User(
                 username="admin",

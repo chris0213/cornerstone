@@ -278,7 +278,13 @@ def _seed_permissions_and_roles(session):
 def init_db():
     """初始化种子数据（建表由 Alembic 迁移负责，本函数不创建/修改表结构）"""
     print("初始化种子数据...")
-    initial_admin_password = os.environ.get("INITIAL_ADMIN_PASSWORD", "password")
+    # 不再默认弱口令 "password"：漏配 .env 时生成一次性随机强密码并打印（见文末）。
+    initial_admin_password = os.environ.get("INITIAL_ADMIN_PASSWORD")
+    generated_admin_password = None
+    if not initial_admin_password:
+        import secrets
+        generated_admin_password = secrets.token_urlsafe(24)
+        initial_admin_password = generated_admin_password
     hashed_password = pwd_context.hash(initial_admin_password)
 
     with sqlalchemy.orm.Session(sync_engine) as session:
@@ -286,7 +292,9 @@ def init_db():
         _seed_permissions_and_roles(session)
 
         existing_admin = session.query(User).filter(User.username == "admin").first()
+        admin_created = False
         if not existing_admin:
+            admin_created = True
             # 查找 super_admin 角色
             admin_role = session.query(Role).filter(Role.name == "super_admin").first()
             admin_user = User(
@@ -337,8 +345,11 @@ def init_db():
         session.commit()
 
     print("\n默认账号:")
-    print("  管理员: admin / INITIAL_ADMIN_PASSWORD 环境变量指定的密码（未设置时为开发默认 password）")
-    print("  普通用户: user / user123")
+    if generated_admin_password and admin_created:
+        print(f"  管理员: admin / 一次性随机密码: {generated_admin_password}（请立即登录修改，不会再次显示）")
+    else:
+        print("  管理员: admin / 使用 INITIAL_ADMIN_PASSWORD 环境变量指定的密码")
+    print("  普通用户: user / user123（仅开发演示账号，生产环境请禁用或改密）")
 
 
 if __name__ == "__main__":

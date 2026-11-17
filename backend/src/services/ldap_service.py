@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 from ldap3 import Server, Connection, ALL, NTLM, Tls, SIMPLE, SUBTREE
 from ldap3.core.exceptions import LDAPException, LDAPBindError
+from ldap3.utils.conv import escape_filter_chars
 
 from ..config import settings
 from ..models import User, Role, SystemConfig
@@ -198,7 +199,10 @@ class LDAPConnectionManager:
         if not self.connection or not self.connection.bound:
             raise LDAPException("LDAP连接未建立")
         
-        search_filter = f"(&{self.config.user_filter}({self.config.username_attr}={username}))"
+        # RFC 4515 转义用户名，防止 LDAP 过滤器注入（* ( ) \ NUL 等），
+        # 避免攻击者构造特殊用户名枚举目录条目或诱导匹配他人 DN。
+        safe_username = escape_filter_chars(username)
+        search_filter = f"(&{self.config.user_filter}({self.config.username_attr}={safe_username}))"
         
         try:
             # 搜索用户
