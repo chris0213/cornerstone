@@ -459,6 +459,44 @@ async def format_answer(intent: dict, raw_data: list, question: str, db: AsyncSe
     }
 
 
+_DEVICE_TYPE_LABELS = {
+    "switch": "交换机",
+    "router": "路由器",
+    "firewall": "防火墙",
+    "server": "服务器",
+    "ap": "无线AP",
+    "wireless-controller": "无线控制器",
+    "load-balancer": "负载均衡",
+    "ids-ips": "IDS/IPS",
+    "waf": "WAF",
+    "vpn": "VPN网关",
+    "storage": "存储",
+    "other": "其他",
+    "unknown": "其他",
+}
+
+_DEVICE_STATUS_LABELS = {
+    "active": "在线",
+    "inactive": "停用",
+    "offline": "离线",
+    "maintenance": "维护中",
+    "reserved": "预留",
+}
+
+
+def _device_type_label(v) -> str:
+    """存量数据中英混杂（种子中文/quick_add 英文），展示层统一翻译，未命中原样输出"""
+    if v is None:
+        return ""
+    return _DEVICE_TYPE_LABELS.get(str(v).strip().lower(), str(v))
+
+
+def _device_status_label(v) -> str:
+    if v is None:
+        return ""
+    return _DEVICE_STATUS_LABELS.get(str(v).strip().lower(), str(v))
+
+
 def _row_summary(data_type: str, r: dict) -> str:
     """把一条查询结果压成一行人话，供无模型时的兜底回答使用"""
     if data_type == "sites":
@@ -484,11 +522,12 @@ def _row_summary(data_type: str, r: dict) -> str:
         return s
     if data_type == "devices":
         s = r.get("name") or "-"
-        extra = " ".join(str(x) for x in [r.get("type"), r.get("brand")] if x)
+        extra = " ".join(str(x) for x in [_device_type_label(r.get("type")), r.get("brand")] if x)
         if extra:
             s += f"（{extra}）"
-        if r.get("status"):
-            s += f" · {r['status']}"
+        status_label = _device_status_label(r.get("status"))
+        if status_label:
+            s += f" · {status_label}"
         if r.get("location"):
             s += f" · {r['location']}"
         return s
