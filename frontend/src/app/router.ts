@@ -34,8 +34,7 @@ const SSOSettingsPage = () => import('../features/system/SSOSettingsPage.vue')
 const NotificationSettingsPage = () => import('../features/system/NotificationSettingsPage.vue')
 const LogsSettingsPage = () => import('../features/system/LogsSettingsPage.vue')
 const SecuritySettingsPage = () => import('../features/system/SecuritySettingsPage.vue')
-const OffsiteSyncSettings = () => import('../features/system/OffsiteSyncSettings.vue')
-const DatabaseBackup = () => import('../features/system/DatabaseBackup.vue')
+const BackupCenter = () => import('../features/system/BackupCenter.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -67,8 +66,7 @@ const router = createRouter({
     { path: '/system/roles', name: 'system-roles', component: RoleManagement, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.roleManagement' } },
     { path: '/system/sso', name: 'system-sso', component: SSOSettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.ssoSettings' } },
     { path: '/system/notifications', name: 'system-notifications', component: NotificationSettingsPage, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.notifications' } },
-    { path: '/system/offsite-sync', name: 'system-offsite-sync', component: OffsiteSyncSettings, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.offsiteSync' } },
-    { path: '/system/database-backup', name: 'system-database-backup', component: DatabaseBackup, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.databaseBackup' } },
+    { path: '/system/backup', name: 'system-backup', component: BackupCenter, meta: { requiresAuth: true, permission: 'system:admin', titleKey: 'system.backupCenter' } },
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true, permission: null, titleKey: 'system.profile' } },
     { path: '/sites', name: 'sites', component: SitesPage, meta: { requiresAuth: true, permission: 'sites:read', titleKey: 'sites.title' } },
     { path: '/topology/sites', name: 'topology-sites', component: SiteTopology, meta: { requiresAuth: true, permission: 'topology:read', titleKey: 'topology.siteTopology' } },

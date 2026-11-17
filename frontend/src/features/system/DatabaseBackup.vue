@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { listDatabaseBackups, downloadDatabaseBackup } from '../../api/databaseBackup'
+import {
+  listDatabaseBackups, downloadDatabaseBackup,
+  createDatabaseBackup, deleteDatabaseBackup,
+} from '../../api/databaseBackup'
 import type { DatabaseBackupFile } from '../../api/databaseBackup'
 
 const loading = ref(false)
+const creating = ref(false)
 const files = ref<DatabaseBackupFile[]>([])
 const dir = ref('')
 const exists = ref(true)
@@ -23,6 +27,38 @@ const load = async () => {
     ElMessage.error(e.response?.data?.detail || '加载备份列表失败')
   } finally {
     loading.value = false
+  }
+}
+
+const create = async () => {
+  creating.value = true
+  try {
+    const r = await createDatabaseBackup()
+    ElMessage.success(`已生成备份：${r.name}`)
+    await load()
+  } catch (e: any) {
+    ElMessage.error('备份失败：' + (e.response?.data?.detail || e?.message || '未知错误'))
+  } finally {
+    creating.value = false
+  }
+}
+
+const remove = async (f: DatabaseBackupFile) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除备份「${f.name}」（${f.size_mb} MB）？此操作不可恢复。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteDatabaseBackup(f.name)
+    ElMessage.success('已删除')
+    await load()
+  } catch (e: any) {
+    ElMessage.error('删除失败：' + (e.response?.data?.detail || '未知错误'))
   }
 }
 
@@ -56,7 +92,10 @@ onMounted(load)
             <code>pg_restore</code> 恢复，详见备份恢复手册。
           </p>
         </div>
-        <el-button :icon="Refresh" @click="load">刷新</el-button>
+        <div class="head-actions">
+          <el-button type="primary" :loading="creating" @click="create">立即备份</el-button>
+          <el-button :icon="Refresh" @click="load">刷新</el-button>
+        </div>
       </div>
 
       <el-alert v-if="!exists" type="warning" :closable="false" show-icon
@@ -69,9 +108,10 @@ onMounted(load)
         <el-table-column label="修改时间" width="220">
           <template #default="{ row }">{{ fmtTime(row.modified_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="download(row)">下载</el-button>
+            <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
         <template #empty>暂无备份文件</template>
@@ -89,6 +129,7 @@ onMounted(load)
   padding: 24px;
 }
 .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.head-actions { display: flex; gap: 8px; }
 .title { font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .hint { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
 .hint code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; }

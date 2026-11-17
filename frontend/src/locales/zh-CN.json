@@ -1388,6 +1388,7 @@
     "logsSettings": "日志设置",
     "offsiteSync": "异地备份同步",
     "databaseBackup": "数据库备份",
+    "backupCenter": "备份与容灾",
     "aiSettings": "AI 设置",
     "aiChatLogs": "AI 聊天日志",
     "aiChatLogsRetention": "仅保留最近 30 天，仅本人与超级管理员可见",

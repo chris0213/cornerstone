@@ -89,8 +89,9 @@ services:
     volumes:
       - backend_backups:/opt/cornerstone/backups
       - backend_data:/app/data
-      # 异地备份同步源：宿主机 pg_dump 产物目录，只读挂进 backend 供 rclone/rsync/scp 推送
-      - ${DB_BACKUP_DIR:-/opt/cornerstone/db_backups}:/opt/cornerstone/db_backups:ro
+      # 异地备份同步源 + 页面「立即备份/删除」读写：宿主机 pg_dump 产物目录挂进 backend
+      # 注意：backend 以 uid 1000(cornerstone) 运行，需宿主机把该目录 chown 给 1000 才能写/删
+      - ${DB_BACKUP_DIR:-/opt/cornerstone/db_backups}:/opt/cornerstone/db_backups
     networks:
       - cornerstone-net
     # 默认不对宿主机暴露 8000，由 frontend 容器内部反代。

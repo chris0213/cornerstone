@@ -35,9 +35,10 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 运行时所需系统包（不含编译器）
-# rsync/rclone：异地备份同步用；openssh-client 提供 ssh/scp
+# rsync/rclone：异地备份同步用；postgresql-client：页面「立即备份」调 pg_dump；openssh-client 提供 ssh/scp
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
+        postgresql-client \
         iputils-ping \
         openssh-client \
         rsync \

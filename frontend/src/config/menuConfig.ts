@@ -96,8 +96,7 @@ export const menuConfig: MenuGroup[] = [
       { path: '/system/ai-settings', nameKey: 'system.aiSettings', permission: 'system:read', superAdminOnly: true },
       { path: '/system/ai-chat-logs', nameKey: 'system.aiChatLogs', permission: null },
       { path: '/system/logs-settings', nameKey: 'system.logsSettings', permission: 'system:admin' },
-      { path: '/system/offsite-sync', nameKey: 'system.offsiteSync', permission: 'system:admin' },
-      { path: '/system/database-backup', nameKey: 'system.databaseBackup', permission: 'system:admin' }
+      { path: '/system/backup', nameKey: 'system.backupCenter', permission: 'system:admin' }
     ]
   },
   {

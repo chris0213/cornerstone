@@ -24,3 +24,19 @@ export const downloadDatabaseBackup = async (name: string): Promise<Blob> => {
   })
   return data
 }
+
+export interface CreateBackupResult {
+  ok: boolean
+  name: string
+  size_bytes: number
+}
+
+export const createDatabaseBackup = async (): Promise<CreateBackupResult> => {
+  const { data } = await api.post('/database-backups/create', {})
+  return data
+}
+
+export const deleteDatabaseBackup = async (name: string): Promise<{ ok: boolean; name: string }> => {
+  const { data } = await api.delete(`/database-backups/files/${encodeURIComponent(name)}`)
+  return data
+}
