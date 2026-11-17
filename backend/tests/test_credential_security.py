@@ -161,11 +161,18 @@ def mock_connect(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def reset_rate_limiter():
-    """隔离进程内限流字典。"""
-    backups_module._credential_test_last.clear()
+def reset_rate_limiter(monkeypatch):
+    """隔离限流状态。
+
+    限流器优先 Redis、不可用回退内存；本文件统一钉在内存模式验证语义
+    （与 test_login_throttle 一致）——全量回归时其他用例并发会让测试机 Redis
+    连接抖动触发熔断，计数分裂在 Redis/内存两侧导致阈值断言不稳定。
+    """
+    import src.utils.credential_test_throttle as ctt
+    monkeypatch.setattr(ctt, "_get_redis", lambda: None)
+    ctt._memory_last.clear()
     yield
-    backups_module._credential_test_last.clear()
+    ctt._memory_last.clear()
 
 
 @pytest.fixture(autouse=True)

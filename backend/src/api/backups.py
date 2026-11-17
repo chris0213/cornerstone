@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, update, desc, func
 from datetime import datetime, timezone
 import ipaddress
-import time
 import logging
 
 import json
@@ -22,6 +21,11 @@ from ..utils.crypto import encrypt_password, decrypt_password_strict
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.timeutil import ensure_utc
+from ..utils.credential_test_throttle import (
+    CredentialTestThrottled,
+    check_credential_test_allowed,
+    mark_credential_test,
+)
 from .dependencies import get_current_active_user, require_permission, require_super_admin, PageParams, pagination
 
 logger = logging.getLogger("cornerstone")
@@ -33,10 +37,6 @@ active_connections: dict = {}
 
 # 备份任务 ID → 发起租户：WS 订阅时校验，防止猜测 uuid 越权查看其他租户进度
 task_tenants: dict = {}
-
-# 凭证测试连接限流：记录每个凭证上次放行的 monotonic 时间戳
-# 仅在请求通过校验、真正发起连接前更新（无论连接结果成功或失败）
-_credential_test_last: dict[int, float] = {}
 
 
 def _decrypt_credential_dict(credential) -> dict:
@@ -94,29 +94,6 @@ async def _check_credential_test_target(test_ip: str, db_conn) -> None:
         },
     )
 
-
-def _check_credential_test_rate(credential_id: int) -> None:
-    """R5：同一凭证限流，间隔不足返回 400（结构化错误码）。"""
-    limit_seconds = settings.credential_test_rate_limit_seconds
-    if limit_seconds <= 0:
-        return
-    last = _credential_test_last.get(credential_id)
-    if last is not None:
-        elapsed = time.monotonic() - last
-        if elapsed < limit_seconds:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "credential.test_rate_limited",
-                    "message": f"测试过于频繁，同一凭证每 {limit_seconds} 秒仅允许测试 1 次",
-                    "params": {"retry_after_seconds": int(limit_seconds - elapsed) + 1},
-                },
-            )
-
-
-def _mark_credential_test(credential_id: int) -> None:
-    """放行后立即记录时间戳（不论后续连接成功或失败）。"""
-    _credential_test_last[credential_id] = time.monotonic()
 
 # ==================== 凭证管理 ====================
 
@@ -317,8 +294,20 @@ async def test_credential(
         raise HTTPException(status_code=404, detail="Credential not found")
 
     # R5：限流与目标 IP 校验（拒绝时写审计 action=test_denied）
+    # 限流状态走 Redis（多 worker 共享），不可用时回退进程内内存。
+    limit_seconds = settings.credential_test_rate_limit_seconds
     try:
-        _check_credential_test_rate(credential_id)
+        try:
+            await check_credential_test_allowed(credential_id, limit_seconds)
+        except CredentialTestThrottled as t:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "credential.test_rate_limited",
+                    "message": f"测试过于频繁，同一凭证每 {limit_seconds} 秒仅允许测试 1 次",
+                    "params": {"retry_after_seconds": t.retry_after_seconds},
+                },
+            )
         await _check_credential_test_target(test_ip, db)
     except HTTPException as denied:
         await audit_log(
@@ -338,8 +327,8 @@ async def test_credential(
             vendor = device.vendor
             defaults_applied = []
 
-    # 放行：立即更新限流时间戳（不论连接成功或失败）
-    _mark_credential_test(credential_id)
+    # 放行：立即占用限流窗口（不论连接成功或失败）
+    await mark_credential_test(credential_id, limit_seconds)
 
     # 解密凭证（严格模式：解密失败直接 400，不拿空密码去连设备）
     try:

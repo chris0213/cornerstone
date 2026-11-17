@@ -44,10 +44,8 @@ def get_or_generate_key() -> bytes:
     return key
 
 
-# 全局 Fernet 实例（新格式）
+# 全局 Fernet 实例（get_or_generate_key 已兼容新旧两种存储格式，归一化为同一密钥）
 _fernet = Fernet(get_or_generate_key())
-# 懒加载：旧格式 Fernet 实例（用于解密已加密的旧数据，向上兼容）
-_legacy_fernet = None
 
 
 def encrypt_password(plain_text: str) -> str:
@@ -84,26 +82,14 @@ def decrypt_password_strict(cipher_text: str) -> str:
     """
     if not cipher_text:
         return ""
+    # get_or_generate_key 已把旧「二次 base64 存储格式」与新「直存格式」归一化为同一把底层密钥，
+    # _fernet 即可解密全部存量密文；无需（也无法）用「当前密钥」构造旧密钥实例。
+    # 原 _legacy_fernet 回退分支把 AES128Key 对象误传给 urlsafe_b64decode，必抛异常→恒失败，
+    # 属永不生效的死代码（修复 #17），故删除。解密失败即密钥真不一致，直接抛错。
     try:
         return _fernet.decrypt(cipher_text.encode()).decode()
     except Exception:
-        pass
-    # 尝试旧格式密钥（向上兼容已加密的数据）
-    global _legacy_fernet
-    if _legacy_fernet is None:
-        try:
-            from cryptography.fernet import Fernet as _Fernet
-            key_bytes = _fernet._encryption_key if hasattr(_fernet, '_encryption_key') else None
-            if key_bytes:
-                _legacy_fernet = _Fernet(base64.urlsafe_b64decode(key_bytes))
-        except Exception:
-            _legacy_fernet = False
-    if _legacy_fernet:
-        try:
-            return _legacy_fernet.decrypt(cipher_text.encode()).decode()
-        except Exception:
-            pass
-    raise ValueError("凭证解密失败：密钥可能不一致，请检查 CREDENTIAL_SECRET_KEY")
+        raise ValueError("凭证解密失败：密钥可能不一致，请检查 CREDENTIAL_SECRET_KEY")
 
 
 # ==================== 通用敏感串加解密（AI api_key 等） ====================
