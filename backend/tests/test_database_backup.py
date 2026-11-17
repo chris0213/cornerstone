@@ -172,3 +172,73 @@ async def test_delete_rejects_badname_and_missing(client, backup_dir):
     h = await _login(client)
     assert (await client.delete("/api/v1/database-backups/files/notes.txt", headers=h)).status_code == 400
     assert (await client.delete("/api/v1/database-backups/files/cornerstone_nope.dump", headers=h)).status_code == 404
+
+
+# ==================== 恢复校验（隔离库）====================
+
+class _FakeVerifyProc:
+    def __init__(self, rc, out=b"", err=b""):
+        self.returncode = rc
+        self._out = out
+        self._err = err
+
+    async def communicate(self):
+        return (self._out, self._err)
+
+    def kill(self):
+        pass
+
+
+def _fake_verify_exec(*argv, **kwargs):
+    joined = " ".join(argv)
+    if "pg_restore" in joined:
+        return _FakeVerifyProc(0)
+    if "CREATE DATABASE" in joined or "DROP DATABASE" in joined:
+        return _FakeVerifyProc(0)
+    if "SELECT count(*) FROM" in joined:
+        if "audit_logs" in joined:
+            return _FakeVerifyProc(0, b"1234\n")
+        return _FakeVerifyProc(0, b"42\n")
+    return _FakeVerifyProc(0)
+
+
+@pytest.mark.asyncio
+async def test_verify_success(client, backup_dir, monkeypatch):
+    import asyncio
+    async def _factory(*argv, **kwargs):
+        return _fake_verify_exec(*argv, **kwargs)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _factory)
+    h = await _login(client)
+    r = await client.post("/api/v1/database-backups/verify",
+                          json={"filename": "cornerstone_www_20261117_033000.dump"}, headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["restored"] is True
+    counts = {c["table"]: c["count"] for c in body["checks"]}
+    assert counts["devices"] == 42 and counts["audit_logs"] == 1234
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_bad_filename(client, backup_dir):
+    h = await _login(client)
+    r = await client.post("/api/v1/database-backups/verify", json={"filename": "notes.txt"}, headers=h)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_verify_requires_super_admin(client, db_session, backup_dir):
+    from src.models import User, Role
+    from src.services.permission_service import pwd_context
+    from sqlalchemy import select
+    role = (await db_session.execute(select(Role).where(Role.name == "viewer"))).scalar_one()
+    u = User(username="viewer_v", display_name="viewer_v", email="vv@e.com",
+             hashed_password=pwd_context.hash("Passw0rd!"), role_id=role.id, is_active=True)
+    db_session.add(u)
+    await db_session.commit()
+    resp = await client.post("/api/v1/auth/token",
+                             data={"username": "viewer_v", "password": "Passw0rd!"},
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+    h = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    r = await client.post("/api/v1/database-backups/verify",
+                          json={"filename": "cornerstone_www_20261117_033000.dump"}, headers=h)
+    assert r.status_code == 403
