@@ -24,10 +24,14 @@ from src.models.audit_log import AuditLog
 from src.models.setting import Setting
 from src.services.ai_client import (
     AI_CONFIG_KEY,
+    AIConfig,
+    _call_openai_compatible,
     decrypt_configs_api_keys,
     encrypt_configs_api_keys,
 )
 from src.services.ai_outbound_guard import (
+    AIUrlBlockedError,
+    ensure_ai_url_safe,
     filter_rows_for_llm,
     mask_question,
     strip_sensitive_lines,
@@ -344,6 +348,82 @@ async def test_create_config_allows_https_public(monkeypatch):
     assert validate_ai_api_url("https://api.deepseek.com/v1") is None
     err = validate_ai_api_url("https://api.other.com/v1")
     assert err is not None and "白名单" in err
+
+
+# ==================== 4b. 请求期 DNS 重绑定防护（#16） ====================
+
+def _fake_getaddrinfo(ip: str):
+    """构造 socket.getaddrinfo 替身：无论域名解析都返回指定 IP，模拟 DNS 已翻转。"""
+    def _f(host, port, family=0, type=0, proto=0, flags=0):
+        return [(family or 2, type, proto, "", (ip, port))]
+    return _f
+
+
+def test_ensure_ai_url_safe_rejects_literal_internal():
+    """请求期：IP 字面量指向内网/回环/元数据地址一律抛错。"""
+    for bad in [
+        "https://169.254.169.254/latest",  # 云元数据
+        "https://127.0.0.1/v1",            # 回环
+        "https://10.0.0.5/v1",             # 私网
+        "http://api.example.com/v1",       # 非 https
+        "https://localhost:8443/v1",       # localhost 域名
+    ]:
+        with pytest.raises(AIUrlBlockedError):
+            ensure_ai_url_safe(bad)
+
+
+def test_ensure_ai_url_safe_passes_public():
+    """请求期：公网 https 域名/公网 IP 放行。"""
+    assert ensure_ai_url_safe("https://8.8.8.8/v1") is None
+
+
+def test_ensure_ai_url_safe_blocks_rebound_domain(monkeypatch):
+    """核心场景：域名看似合法，但请求期 DNS 已翻到 169.254.169.254 → 拦截。"""
+    monkeypatch.setattr(
+        "src.services.ai_outbound_guard.socket.getaddrinfo",
+        _fake_getaddrinfo("169.254.169.254"),
+    )
+    with pytest.raises(AIUrlBlockedError):
+        ensure_ai_url_safe("https://evil.example.com/v1")
+
+
+def test_ensure_ai_url_safe_respects_whitelist(monkeypatch):
+    """请求期强制白名单：不在白名单的公网域名也拦截。"""
+    monkeypatch.setenv("AI_API_ALLOWED_HOSTS", "api.deepseek.com")
+    with pytest.raises(AIUrlBlockedError):
+        ensure_ai_url_safe("https://api.notallowed.com/v1")
+    assert ensure_ai_url_safe("https://api.deepseek.com/v1") is None
+
+
+@pytest.mark.asyncio
+async def test_call_ai_short_circuits_on_rebinding(monkeypatch, mock_llm):
+    """LLM 调用链在真正发 HTTP 前复查：DNS 翻到内网时抛错且 httpx.post 未被调用。"""
+    monkeypatch.setattr(
+        "src.services.ai_outbound_guard.socket.getaddrinfo",
+        _fake_getaddrinfo("169.254.169.254"),
+    )
+    cfg = AIConfig(
+        provider="custom", api_key="sk-x",
+        api_base="https://api.example.com/v1", model="m",
+    )
+    with pytest.raises(AIUrlBlockedError):
+        await _call_openai_compatible("p", "s", cfg, 100, 5)
+    assert mock_llm["calls"] == []  # 被请求期防护拦在发送之前
+
+
+@pytest.mark.asyncio
+async def test_call_ai_passes_when_dns_clean(monkeypatch, mock_llm):
+    """DNS 解析到公网 IP 时正常发送（请求期防护不误伤）：httpx.post 被调用。"""
+    monkeypatch.setattr(
+        "src.services.ai_outbound_guard.socket.getaddrinfo",
+        _fake_getaddrinfo("1.1.1.1"),
+    )
+    cfg = AIConfig(
+        provider="custom", api_key="sk-x",
+        api_base="https://api.example.com/v1", model="m",
+    )
+    await _call_openai_compatible("p", "s", cfg, 100, 5)
+    assert mock_llm["calls"], "正常公网应发请求"
 
 
 # ==================== 5. question 落库脱敏 ====================

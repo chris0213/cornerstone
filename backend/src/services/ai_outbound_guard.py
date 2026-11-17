@@ -184,13 +184,17 @@ def _ip_is_blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
     )
 
 
-def validate_ai_api_url(url: str) -> str | None:
-    """校验 AI api_url。合法返回 None，否则返回错误信息。
+def _url_policy_error(url: str) -> str | None:
+    """AI api_url 安全策略核心。合法返回 None，否则返回错误信息。
+
+    配置期（validate_ai_api_url）与请求期（ensure_ai_url_safe）共用本函数，
+    保证两处口径完全一致，避免「保存时放行、发送时另一套规则」的缝隙。
 
     规则：
     - 必须是合法 URL 且 scheme 为 https
     - 主机不得为回环/私网/link-local/保留地址或 localhost 类域名
     - 环境变量 AI_API_ALLOWED_HOSTS（逗号分隔）非空时强制域名白名单
+    - 普通域名解析全部 A/AAAA 记录逐一检查，拒绝指向内网/保留地址
     """
     if not url or not url.strip():
         return "api_url 不能为空"
@@ -239,3 +243,30 @@ def validate_ai_api_url(url: str) -> str | None:
         if _ip_is_blocked(resolved):
             return f"api_url 域名解析到内网/保留地址，已拒绝: {hostname} -> {addr}"
     return None
+
+
+def validate_ai_api_url(url: str) -> str | None:
+    """配置期校验（保存/测试时）。合法返回 None，否则返回错误信息供接口提示。"""
+    return _url_policy_error(url)
+
+
+class AIUrlBlockedError(RuntimeError):
+    """请求期 api_url 安全校验失败（疑似 DNS 重绑定/指向内网/不在白名单）。"""
+
+
+def ensure_ai_url_safe(url: str) -> None:
+    """请求期防护（真正发 HTTP 之前调用）。
+
+    与配置期共用 `_url_policy_error` 同一套策略，在每次实际出站前重新解析并复查：
+    - 把「保存配置 → 真正发送」之间可能长达数小时的 DNS 重绑定 TOCTOU 窗口，
+      收窄到「本次发送前毫秒级」；
+    - 同时在请求期强制 AI_API_ALLOWED_HOSTS 白名单（配置期已校验，此处兜住存量配置
+      在保存后才被改环境变量/换 DNS 的情形）。
+
+    说明：httpx 0.25 + HTTPS 不提供「连 IP 但 TLS 仍按域名校验证书」的请求级连接锁定，
+    彻底 socket 级 pinning 需升级 httpx 或自定义 transport（风险更高，暂不引入）。
+    本函数为当前依赖下可达的最强且安全的缓解，配合白名单即达到强防护。
+    """
+    err = _url_policy_error(url)
+    if err:
+        raise AIUrlBlockedError(err)

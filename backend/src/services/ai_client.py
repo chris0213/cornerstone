@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from ..models.setting import Setting
 from ..utils.crypto import encrypt_secret, decrypt_secret
+from ..services.ai_outbound_guard import ensure_ai_url_safe
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,8 @@ async def _call_openai_compatible(
     timeout: int,
 ) -> str:
     """调用 OpenAI 兼容接口（OpenAI / DeepSeek / 通义千问 / 智谱 / 自定义）"""
+    # 请求期复查 api_url：堵 DNS 重绑定 TOCTOU（配置期已校验，发送前再解析校验一次）
+    ensure_ai_url_safe(config.api_base)
     url = f"{config.api_base}/chat/completions"
     logger.debug(f"[_call_openai_compatible] url={url} model={config.model} max_tokens={max_tokens}")
 
@@ -248,6 +251,8 @@ async def _call_anthropic(
     timeout: int,
 ) -> str:
     """调用 Anthropic Claude API"""
+    # 请求期复查 api_url：堵 DNS 重绑定 TOCTOU（配置期已校验，发送前再解析校验一次）
+    ensure_ai_url_safe(config.api_base)
     url = f"{config.api_base}/v1/messages"
     logger.debug(f"[_call_anthropic] url={url} model={config.model} max_tokens={max_tokens}")
 
