@@ -17,6 +17,7 @@ from ..schemas import BackupResponse, CredentialResponse, CredentialCreate, Cred
 from ..services.backup_collector import collect_device_config, detect_config_change, \
     calculate_hash, save_config_to_file, load_config_from_file, apply_config_to_device, \
     test_device_connection
+from ..services.backup_locks import get_device_backup_lock
 from ..utils.crypto import encrypt_password, decrypt_password_strict
 from ..utils.logger import audit_log
 from ..utils.ip_whitelist import get_client_ip_from_request
@@ -580,80 +581,89 @@ async def trigger_backup(
     task_id = str(uuid.uuid4())
     active_connections[task_id] = []
     task_tenants[task_id] = getattr(current_user, "tenant_id", None)
-    
+
+    # 设备级互斥：定时/手动/批量共用一把锁，避免并发 SSH 踢掉在线管理员会话，
+    # 也保证「查最新版本→+1→插入」串行化，version 不重复
+    device_lock = get_device_backup_lock(device_id)
+    if device_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="该设备正在执行备份（定时或手动任务进行中），请稍后再试"
+        )
+
     try:
-        # 执行采集
-        device_dict = {
-            "id": device.id,
-            "ip_address": device_ip,
-            "vendor": device.vendor,
-        }
-        
-        result = await collect_device_config(device_dict, credential_dict)
-        
-        # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
-        latest_any = await db.execute(
-            select(Backup.version).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
-        )
-        latest_any_row = latest_any.first()
-        new_version = (latest_any_row[0] if latest_any_row else 0) + 1
+        async with device_lock:
+            # 执行采集
+            device_dict = {
+                "id": device.id,
+                "ip_address": device_ip,
+                "vendor": device.vendor,
+            }
 
-        # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
-        latest_success = await db.execute(
-            select(Backup).where(Backup.device_id == device_id, Backup.status == "success").order_by(desc(Backup.version)).limit(1)
-        )
-        latest_backup = latest_success.scalar_one_or_none()
+            result = await collect_device_config(device_dict, credential_dict)
 
-        # 计算哈希和检测变更
-        content_hash = calculate_hash(result.config_content) if result.success else ""
-        has_change = False
-        change_summary = ""
+            # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
+            latest_any = await db.execute(
+                select(Backup.version).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
+            )
+            latest_any_row = latest_any.first()
+            new_version = (latest_any_row[0] if latest_any_row else 0) + 1
 
-        if result.success and latest_backup:
-            old_content = latest_backup.content
-            if latest_backup.file_path:
-                try:
-                    old_content = load_config_from_file(latest_backup.file_path)
-                except Exception:
-                    # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
-                    import logging
-                    logging.getLogger("cornerstone").warning(
-                        f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
-                    )
-            
-            if old_content:
-                change_result = detect_config_change(old_content, result.config_content)
-                has_change = change_result.has_change
-                change_summary = change_result.change_summary
-        
-        # 决定存储方式
-        content = result.config_content if result.success else ""
-        file_path = ""
-        if result.success and len(content) > 100 * 1024:
-            file_path = save_config_to_file(device_id, 0, content)
-            content = ""
-        
-        # 创建备份记录
-        backup = Backup(
-            device_id=device_id,
-            version=new_version,
-            content=content,
-            content_hash=content_hash,
-            file_path=file_path,
-            trigger="manual",
-            operator=current_user.username,
-            status="success" if result.success else "failed",
-            error_message=result.error_message,
-            has_change=has_change,
-            change_summary=change_summary,
-            tag=tag,
-            duration_ms=result.duration_ms,
-            size=len(result.config_content) if result.success else 0,
-        )
-        db.add(backup)
-        await db.commit()
-        await db.refresh(backup)
-        
+            # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
+            latest_success = await db.execute(
+                select(Backup).where(Backup.device_id == device_id, Backup.status == "success").order_by(desc(Backup.version)).limit(1)
+            )
+            latest_backup = latest_success.scalar_one_or_none()
+
+            # 计算哈希和检测变更
+            content_hash = calculate_hash(result.config_content) if result.success else ""
+            has_change = False
+            change_summary = ""
+
+            if result.success and latest_backup:
+                old_content = latest_backup.content
+                if latest_backup.file_path:
+                    try:
+                        old_content = load_config_from_file(latest_backup.file_path)
+                    except Exception:
+                        # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
+                        logger.warning(
+                            f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
+                        )
+
+                if old_content:
+                    change_result = detect_config_change(old_content, result.config_content)
+                    has_change = change_result.has_change
+                    change_summary = change_result.change_summary
+
+            # 决定存储方式
+            content = result.config_content if result.success else ""
+            file_path = ""
+            if result.success and len(content) > 100 * 1024:
+                file_path = save_config_to_file(device_id, 0, content)
+                content = ""
+
+            # 创建备份记录
+            backup = Backup(
+                device_id=device_id,
+                version=new_version,
+                content=content,
+                content_hash=content_hash,
+                file_path=file_path,
+                trigger="manual",
+                operator=current_user.username,
+                status="success" if result.success else "failed",
+                error_message=result.error_message,
+                has_change=has_change,
+                change_summary=change_summary,
+                tag=tag,
+                duration_ms=result.duration_ms,
+                size=len(result.config_content) if result.success else 0,
+            )
+            db.add(backup)
+            await db.commit()
+            await db.refresh(backup)
+
         # 发送WebSocket消息（与批量端点 done 消息结构对齐：success/failed 为计数）
         message = {
             "type": "done",
@@ -729,6 +739,21 @@ async def trigger_batch_backup(
                 logger.warning(f"批量备份：设备 {device_id} 凭证解密失败，跳过: {e}")
                 continue
             
+            # 设备级互斥：正在被其他备份（定时/手动/批量）采集的设备本轮跳过，
+            # 避免并发 SSH 踢掉在线管理员会话与版本号竞态
+            device_lock = get_device_backup_lock(device_id)
+            if device_lock.locked():
+                for conn in active_connections.get(task_id, []):
+                    await conn.send_json({
+                        "type": "result",
+                        "device_id": device_id,
+                        "device_name": device.name,
+                        "success": False,
+                        "error_message": "该设备正在执行其他备份任务，本轮跳过"
+                    })
+                logger.warning(f"批量备份：设备 {device_id} 正在执行其他备份任务，本轮跳过")
+                continue
+
             # 发送进度消息
             for conn in active_connections.get(task_id, []):
                 await conn.send_json({
@@ -737,66 +762,96 @@ async def trigger_batch_backup(
                     "device_name": device.name,
                     "status": "connecting"
                 })
-            
+
             # 执行采集
             device_dict = {
                 "id": device.id,
                 "ip_address": device_ip,
                 "vendor": device.vendor,
             }
-            
-            result = await collect_device_config(device_dict, credential_dict)
-            
-            # 创建备份记录（失败设备同样落库留痕，便于排查与历史统计）
-            latest_backup = await db.execute(
-                select(Backup).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
-            )
-            latest_backup = latest_backup.scalar_one_or_none()
-            new_version = (latest_backup.version if latest_backup else 0) + 1
 
-            if result.success:
-                content_hash = calculate_hash(result.config_content)
-                content = result.config_content
-                file_path = ""
-                if len(content) > 100 * 1024:
-                    file_path = save_config_to_file(device_id, 0, content)
-                    content = ""
+            async with device_lock:
+                result = await collect_device_config(device_dict, credential_dict)
 
-                backup = Backup(
-                    device_id=device_id,
-                    version=new_version,
-                    content=content,
-                    content_hash=content_hash,
-                    file_path=file_path,
-                    trigger="manual",
-                    operator=current_user.username,
-                    status="success",
-                    duration_ms=result.duration_ms,
-                    size=len(result.config_content),
-                    tag=tag,
+                # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
+                latest_any = await db.execute(
+                    select(Backup.version).where(Backup.device_id == device_id).order_by(desc(Backup.version)).limit(1)
                 )
-                db.add(backup)
+                latest_any_row = latest_any.first()
+                new_version = (latest_any_row[0] if latest_any_row else 0) + 1
 
-                success_count += 1
-            else:
-                backup = Backup(
-                    device_id=device_id,
-                    version=new_version,
-                    content="",
-                    content_hash="",
-                    file_path="",
-                    trigger="manual",
-                    operator=current_user.username,
-                    status="failed",
-                    error_message=result.error_message,
-                    duration_ms=result.duration_ms,
-                    size=0,
-                    tag=tag,
+                # diff 基线只取最近一次成功备份（与单台/调度路径同口径，失败基线会漏报真实变更）
+                latest_success = await db.execute(
+                    select(Backup).where(
+                        Backup.device_id == device_id, Backup.status == "success"
+                    ).order_by(desc(Backup.version)).limit(1)
                 )
-                db.add(backup)
+                latest_backup = latest_success.scalar_one_or_none()
 
-                failed_count += 1
-            
+                # 创建备份记录（失败设备同样落库留痕，便于排查与历史统计）
+                if result.success:
+                    # 计算变更（批量成功记录此前从不计算 has_change，变更告警漏报）
+                    has_change = False
+                    change_summary = ""
+                    if latest_backup:
+                        old_content = latest_backup.content
+                        if latest_backup.file_path:
+                            try:
+                                old_content = load_config_from_file(latest_backup.file_path)
+                            except Exception:
+                                # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
+                                logger.warning(
+                                    f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
+                                )
+                        if old_content:
+                            change_result = detect_config_change(old_content, result.config_content)
+                            has_change = change_result.has_change
+                            change_summary = change_result.change_summary
+
+                    content_hash = calculate_hash(result.config_content)
+                    content = result.config_content
+                    file_path = ""
+                    if len(content) > 100 * 1024:
+                        file_path = save_config_to_file(device_id, 0, content)
+                        content = ""
+
+                    backup = Backup(
+                        device_id=device_id,
+                        version=new_version,
+                        content=content,
+                        content_hash=content_hash,
+                        file_path=file_path,
+                        trigger="manual",
+                        operator=current_user.username,
+                        status="success",
+                        has_change=has_change,
+                        change_summary=change_summary,
+                        duration_ms=result.duration_ms,
+                        size=len(result.config_content),
+                        tag=tag,
+                    )
+                    db.add(backup)
+
+                    success_count += 1
+                else:
+                    backup = Backup(
+                        device_id=device_id,
+                        version=new_version,
+                        content="",
+                        content_hash="",
+                        file_path="",
+                        trigger="manual",
+                        operator=current_user.username,
+                        status="failed",
+                        error_message=result.error_message,
+                        duration_ms=result.duration_ms,
+                        size=0,
+                        tag=tag,
+                    )
+                    db.add(backup)
+
+                    failed_count += 1
+
             # 发送结果消息
             for conn in active_connections.get(task_id, []):
                 await conn.send_json({

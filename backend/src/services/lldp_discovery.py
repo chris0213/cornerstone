@@ -3,7 +3,7 @@ import asyncio
 import logging
 from typing import Optional, List, Tuple, Callable, Awaitable, Dict
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.device import Device
@@ -149,6 +149,19 @@ async def load_device_lookup(db: AsyncSession) -> "DeviceLookup":
     return lookup
 
 
+# 后缀匹配命中后，邻居名中紧跟设备名的下一字符必须是分隔符，
+# 否则 SW1 会误匹配 SW10/SW11 等更长名称，错误建边
+_NAME_SEPARATORS = set(".-/_: ")
+
+
+def _is_valid_prefix_match(neighbor_name: str, device_name: str) -> bool:
+    """邻居名以设备名开头且紧邻字符为分隔符（或正好等长——已被精确匹配兜住）。"""
+    if not neighbor_name.startswith(device_name):
+        return False
+    rest = neighbor_name[len(device_name):]
+    return (not rest) or (rest[0] in _NAME_SEPARATORS)
+
+
 class DeviceLookup:
     """
     设备内存查找表（一次预载，多次查询）
@@ -167,6 +180,7 @@ class DeviceLookup:
         if not name_or_ip:
             return None
 
+
         # 1. 精确名称匹配
         device = self.by_name.get(name_or_ip)
         if device:
@@ -177,9 +191,9 @@ class DeviceLookup:
         if device:
             return device
 
-        # 3. 后缀匹配：邻居名以设备名开头（名称过短的设备名容易误命中，要求>=3字符）
+        # 3. 后缀匹配：邻居名以设备名开头且紧邻分隔符（名称过短的设备名容易误命中，要求>=3字符）
         for _, dev in self.suffix_candidates:
-            if len(dev.name or "") >= 3 and name_or_ip.startswith(dev.name):
+            if len(dev.name or "") >= 3 and _is_valid_prefix_match(name_or_ip, dev.name):
                 logger.info(f"设备名称匹配（后缀匹配）: {name_or_ip} -> {dev.name}")
                 return dev
 
@@ -218,12 +232,12 @@ async def find_device_by_name_or_ip(db: AsyncSession, name_or_ip: str) -> Option
     if device:
         return device
 
-    # 3. 后缀匹配：邻居名以设备名开头（名称过短的设备名容易误命中，要求>=3字符）
+    # 3. 后缀匹配：邻居名以设备名开头且紧邻分隔符（名称过短的设备名容易误命中，要求>=3字符）
     result = await db.execute(select(Device))
     all_devices = result.scalars().all()
     all_devices.sort(key=lambda d: len(d.name), reverse=True)
     for dev in all_devices:
-        if len(dev.name or "") >= 3 and name_or_ip.startswith(dev.name):
+        if len(dev.name or "") >= 3 and _is_valid_prefix_match(name_or_ip, dev.name):
             logger.info(f"设备名称匹配（后缀匹配）: {name_or_ip} -> {dev.name}")
             return dev
 
@@ -311,6 +325,10 @@ async def run_full_discovery(
                 await on_progress(phase, done, total, message)
             except Exception:
                 pass
+
+    # 失效链路清理的判定基准：本轮链路刷新会更新 verified_at，
+    # 基准必须取在写库之前，否则刚刷新的链路会被误判为 stale
+    round_started_at = utc_now()
 
     # 只对"在用"设备做 SSH 采集：停用/维修/报废设备可能已断电或改接，
     # 登录只会产生失败连接（并可能触发设备侧账号锁定）
@@ -426,6 +444,33 @@ async def run_full_discovery(
         created, updated = await update_or_create_device_links(db, all_links)
         stats["links_created"] = created
         stats["links_updated"] = updated
+
+    # 失效链路清理：本轮成功采集的设备，其 lldp 链路若本轮未被刷新，
+    # 说明邻居已不再上报（改线/下线），删除避免旧链路以 confidence=100 长期误导运维。
+    # 仅限 link_type=lldp（人工创建的 manual 链路不碰）；
+    # 采集失败的设备其链路可能只是暂时看不到，同样不动。
+    ok_device_ids = {d.id for d, n, e in collected if n and not e}
+    if ok_device_ids:
+        stale_result = await db.execute(
+            select(DeviceLink).where(
+                DeviceLink.link_type == "lldp",
+                DeviceLink.source_device_id.in_(ok_device_ids),
+                or_(
+                    DeviceLink.verified_at.is_(None),
+                    DeviceLink.verified_at < round_started_at,
+                ),
+            )
+        )
+        stale_links = stale_result.scalars().all()
+        for stale in stale_links:
+            await db.delete(stale)
+        if stale_links:
+            await db.commit()
+            stats["links_removed"] = len(stale_links)
+            logger.info(
+                f"LLDP发现：清理 {len(stale_links)} 条本轮未刷新的失效 lldp 链路"
+                f"（涉及设备 {sorted(ok_device_ids)}）"
+            )
 
     logger.info(
         f"LLDP发现完成: 设备成功 {stats['devices_ok']}/{stats['devices_total']}, "

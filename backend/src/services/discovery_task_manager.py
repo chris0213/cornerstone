@@ -22,7 +22,7 @@ class DiscoveryTask:
     def __init__(self, task_id: str, task_type: str, total: int, tenant_id: Optional[int] = None):
         self.id = task_id
         self.type = task_type              # lldp / mac
-        self.status = "running"            # running / completed / failed
+        self.status = "running"            # running / completed / failed / cancelled
         self.phase = "准备中"
         self.done = 0
         self.total = total
@@ -94,6 +94,23 @@ class DiscoveryTaskManager:
                 return t
         return None
 
+    def cancel(self, task_id: str) -> tuple[bool, str]:
+        """取消运行中的发现任务（卡死设备可拖住采集几十分钟，必须可中断）。
+
+        返回 (是否已受理, 说明)。仅取消 running 状态任务；
+        已完成/已失败的任务无事可做。采集协程被 cancel 后由
+        run_discovery_task 的 CancelledError 分支落最终状态。
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            return False, "任务不存在"
+        if task.status != "running":
+            return False, f"任务已结束（{task.status}），无需取消"
+        if task.asyncio_task is None:
+            return False, "任务未持有可取消的执行体"
+        task.asyncio_task.cancel()
+        return True, "已发出取消信号"
+
 
 manager = DiscoveryTaskManager()
 
@@ -124,6 +141,15 @@ async def run_discovery_task(task: DiscoveryTask, runner: Callable[..., Awaitabl
         task.status = "completed"
         task.phase = "完成"
         task.done = task.total
+    except asyncio.CancelledError:
+        logger.info(f"发现任务 {task.id} 被取消")
+        task.status = "cancelled"
+        task.phase = "已取消"
+        task.error = "任务被手动取消"
+        task.finished_at = utc_now()
+        # 事件循环正在关闭时不要吞掉取消信号
+        if asyncio.current_task() and asyncio.current_task().cancelling():
+            raise
     except Exception as e:
         logger.error(f"发现任务 {task.id} 失败: {e}")
         task.status = "failed"

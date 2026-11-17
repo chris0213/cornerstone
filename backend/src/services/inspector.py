@@ -369,25 +369,37 @@ class InspectorService:
 
     @staticmethod
     def parse_ip_target(target: str) -> List[str]:
-        """解析IP目标，支持单个IP、CIDR网段"""
+        """解析IP目标，支持单个IP、CIDR网段。
+
+        安全上限：单个网段主机数超过 1024 直接拒绝（0.0.0.0/0 这类
+        会物化千万级协程打爆内存），API 入口已由 schema 校验兜住，
+        这里再防一层绕过 schema 的调用（如调度器读旧库任务）。
+        """
         ips = []
-        
+
         # 尝试解析为CIDR网段（如 192.0.2.0/24）
         try:
             network = IPv4Network(target, strict=False)
+            if network.num_addresses > 1024:
+                # 网段合法但超限：直接抛错中止巡检，不静默降级为单 IP（会漏扫）
+                raise ValueError(
+                    f"网段 {target} 包含 {network.num_addresses} 个地址，超过单次巡检上限 1024"
+                )
             for ip in network.hosts():
                 ips.append(str(ip))
             return ips
-        except ValueError:
+        except ValueError as e:
+            if "超过单次巡检上限" in str(e):
+                raise
             pass
-        
+
         # 默认作为单个IP处理
         try:
             ip_address(target)
             ips.append(target)
         except ValueError:
             pass
-        
+
         return ips
 
     @staticmethod
@@ -642,23 +654,40 @@ class InspectorService:
                 try:
                     # 检测指纹变更
                     change_detail = await InspectorService.detect_fingerprint_change(ip, snmp_result, db)
-                    if change_detail.has_change:
-                        change_count += 1
-                    
-                    # 检查是否是新设备
+
+                    # 检查是否是新设备（device_fingerprints 无记录）
                     fp_result = await db.execute(
                         select(DeviceFingerprint)
                         .where(DeviceFingerprint.ip_address == ip)
                     )
-                    if not fp_result.scalar_one_or_none():
-                        new_device_count += 1
-                    
+                    is_new_device = fp_result.scalar_one_or_none() is None
+
+                    # 写回设备结果：process_alerts 与巡检分类统计
+                    # 依赖 is_new_device / has_fingerprint_change / change_detail 三个字段，
+                    # 此前从不写回导致「新设备/指纹变更」告警永不触发
+                    dr_result = await db.execute(
+                        select(InspectionDeviceResult)
+                        .where(
+                            InspectionDeviceResult.result_id == inspection_result.id,
+                            InspectionDeviceResult.ip_address == ip,
+                        )
+                    )
+                    device_result = dr_result.scalar_one_or_none()
+                    if device_result:
+                        if is_new_device:
+                            device_result.is_new_device = True
+                            new_device_count += 1
+                        if change_detail.has_change:
+                            device_result.has_fingerprint_change = True
+                            device_result.change_detail = change_detail.changed_fields
+                            change_count += 1
+
                     # 更新或创建设备指纹
                     await InspectorService._update_fingerprint(db, ip, snmp_result)
                 except Exception as e:
                     # 记录错误但不影响整体流程
-                    pass
-            
+                    logger.warning(f"[巡检指纹] device={ip} 指纹比对/写回失败，跳过: {e}")
+
             # 提交指纹更新
             await db.commit()
         

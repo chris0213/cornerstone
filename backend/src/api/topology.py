@@ -690,6 +690,29 @@ async def read_discovery_task(
     return task.to_dict()
 
 
+@router.delete("/discovery-tasks/{task_id}", dependencies=[Depends(require_permission("topology:write"))])
+async def cancel_discovery_task(
+    task_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """取消运行中的发现任务。
+
+    单台卡死设备可把采集拖住几十分钟（读超时之前），必须可中断；
+    已结束（completed/failed/cancelled）的任务无事可做，幂等返回。
+    """
+    from src.services.discovery_task_manager import manager
+
+    task = manager.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="发现任务不存在")
+    if not current_user.is_superuser and task.tenant_id != current_user.tenant_id:
+        # 不暴露任务是否存在：统一 404
+        raise HTTPException(status_code=404, detail="发现任务不存在")
+
+    accepted, message = manager.cancel(task_id)
+    return {"task_id": task_id, "cancelled": accepted, "message": message}
+
+
 # 未知接入终端 API
 @router.get("/unknown-endpoints", dependencies=[Depends(require_permission("topology:read"))])
 async def read_unknown_endpoints(

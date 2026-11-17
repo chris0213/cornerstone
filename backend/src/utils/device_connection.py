@@ -117,7 +117,9 @@ def get_lldp_neighbors(conn: ConnectHandler) -> Optional[list]:
 
         for cmd in commands:
             try:
-                output = conn.send_command(cmd)
+                # read_timeout=30：netmiko 默认读超时可达 100s，LLDP 尝试命令多达 10 条，
+                # 单台卡死设备会把采集拖到几十分钟；30s 足够正常命令返回
+                output = conn.send_command(cmd, read_timeout=30)
                 logger.debug(f"LLDP host={host} cmd={cmd} output_len={len(output)}")
 
                 if output and output.strip():

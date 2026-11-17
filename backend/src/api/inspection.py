@@ -520,20 +520,31 @@ async def inspection_ws(
         await websocket.close()
         return
     
-    # 如果正在运行，重新执行（简化实现）
+    # 正在运行：不重跑巡检——重跑会重复扫描生产网络，且每轮新建一整套
+    # InspectionResult 与告警，可叠加任意次。重连只做 DB 状态轮询推送快照。
     if inspection_result.status == "running":
-        # 获取任务
-        task_result = await db.execute(select(InspectionTask).where(InspectionTask.id == inspection_result.task_id))
-        task = task_result.scalar_one_or_none()
-        
-        if task:
-            await InspectorService.run_inspection(
-                task=task,
-                trigger=inspection_result.trigger,
-                operator=inspection_result.operator,
-                db=db,
-                ws_callback=send_progress
-            )
+        import asyncio
+        while True:
+            await asyncio.sleep(3)
+            try:
+                result = await db.execute(
+                    select(InspectionResult).where(InspectionResult.id == result_id)
+                )
+                inspection_result = result.scalar_one_or_none()
+            except Exception:
+                break
+            if not inspection_result or inspection_result.status != "running":
+                break
+            scanned = (inspection_result.online_count or 0) + (inspection_result.offline_count or 0)
+            await send_progress({
+                "type": "progress",
+                "total": inspection_result.total_targets,
+                "scanned": scanned,
+                "online": inspection_result.online_count,
+                "offline": inspection_result.offline_count,
+                "percent": (scanned / inspection_result.total_targets * 100)
+                            if inspection_result.total_targets else 0,
+            })
     
     # 发送完成状态
     result = await db.execute(select(InspectionResult).where(InspectionResult.id == result_id))

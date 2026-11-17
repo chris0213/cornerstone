@@ -233,7 +233,15 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                     if not ip_address:
                         logger.warning(f"设备 {device.id} ({device.name}) 没有管理IP，跳过")
                         return device.id, None
-                    
+
+                    # 设备级互斥：与手动/批量备份共用一把锁，避免并发 SSH
+                    # 踢掉在线管理员会话；被占用时本轮跳过（不落失败记录）
+                    from ..services.backup_locks import get_device_backup_lock
+                    device_lock = get_device_backup_lock(device.id)
+                    if device_lock.locked():
+                        logger.warning(f"设备 {device.id} ({device.name}) 正在执行其他备份任务，本轮跳过")
+                        return device.id, None
+
                     # 优先使用任务级别的vendor，如果任务没有设置则使用设备级别的vendor，如果都没有则使用默认值
                     device_vendor = task.vendor or device.vendor or "huawei_vrp"
                     device_dict = {
@@ -243,7 +251,10 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                     }
                     logger.debug(f"开始采集设备 {device.id} ({device.name}), IP: {ip_address}, vendor: {device_vendor}")
                     try:
-                        return device.id, await collect_device_config(device_dict, credential_dict)
+                        # 采集阶段持设备锁，防止与手动/批量路径并发 SSH 同一设备；
+                        # 结果落库在 gather 后的结果处理循环里再次持锁完成
+                        async with device_lock:
+                            return device.id, await collect_device_config(device_dict, credential_dict)
                     except Exception as e:
                         logger.error(f"采集设备 {device.id} ({device.name}) 时发生异常: {str(e)}")
                         from ..services.backup_collector import CollectResult
@@ -264,77 +275,84 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
             succeeded_device_ids = []  # 本次备份成功的设备（用于任务级保留策略清理）
             
             for device_id, result in results:
-                # 如果result为None，说明设备没有管理IP，跳过
+                # 如果result为None，说明设备没有管理IP或设备锁被占用，跳过
                 if result is None:
                     continue
-                
-                # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
-                latest_any = await db_session.execute(
-                    select(Backup.version)
-                    .where(Backup.device_id == device_id)
-                    .order_by(Backup.version.desc())
-                    .limit(1)
-                )
-                latest_any_row = latest_any.first()
-                new_version = (latest_any_row[0] if latest_any_row else 0) + 1
 
-                # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
-                latest_success = await db_session.execute(
-                    select(Backup)
-                    .where(Backup.device_id == device_id, Backup.status == "success")
-                    .order_by(Backup.version.desc())
-                    .limit(1)
-                )
-                latest_backup = latest_success.scalar_one_or_none()
+                # 写入阶段同样持设备锁：与手动/批量路径互斥，
+                # 保证「查最新版本→+1→插入」窗口内不会有并发写产生重复 version
+                from ..services.backup_locks import get_device_backup_lock
+                async with get_device_backup_lock(device_id):
+                    # 版本号取全量最大（含失败记录，避免版本号回退碰撞）
+                    latest_any = await db_session.execute(
+                        select(Backup.version)
+                        .where(Backup.device_id == device_id)
+                        .order_by(Backup.version.desc())
+                        .limit(1)
+                    )
+                    latest_any_row = latest_any.first()
+                    new_version = (latest_any_row[0] if latest_any_row else 0) + 1
 
-                # 计算哈希
-                content_hash = calculate_hash(result.config_content) if result.success else ""
+                    # diff 基线只取最近一次成功备份：失败记录 content 为空，若被选为基线会漏报真实变更
+                    latest_success = await db_session.execute(
+                        select(Backup)
+                        .where(Backup.device_id == device_id, Backup.status == "success")
+                        .order_by(Backup.version.desc())
+                        .limit(1)
+                    )
+                    latest_backup = latest_success.scalar_one_or_none()
 
-                # 检测变更
-                has_change = False
-                change_summary = ""
-                if result.success and latest_backup:
-                    old_content = latest_backup.content
-                    if latest_backup.file_path:
-                        from ..services.backup_collector import load_config_from_file
-                        try:
-                            old_content = load_config_from_file(latest_backup.file_path)
-                        except Exception:
-                            # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
-                            logger.warning(
-                                f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
-                            )
-                    
-                    if old_content:
-                        change_result = detect_config_change(old_content, result.config_content)
-                        has_change = change_result.has_change
-                        change_summary = change_result.change_summary
-            
-                # 决定存储方式（>100KB存文件）
-                content = result.config_content if result.success else ""
-                file_path = ""
-                if result.success and len(content) > 100 * 1024:
-                    file_path = save_config_to_file(device_id, 0, content)
-                    content = ""
-                
-                # 创建备份记录
-                backup = Backup(
-                    device_id=device_id,
-                    version=new_version,
-                    content=content,
-                    content_hash=content_hash,
-                    file_path=file_path,
-                    trigger=trigger,
-                    operator="system",
-                    status="success" if result.success else "failed",
-                    error_message=result.error_message,
-                    has_change=has_change,
-                    change_summary=change_summary,
-                    duration_ms=result.duration_ms,
-                    size=len(result.config_content) if result.success else 0,
-                )
-                db_session.add(backup)
-                
+                    # 计算哈希
+                    content_hash = calculate_hash(result.config_content) if result.success else ""
+
+                    # 检测变更
+                    has_change = False
+                    change_summary = ""
+                    if result.success and latest_backup:
+                        old_content = latest_backup.content
+                        if latest_backup.file_path:
+                            from ..services.backup_collector import load_config_from_file
+                            try:
+                                old_content = load_config_from_file(latest_backup.file_path)
+                            except Exception:
+                                # 旧备份文件缺失/损坏时退化为库内 content，本次采集结果照常入库
+                                logger.warning(
+                                    f"读取旧备份文件失败 device_id={device_id} file_path={latest_backup.file_path}，使用库内内容做 diff"
+                                )
+
+                        if old_content:
+                            change_result = detect_config_change(old_content, result.config_content)
+                            has_change = change_result.has_change
+                            change_summary = change_result.change_summary
+
+                    # 决定存储方式（>100KB存文件）
+                    content = result.config_content if result.success else ""
+                    file_path = ""
+                    if result.success and len(content) > 100 * 1024:
+                        file_path = save_config_to_file(device_id, 0, content)
+                        content = ""
+
+                    # 创建备份记录
+                    backup = Backup(
+                        device_id=device_id,
+                        version=new_version,
+                        content=content,
+                        content_hash=content_hash,
+                        file_path=file_path,
+                        trigger=trigger,
+                        operator="system",
+                        status="success" if result.success else "failed",
+                        error_message=result.error_message,
+                        has_change=has_change,
+                        change_summary=change_summary,
+                        duration_ms=result.duration_ms,
+                        size=len(result.config_content) if result.success else 0,
+                    )
+                    db_session.add(backup)
+                    # 逐设备提交：锁内完成「查询→插入→提交」整段，
+                    # 手动路径在锁外看到的 max(version) 一定包含本条
+                    await db_session.commit()
+
                 if result.success:
                     success_count += 1
                     succeeded_device_ids.append(device_id)
@@ -349,8 +367,6 @@ async def _run_backup_in_tenant(task_id: int, trigger: str = "scheduled"):
                     failed_details.append(
                         f"{device_name}({device_ip or '无IP'}): {result.error_message or '未知错误'}"
                     )
-            
-            await db_session.commit()
             
             # 更新任务状态（需要重新关联 session，因为 commit 后对象可能已脱离跟踪）
             task = await db_session.get(BackupTask, task_id)

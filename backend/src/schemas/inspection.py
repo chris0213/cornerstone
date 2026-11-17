@@ -1,10 +1,37 @@
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, field_serializer, field_validator, Field
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
 # SNMP 团体字对生产网络设备具备凭据效力，响应一律脱敏为掩码；
 # 前端/后端更新时检测到掩码值即视为"未修改"，不得写回数据库。
 SNMP_COMMUNITY_MASK = "******"
+
+# ip_range 单个 CIDR 允许的最大主机数：超限拒绝（0.0.0.0/0 会物化千万级协程打爆内存）
+MAX_IP_RANGE_HOSTS = 1024
+
+
+def _validate_ip_range(value: Optional[str]) -> Optional[str]:
+    """ip_range 安全上限：逗号分隔的每段（单 IP 或 CIDR）主机数不得超过 1024。"""
+    if not value:
+        return value
+    import ipaddress
+    total = 0
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            network = ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            raise ValueError(f"无效的 IP/网段: {part}")
+        if network.num_addresses > MAX_IP_RANGE_HOSTS:
+            raise ValueError(
+                f"网段 {part} 包含 {network.num_addresses} 个地址，超过单次巡检上限 {MAX_IP_RANGE_HOSTS}"
+            )
+        total += network.num_addresses
+    if total > MAX_IP_RANGE_HOSTS:
+        raise ValueError(f"巡检目标合计 {total} 个地址，超过上限 {MAX_IP_RANGE_HOSTS}")
+    return value
 
 
 class InspectionTaskCreate(BaseModel):
@@ -13,29 +40,33 @@ class InspectionTaskCreate(BaseModel):
     scan_type: Optional[str] = "full"
     is_enabled: Optional[bool] = True
     cron_expr: Optional[str] = "0 */4 * * *"
-    
     # 扫描目标（三选一）
     target_type: Optional[str] = "all_devices"
     site_id: Optional[int] = None
     ip_range: Optional[str] = None
-    
+
     # SNMP配置
     snmp_community: Optional[str] = "public"
     snmp_version: Optional[str] = "v2c"
     snmp_timeout: Optional[int] = 3
     snmp_retries: Optional[int] = 1
-    
+
     # TCP探测配置
     tcp_ports: Optional[List[int]] = [22, 80, 443, 445, 3389]
     tcp_timeout_ms: Optional[int] = 2000
-    
-    # 并发控制
-    max_concurrent: Optional[int] = 50
-    
+
+    # 并发控制（上限 100：过大值会 fork 子进程风暴打挂生产网关）
+    max_concurrent: Optional[int] = Field(default=50, le=100, ge=1)
+
     # 告警配置
     alert_on_offline: Optional[bool] = True
     alert_on_new_device: Optional[bool] = True
     alert_on_fingerprint_change: Optional[bool] = True
+
+    @field_validator("ip_range")
+    @classmethod
+    def _ip_range_validator(cls, v):
+        return _validate_ip_range(v)
 
 
 class InspectionTaskUpdate(BaseModel):
@@ -60,13 +91,18 @@ class InspectionTaskUpdate(BaseModel):
     tcp_ports: Optional[List[int]] = None
     tcp_timeout_ms: Optional[int] = None
     
-    # 并发控制
-    max_concurrent: Optional[int] = None
-    
+    # 并发控制（上限 100：过大值会 fork 子进程风暴打挂生产网关）
+    max_concurrent: Optional[int] = Field(default=None, le=100, ge=1)
+
     # 告警配置
     alert_on_offline: Optional[bool] = None
     alert_on_new_device: Optional[bool] = None
     alert_on_fingerprint_change: Optional[bool] = None
+
+    @field_validator("ip_range")
+    @classmethod
+    def _ip_range_validator(cls, v):
+        return _validate_ip_range(v)
 
 
 class InspectionTaskResponse(BaseModel):
