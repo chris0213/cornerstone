@@ -89,6 +89,8 @@ services:
     volumes:
       - backend_backups:/opt/cornerstone/backups
       - backend_data:/app/data
+      # 异地备份同步源：宿主机 pg_dump 产物目录，只读挂进 backend 供 rclone/rsync/scp 推送
+      - ${DB_BACKUP_DIR:-/opt/cornerstone/db_backups}:/opt/cornerstone/db_backups:ro
     networks:
       - cornerstone-net
     # 默认不对宿主机暴露 8000，由 frontend 容器内部反代。

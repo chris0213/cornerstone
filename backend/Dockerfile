@@ -35,10 +35,13 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 运行时所需系统包（不含编译器）
+# rsync/rclone：异地备份同步用；openssh-client 提供 ssh/scp
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         iputils-ping \
         openssh-client \
+        rsync \
+        rclone \
         curl \
         tzdata \
     && ln -sf /usr/share/zoneinfo/$TZ /etc/localtime \

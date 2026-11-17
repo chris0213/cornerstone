@@ -169,6 +169,12 @@ async def startup_event():
     await start_log_cleanup_scheduler()
     logger.info("Log cleanup scheduler started")
 
+    # 加载异地备份同步定时任务（按配置注册/移除）
+    async with async_session() as session:
+        from .tasks.offsite_sync_scheduler import reload_offsite_sync_job
+        await reload_offsite_sync_job(session)
+    logger.info("Offsite sync scheduler loaded")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
