@@ -78,6 +78,8 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?INITIAL_ADMIN_PASSWORD must be set}
       CREDENTIAL_SECRET_KEY: ${CREDENTIAL_SECRET_KEY:-}
+      # 演示数据（user 弱口令账号 + 演示设备）：生产保持 false，本地开发可设 SEED_DEMO_DATA=true
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
       BACKUP_DIR: /opt/cornerstone/backups
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       # 可信代理：compose 内 frontend(nginx) 反代到 backend，后端需采信其 X-Forwarded-For

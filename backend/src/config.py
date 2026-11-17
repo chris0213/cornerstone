@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, model_validator
+from pydantic import Field, model_validator, field_validator
 from pathlib import Path
 from typing import Optional
 
@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     app_name: str = "Cornerstone API"
     app_version: str = "1.0.0"
     debug: bool = False
+    # 是否写入演示数据（演示 user 弱口令账号 + 6 台演示设备）。
+    # 生产环境务必保持 False：演示账号 user/user123 是公开弱口令入口，属安全负债。
+    seed_demo_data: bool = False
 
     # CORS 配置（多个来源用逗号分隔）
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
@@ -91,6 +94,14 @@ class Settings(BaseSettings):
     
     # 通知渠道配置
     notification: NotificationSettings = NotificationSettings()
+
+    @field_validator("seed_demo_data", mode="before")
+    @classmethod
+    def _coerce_empty_seed(cls, v):
+        # 容忍 .env 里写 `SEED_DEMO_DATA=`（空串）：降级为 False，避免 bool 解析崩溃阻断启动
+        if isinstance(v, str) and v.strip() == "":
+            return False
+        return v
 
     @model_validator(mode='after')
     def _validate_critical_secrets(self) -> "Settings":

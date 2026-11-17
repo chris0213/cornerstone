@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from passlib.context import CryptContext
 import sqlalchemy.orm
 from src.database import sync_engine
+from src.config import settings
 from src.models import Aggregate, AuditLog, Backup, Circuit, Device, IPAddress, Prefix, Site, User, Vlan, VlanGroup, Role, Permission, RolePermission
 from src.models.device_link import DeviceLink
 from src.models.alert import AlertRule  # 确保关联模型被加载
@@ -308,18 +309,20 @@ def init_db():
             )
             session.add(admin_user)
 
-            # 查找 engineer 角色
-            eng_role = session.query(Role).filter(Role.name == "engineer").first()
-            test_user = User(
-                username="user",
-                email="user@example.com",
-                hashed_password=pwd_context.hash("user123"),
-                display_name="测试用户",
-                role_id=eng_role.id if eng_role else None,
-                is_active=True,
-                is_superuser=False,
-            )
-            session.add(test_user)
+            # 演示 user 弱口令账号仅在显式开启 SEED_DEMO_DATA 时创建（生产默认不建）
+            if settings.seed_demo_data:
+                # 查找 engineer 角色
+                eng_role = session.query(Role).filter(Role.name == "engineer").first()
+                test_user = User(
+                    username="user",
+                    email="user@example.com",
+                    hashed_password=pwd_context.hash("user123"),
+                    display_name="测试用户",
+                    role_id=eng_role.id if eng_role else None,
+                    is_active=True,
+                    is_superuser=False,
+                )
+                session.add(test_user)
             session.flush()
             print("默认用户创建成功！")
         else:
@@ -340,8 +343,9 @@ def init_db():
                     existing_user.role_id = eng_role.id
                     print(f"已补全 user 用户 role_id = {eng_role.id}")
 
-        # 写入演示数据（空库或首次运行）
-        seed_demo_data(session)
+        # 写入演示数据（仅在显式开启 SEED_DEMO_DATA 时；生产默认跳过）
+        if settings.seed_demo_data:
+            seed_demo_data(session)
         session.commit()
 
     print("\n默认账号:")
@@ -349,7 +353,8 @@ def init_db():
         print(f"  管理员: admin / 一次性随机密码: {generated_admin_password}（请立即登录修改，不会再次显示）")
     else:
         print("  管理员: admin / 使用 INITIAL_ADMIN_PASSWORD 环境变量指定的密码")
-    print("  普通用户: user / user123（仅开发演示账号，生产环境请禁用或改密）")
+    if settings.seed_demo_data:
+        print("  普通用户: user / user123（演示账号，SEED_DEMO_DATA=true 时创建，生产请关闭）")
 
 
 if __name__ == "__main__":
