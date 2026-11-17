@@ -26,14 +26,14 @@ def get_logger() -> logging.Logger:
         return setup_logger()
     return logger
 
-async def audit_log(db_session, user_id: int, resource_type: str, resource_id: int, 
+async def audit_log(db_session, username: str, resource_type: str, resource_id: int, 
                    action: str, details: dict = None, ip_address: str | None = None):
-    """记录审计日志到数据库"""
+    """记录审计日志到数据库。username 为操作者用户名（与登录/SSO/设置类审计口径统一）。"""
     from ..models import AuditLog
     import json
     
     log_entry = AuditLog(
-        user=str(user_id),
+        user=username,
         resource=f"{resource_type}:{resource_id}",
         action=action,
         detail=json.dumps(details or {}),

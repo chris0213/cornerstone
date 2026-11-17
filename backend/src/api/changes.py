@@ -319,7 +319,7 @@ async def export_changes(
     rows = (await db.execute(stmt)).all()
 
     await audit_log(
-        db, current_user.id, "changes", 0, "export",
+        db, current_user.username, "changes", 0, "export",
         {"count": len(rows), "source": source or "all"},
         get_client_ip_from_request(request) if request else None
     )

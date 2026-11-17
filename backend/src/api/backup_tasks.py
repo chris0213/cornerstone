@@ -198,7 +198,7 @@ async def create_backup_task(
         add_task_to_scheduler(task.id, cron_expr)
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup_task", task.id, "create", {"name": name}, client_ip)
+    await audit_log(db, current_user.username, "backup_task", task.id, "create", {"name": name}, client_ip)
     
     return {c.name: getattr(task, c.name) for c in task.__table__.columns}
 
@@ -280,7 +280,7 @@ async def update_backup_task(
                 remove_task_from_scheduler(task.id)
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup_task", task_id, "update", {"name": name}, client_ip)
+    await audit_log(db, current_user.username, "backup_task", task_id, "update", {"name": name}, client_ip)
     
     return {c.name: getattr(task, c.name) for c in task.__table__.columns}
 
@@ -305,7 +305,7 @@ async def delete_backup_task(
     await db.commit()
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup_task", task_id, "delete", {}, client_ip)
+    await audit_log(db, current_user.username, "backup_task", task_id, "delete", {}, client_ip)
 
 # 启用/停用任务
 @router.patch("/{task_id}/toggle")
@@ -331,7 +331,7 @@ async def toggle_backup_task(
         remove_task_from_scheduler(task.id)
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup_task", task_id, "toggle", {"is_enabled": task.is_enabled}, client_ip)
+    await audit_log(db, current_user.username, "backup_task", task_id, "toggle", {"is_enabled": task.is_enabled}, client_ip)
     
     return {"is_enabled": task.is_enabled}
 
@@ -366,7 +366,7 @@ async def run_backup_task_now(
         asyncio.create_task(run_backup_task(task_id, "manual"))
 
         client_ip = get_client_ip_from_request(request)
-        await audit_log(db, current_user.id, "backup_task", task_id, "run_now", {}, client_ip)
+        await audit_log(db, current_user.username, "backup_task", task_id, "run_now", {}, client_ip)
     except Exception:
         # 启动失败（如审计写入异常）时释放占位，避免任务永远卡在「执行中」
         running_tasks[task_id] = False

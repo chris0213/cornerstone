@@ -153,7 +153,7 @@ async def create_category(
     await db.commit()
     await db.refresh(category)
     await audit_log(
-        db, current_user.id, "knowledge_category", category.id, "create",
+        db, current_user.username, "knowledge_category", category.id, "create",
         {"name": category.name},
         get_client_ip_from_request(request)
     )
@@ -205,7 +205,7 @@ async def update_category(
     await db.commit()
     await db.refresh(category)
     await audit_log(
-        db, current_user.id, "knowledge_category", category.id, "update",
+        db, current_user.username, "knowledge_category", category.id, "update",
         {"name": category.name, "old_name": old_name},
         get_client_ip_from_request(request)
     )
@@ -245,7 +245,7 @@ async def delete_category(
     await db.delete(category)
     await db.commit()
     await audit_log(
-        db, current_user.id, "knowledge_category", category_id, "delete",
+        db, current_user.username, "knowledge_category", category_id, "delete",
         {"name": name},
         get_client_ip_from_request(request)
     )
@@ -301,7 +301,7 @@ async def create_article(
     await db.commit()
     await db.refresh(article)
     await audit_log(
-        db, current_user.id, "knowledge", article.id, "create",
+        db, current_user.username, "knowledge", article.id, "create",
         {"title": article.title, "category": article.category},
         get_client_ip_from_request(request)
     )
@@ -354,7 +354,7 @@ async def update_article(
     await db.commit()
     await db.refresh(article)
     await audit_log(
-        db, current_user.id, "knowledge", article.id, "update",
+        db, current_user.username, "knowledge", article.id, "update",
         {"title": article.title, "fields": changed},
         get_client_ip_from_request(request)
     )
@@ -420,7 +420,7 @@ async def import_article(
     for article in articles:
         await db.refresh(article)
         await audit_log(
-            db, current_user.id, "knowledge", article.id, "import",
+            db, current_user.username, "knowledge", article.id, "import",
             {"title": article.title, "category": article.category},
             get_client_ip_from_request(request)
         )
@@ -445,7 +445,7 @@ async def delete_article(
     article.deleted_at = func.now()
     await db.commit()
     await audit_log(
-        db, current_user.id, "knowledge", article_id, "delete",
+        db, current_user.username, "knowledge", article_id, "delete",
         {"title": title},
         get_client_ip_from_request(request)
     )

@@ -103,7 +103,7 @@ async def generate_monthly_report(
         raise HTTPException(status_code=500, detail="月报生成失败，请稍后重试")
 
     await audit_log(
-        db, current_user.id, "report", 0, "generate",
+        db, current_user.username, "report", 0, "generate",
         {"year": year, "month": month, "filename": result["filename"]},
         get_client_ip_from_request(request)
     )
@@ -138,7 +138,7 @@ async def update_report_schedule(
         logger.warning(f"月报定时配置校验失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     await audit_log(
-        db, current_user.id, "report", 0, "schedule_update",
+        db, current_user.username, "report", 0, "schedule_update",
         {"enabled": config.enabled, "day": config.day, "hour": config.hour,
          "minute": config.minute, "channels": config.channels},
         get_client_ip_from_request(request)
@@ -243,7 +243,7 @@ async def delete_monthly_report(
     await db.commit()
 
     await audit_log(
-        db, current_user.id, "report", 0, "delete",
+        db, current_user.username, "report", 0, "delete",
         {"year": year, "month": month},
         get_client_ip_from_request(request)
     )

@@ -289,7 +289,7 @@ async def acknowledge_alert(
     await alert_service.acknowledge_alert(db, record_id, current_user.id)
 
     await audit_log(
-        db, current_user.id, "alert_record", record_id, "acknowledge",
+        db, current_user.username, "alert_record", record_id, "acknowledge",
         {"severity": record.severity, "message": record.message},
         get_client_ip_from_request(request)
     )
@@ -331,7 +331,7 @@ async def resolve_alert(
     await db.commit()
 
     await audit_log(
-        db, current_user.id, "alert_record", record_id, "resolve",
+        db, current_user.username, "alert_record", record_id, "resolve",
         {"note": note, "severity": record.severity, "message": record.message},
         get_client_ip_from_request(request)
     )
@@ -368,7 +368,7 @@ async def batch_acknowledge_alerts(
     skipped = len(body.record_ids) - acknowledged
 
     await audit_log(
-        db, current_user.id, "alert_record", 0, "batch_acknowledge",
+        db, current_user.username, "alert_record", 0, "batch_acknowledge",
         {"record_ids": body.record_ids, "acknowledged": acknowledged, "skipped": skipped},
         get_client_ip_from_request(request)
     )
@@ -403,7 +403,7 @@ async def mute_alert_rule(
     await db.commit()
 
     await audit_log(
-        db, current_user.id, "alert_rule", rule_id, "mute",
+        db, current_user.username, "alert_rule", rule_id, "mute",
         {"hours": body.hours, "name": rule.name},
         get_client_ip_from_request(request)
     )
@@ -432,7 +432,7 @@ async def unmute_alert_rule(
     await db.commit()
 
     await audit_log(
-        db, current_user.id, "alert_rule", rule_id, "unmute",
+        db, current_user.username, "alert_rule", rule_id, "unmute",
         {"name": rule.name},
         get_client_ip_from_request(request)
     )

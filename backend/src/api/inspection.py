@@ -85,7 +85,7 @@ async def create_inspection_task(
     await db.refresh(new_task)
     await _sync_scheduler(add_inspection_task(new_task.id, db))
     await audit_log(
-        db, current_user.id, "inspection_task", new_task.id, "create",
+        db, current_user.username, "inspection_task", new_task.id, "create",
         {"name": new_task.name, "scan_type": new_task.scan_type},
         get_client_ip_from_request(request)
     )
@@ -117,7 +117,7 @@ async def update_inspection_task(
     await db.refresh(existing)
     await _sync_scheduler(refresh_scheduled_task(task_id, db))
     await audit_log(
-        db, current_user.id, "inspection_task", task_id, "update",
+        db, current_user.username, "inspection_task", task_id, "update",
         {"name": existing.name, "fields": list(update_data.keys())},
         get_client_ip_from_request(request)
     )
@@ -142,7 +142,7 @@ async def delete_inspection_task(
     await db.commit()
     await _sync_scheduler(remove_inspection_task(task_id))
     await audit_log(
-        db, current_user.id, "inspection_task", task_id, "delete",
+        db, current_user.username, "inspection_task", task_id, "delete",
         {"name": task_name},
         get_client_ip_from_request(request)
     )
@@ -170,7 +170,7 @@ async def toggle_inspection_task(
     else:
         await _sync_scheduler(remove_inspection_task(task_id))
     await audit_log(
-        db, current_user.id, "inspection_task", task_id, "toggle",
+        db, current_user.username, "inspection_task", task_id, "toggle",
         {"name": task.name, "is_enabled": task.is_enabled},
         get_client_ip_from_request(request)
     )
@@ -220,7 +220,7 @@ async def run_inspection(
         await db.commit()
 
         await audit_log(
-            db, current_user.id, "inspection_task", task_id, "run",
+            db, current_user.username, "inspection_task", task_id, "run",
             {"name": task.name, "scan_type": scan_type or original_scan_type,
              "result_id": inspection_result.id, "status": inspection_result.status},
             get_client_ip_from_request(request)

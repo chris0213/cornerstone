@@ -186,7 +186,7 @@ async def create_credential(
     new_credential = result.scalar_one()
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "credential", new_credential.id, "create", {"name": credential.name}, client_ip)
+    await audit_log(db, current_user.username, "credential", new_credential.id, "create", {"name": credential.name}, client_ip)
     
     # 返回时隐藏密码
     cred_dict = {c.name: getattr(new_credential, c.name) for c in new_credential.__table__.columns}
@@ -231,7 +231,7 @@ async def update_credential(
     await db.refresh(existing)
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "credential", credential_id, "update", {"name": credential.name}, client_ip)
+    await audit_log(db, current_user.username, "credential", credential_id, "update", {"name": credential.name}, client_ip)
     
     # 返回时隐藏密码
     cred_dict = {c.name: getattr(existing, c.name) for c in existing.__table__.columns}
@@ -276,7 +276,7 @@ async def delete_credential(
     await db.commit()
 
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "credential", credential_id, "delete", {}, client_ip)
+    await audit_log(db, current_user.username, "credential", credential_id, "delete", {}, client_ip)
 
 # 测试凭证连通性
 @router.post("/credentials/{credential_id}/test")
@@ -311,7 +311,7 @@ async def test_credential(
         await _check_credential_test_target(test_ip, db)
     except HTTPException as denied:
         await audit_log(
-            db, current_user.id, "credential", credential_id, "test_denied",
+            db, current_user.username, "credential", credential_id, "test_denied",
             {"test_ip": test_ip, "reason": denied.detail.get("code") if isinstance(denied.detail, dict) else str(denied.detail)},
             get_client_ip_from_request(request),
         )
@@ -347,7 +347,7 @@ async def test_credential(
 
     # R7：测试连接写审计（记录目标 IP 与结果，不记录任何凭证内容）
     await audit_log(
-        db, current_user.id, "credential", credential_id, "test",
+        db, current_user.username, "credential", credential_id, "test",
         {"test_ip": test_ip, "success": result.success, "error": result.error_message},
         get_client_ip_from_request(request),
     )
@@ -494,7 +494,7 @@ async def update_backup_tag(
     await db.refresh(backup)
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup", backup_id, "update", {"tag": tag}, client_ip)
+    await audit_log(db, current_user.username, "backup", backup_id, "update", {"tag": tag}, client_ip)
     
     return backup
 
@@ -524,7 +524,7 @@ async def delete_backup(
     await db.commit()
     
     client_ip = get_client_ip_from_request(request)
-    await audit_log(db, current_user.id, "backup", backup_id, "delete", {}, client_ip)
+    await audit_log(db, current_user.username, "backup", backup_id, "delete", {}, client_ip)
 
 # 手动触发单台设备备份
 @router.post("/trigger")
@@ -669,7 +669,7 @@ async def trigger_backup(
             await conn.send_json(message)
         
         client_ip = get_client_ip_from_request(request)
-        await audit_log(db, current_user.id, "backup", backup.id, "create", {"device_id": device_id}, client_ip)
+        await audit_log(db, current_user.username, "backup", backup.id, "create", {"device_id": device_id}, client_ip)
         
         return {"task_id": task_id, "success": result.success, "message": result.error_message}
     
@@ -984,7 +984,7 @@ async def restore_backup(
     # 审计：成功与失败都留痕（还原是对生产设备的高危操作，失败尝试同样需要追溯）
     client_ip = get_client_ip_from_request(request)
     await audit_log(
-        db, current_user.id, "backup", backup_id,
+        db, current_user.username, "backup", backup_id,
         "restore_success" if result.success else "restore_failed",
         {"device_id": backup.device_id, "error": None if result.success else result.error_message},
         client_ip
