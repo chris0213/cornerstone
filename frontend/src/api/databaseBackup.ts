@@ -90,3 +90,26 @@ export const updateBackupConfig = async (
   const { data } = await api.put('/database-backups/config', payload)
   return data
 }
+
+// ==================== 运行台账 ====================
+
+export interface BackupRun {
+  id: number
+  created_at: string | null
+  trigger: 'auto' | 'manual'
+  status: 'success' | 'failed'
+  operator?: string | null
+  filename?: string | null
+  size_bytes?: number | null
+  duration_ms?: number | null
+  error?: string | null
+  retention_deleted?: number | null
+  verify_status?: 'passed' | 'failed' | 'error' | 'skipped' | null
+  verify_error?: string | null
+  verify_checks?: { table: string; count: number | null }[] | null
+}
+
+export const listBackupRuns = async (limit = 50): Promise<BackupRun[]> => {
+  const { data } = await api.get('/database-backups/runs', { params: { limit } })
+  return data.runs
+}

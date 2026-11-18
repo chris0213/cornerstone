@@ -26,6 +26,7 @@ from .metric_sample import MetricSample
 from .report import MonthlyReport
 from .ai_chat_log import AIChatLog
 from .knowledge import KnowledgeArticle, KnowledgeCategory
+from .db_backup_run import DbBackupRun
 
 __all__ = [
     'Tenant',
@@ -40,5 +41,6 @@ __all__ = [
     'MonthlyReport',
     'AIChatLog',
     'KnowledgeArticle',
-    'KnowledgeCategory'
+    'KnowledgeCategory',
+    'DbBackupRun'
 ]

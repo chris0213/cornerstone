@@ -405,36 +405,48 @@ def _patch_backup_job(monkeypatch, verify_result):
         return "/tmp/x.dump"
 
     alerts: list[tuple[str, str]] = []
+    runs: list[dict] = []
 
     async def _capture_alert(title, summary):
         alerts.append((title, summary))
+
+    async def _capture_record(db, **fields):
+        runs.append(fields)
 
     monkeypatch.setattr(store, "load_stored_config", _fake_load)
     monkeypatch.setattr(dbsvc, "run_pg_dump", _fake_dump)
     monkeypatch.setattr(dbsvc, "apply_retention", lambda d, k: {"deleted": []})
     monkeypatch.setattr(dbsvc, "verify_dump", _fake_verify)
     monkeypatch.setattr(dbsvc, "_safe_resolve", _fake_resolve)
+    monkeypatch.setattr(dbsvc, "record_run", _capture_record)
     monkeypatch.setattr(sched, "_send_alert", _capture_alert)
-    return sched, alerts
+    return sched, alerts, runs
 
 
 @pytest.mark.asyncio
 async def test_db_backup_job_auto_verify_failure_alerts(monkeypatch):
-    sched, alerts = _patch_backup_job(
+    sched, alerts, runs = _patch_backup_job(
         monkeypatch, {"ok": False, "restored": True, "checks": [], "error": "表行数异常"})
     await sched._db_backup_job()
     assert alerts, "校验未通过应触发告警"
     assert "校验未通过" in alerts[0][0]
     assert "表行数异常" in alerts[0][1]
+    # 台账：备份成功 + 校验未通过
+    assert len(runs) == 1
+    assert runs[0]["trigger"] == "auto" and runs[0]["status"] == "success"
+    assert runs[0]["verify_status"] == "failed" and runs[0]["verify_error"] == "表行数异常"
 
 
 @pytest.mark.asyncio
 async def test_db_backup_job_auto_verify_success_no_alert(monkeypatch):
-    sched, alerts = _patch_backup_job(
+    sched, alerts, runs = _patch_backup_job(
         monkeypatch, {"ok": True, "restored": True,
                       "checks": [{"table": "devices", "count": 4}], "error": None})
     await sched._db_backup_job()
     assert alerts == []
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success" and runs[0]["verify_status"] == "passed"
+    assert runs[0]["verify_checks"] == [{"table": "devices", "count": 4}]
 
 
 @pytest.mark.asyncio
@@ -450,13 +462,81 @@ async def test_db_backup_job_backup_failure_alerts(monkeypatch):
         raise RuntimeError("pg_dump 连接失败")
 
     alerts = []
+    runs = []
 
     async def _capture_alert(title, summary):
         alerts.append((title, summary))
 
+    async def _capture_record(db, **fields):
+        runs.append(fields)
+
     monkeypatch.setattr(store, "load_stored_config", _fake_load)
     monkeypatch.setattr(dbsvc, "run_pg_dump", _boom)
+    monkeypatch.setattr(dbsvc, "record_run", _capture_record)
     monkeypatch.setattr(sched, "_send_alert", _capture_alert)
 
     await sched._db_backup_job()
     assert alerts and "数据库备份失败" in alerts[0][0]
+    # 备份失败也要落一行台账
+    assert len(runs) == 1 and runs[0]["status"] == "failed" and "pg_dump 连接失败" in runs[0]["error"]
+
+
+# ==================== F：运行台账读写 ====================
+
+@pytest.mark.asyncio
+async def test_record_run_persists_and_reads_back(db_session):
+    from src.services.db_backup_service import record_run
+    from src.models.db_backup_run import DbBackupRun
+    from sqlalchemy import select
+    await record_run(db_session, trigger="auto", status="success", operator="system",
+                     filename="cornerstone_x__auto.dump", size_bytes=123, duration_ms=45,
+                     retention_deleted=2, verify_status="passed",
+                     verify_checks=[{"table": "devices", "count": 4}])
+    rows = (await db_session.execute(select(DbBackupRun))).scalars().all()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.verify_checks == [{"table": "devices", "count": 4}]
+    assert r.size_bytes == 123 and r.verify_status == "passed" and r.retention_deleted == 2
+    assert r.created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_list_runs_empty(client, backup_dir):
+    h = await _login(client)
+    r = await client.get("/api/v1/database-backups/runs", headers=h)
+    assert r.status_code == 200
+    assert r.json()["runs"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_backup_records_run(client, backup_dir, monkeypatch):
+    import asyncio
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec_factory(rc=0))
+    h = await _login(client)
+    r = await client.post("/api/v1/database-backups/create", headers=h)
+    assert r.status_code == 200, r.text
+    name = r.json()["name"]
+    lst = (await client.get("/api/v1/database-backups/runs", headers=h)).json()["runs"]
+    assert len(lst) >= 1
+    top = lst[0]
+    assert top["trigger"] == "manual" and top["status"] == "success"
+    assert top["filename"] == name and top["verify_status"] == "skipped"
+    assert top["operator"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_list_runs_requires_super_admin(client, db_session, backup_dir):
+    from src.models import User, Role
+    from src.services.permission_service import pwd_context
+    from sqlalchemy import select
+    role = (await db_session.execute(select(Role).where(Role.name == "viewer"))).scalar_one()
+    u = User(username="viewer_runs", display_name="viewer_runs", email="ru@e.com",
+             hashed_password=pwd_context.hash("Passw0rd!"), role_id=role.id, is_active=True)
+    db_session.add(u)
+    await db_session.commit()
+    resp = await client.post("/api/v1/auth/token",
+                             data={"username": "viewer_runs", "password": "Passw0rd!"},
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+    h = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    r = await client.get("/api/v1/database-backups/runs", headers=h)
+    assert r.status_code == 403

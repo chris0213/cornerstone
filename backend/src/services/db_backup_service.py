@@ -261,3 +261,23 @@ async def verify_dump(path: str) -> dict:
                                 f"DROP DATABASE IF EXISTS {VERIFY_DB_NAME} WITH (FORCE);"], env, 60)
             except Exception as e:
                 logger.warning(f"[恢复校验] 清理隔离库失败（请手动 DROP {VERIFY_DB_NAME}）：{e}")
+
+
+async def record_run(db, *, trigger: str, status: str, operator: str | None = None,
+                     filename: str | None = None, size_bytes: int | None = None,
+                     duration_ms: int | None = None, error: str | None = None,
+                     retention_deleted: int | None = None, verify_status: str | None = None,
+                     verify_error: str | None = None, verify_checks: list | None = None) -> None:
+    """写一行数据库备份运行台账（系统级，不挂租户）。失败不抛出，仅记日志，避免影响主流程。"""
+    from ..models.db_backup_run import DbBackupRun
+    try:
+        db.add(DbBackupRun(
+            trigger=trigger, status=status, operator=operator, filename=filename,
+            size_bytes=size_bytes, duration_ms=duration_ms, error=error,
+            retention_deleted=retention_deleted, verify_status=verify_status,
+            verify_error=verify_error, verify_checks=verify_checks,
+        ))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[数据库备份] 写入运行台账失败（不影响备份主流程）: {e}")

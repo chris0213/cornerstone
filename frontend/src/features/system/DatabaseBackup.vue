@@ -5,9 +5,9 @@ import { Refresh } from '@element-plus/icons-vue'
 import {
   listDatabaseBackups, downloadDatabaseBackup,
   createDatabaseBackup, deleteDatabaseBackup, verifyDatabaseBackup,
-  getBackupConfig, updateBackupConfig,
+  getBackupConfig, updateBackupConfig, listBackupRuns,
 } from '../../api/databaseBackup'
-import type { DatabaseBackupFile, VerifyResult } from '../../api/databaseBackup'
+import type { DatabaseBackupFile, VerifyResult, BackupRun } from '../../api/databaseBackup'
 
 const loading = ref(false)
 const creating = ref(false)
@@ -27,6 +27,10 @@ const cfgForm = reactive({
   keep_last: 7,
   auto_verify: false,
 })
+
+// 最近备份运行台账
+const runs = ref<BackupRun[]>([])
+const runsLoading = ref(false)
 
 // 恢复校验
 const verifyingName = ref('')
@@ -56,6 +60,7 @@ const create = async () => {
     const r = await createDatabaseBackup()
     ElMessage.success(`已生成备份：${r.name}`)
     await load()
+    await loadRuns()
   } catch (e: any) {
     ElMessage.error('备份失败：' + (e.response?.data?.detail || e?.message || '未知错误'))
   } finally {
@@ -157,7 +162,24 @@ const saveConfig = async () => {
   }
 }
 
-onMounted(() => { load(); loadConfig() })
+const loadRuns = async () => {
+  runsLoading.value = true
+  try {
+    runs.value = await listBackupRuns(50)
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '加载备份运行记录失败')
+  } finally {
+    runsLoading.value = false
+  }
+}
+
+const fmtRunTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—')
+const verifyLabel = (s?: string | null) =>
+  ({ passed: '通过', failed: '未通过', error: '异常', skipped: '未校验' } as Record<string, string>)[s || ''] || '—'
+const verifyTagType = (s?: string | null) =>
+  ({ passed: 'success', failed: 'danger', error: 'warning', skipped: 'info' } as Record<string, string>)[s || ''] || 'info'
+
+onMounted(() => { load(); loadConfig(); loadRuns() })
 </script>
 
 <template>
@@ -279,6 +301,58 @@ onMounted(() => { load(); loadConfig() })
         </template>
       </el-dialog>
     </div>
+
+    <div class="card runs-card" v-loading="runsLoading">
+      <div class="head">
+        <div>
+          <div class="title">最近备份运行</div>
+          <p class="hint">每次备份（自动/手动）与自动校验的运行台账，便于回溯对账。</p>
+        </div>
+        <div class="head-actions">
+          <el-button :icon="Refresh" @click="loadRuns">刷新</el-button>
+        </div>
+      </div>
+      <el-table :data="runs" style="width: 100%">
+        <el-table-column label="时间" width="180">
+          <template #default="{ row }">{{ fmtRunTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="触发" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.trigger === 'auto' ? 'info' : 'success'">
+              {{ row.trigger === 'auto' ? '自动' : '手动' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="备份" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.status === 'success' ? 'success' : 'danger'">
+              {{ row.status === 'success' ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="校验" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="verifyTagType(row.verify_status)">{{ verifyLabel(row.verify_status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="filename" label="文件" min-width="260" show-overflow-tooltip />
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">{{ row.size_bytes != null ? (row.size_bytes / 1048576).toFixed(1) + ' MB' : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="耗时" width="90">
+          <template #default="{ row }">{{ row.duration_ms != null ? Math.round(row.duration_ms / 1000) + 's' : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="操作人" width="100">
+          <template #default="{ row }">{{ row.operator || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="错误/原因" min-width="180">
+          <template #default="{ row }">
+            <span class="verify-err">{{ row.error || row.verify_error || '' }}</span>
+          </template>
+        </el-table-column>
+        <template #empty>暂无备份运行记录</template>
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -297,6 +371,7 @@ onMounted(() => { load(); loadConfig() })
 .hint { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
 .hint code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; }
 .cfg-card { margin-bottom: 16px; }
+.runs-card { margin-top: 16px; }
 .cfg-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin-top: 8px; }
 .cfg-field { display: flex; flex-direction: column; min-width: 160px; }
 .cfg-field label { font-size: 13px; color: var(--text-primary); margin-bottom: 6px; }

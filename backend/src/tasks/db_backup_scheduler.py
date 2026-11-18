@@ -38,12 +38,12 @@ async def _send_alert(title: str, summary: str) -> None:
 
 
 async def _db_backup_job():
-    """定时入口：备份 → 清理 → （可选）自动校验 → 失败告警。"""
+    """定时入口：备份 → 清理 → （可选）自动校验 → 失败告警；全程结果写入 db_backup_runs 台账。"""
     global _last_verify
     from ..database import async_session
     from ..services.db_backup_store import load_stored_config, get_effective_config
     from ..services.db_backup_service import (
-        run_pg_dump, apply_retention, verify_dump, _safe_resolve, TRIGGER_AUTO,
+        run_pg_dump, apply_retention, verify_dump, _safe_resolve, record_run, TRIGGER_AUTO,
     )
 
     async with async_session() as db:
@@ -53,15 +53,26 @@ async def _db_backup_job():
         logger.info("[数据库备份] 定时任务触发但未启用，跳过")
         return
 
+    t0 = time.monotonic()
+    run = {"trigger": TRIGGER_AUTO, "operator": "system"}
+
     # 1) 备份 + 保留清理
     try:
         res = await run_pg_dump(TRIGGER_AUTO)
         cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
+        run.update(status="success", filename=res["name"], size_bytes=res["size_bytes"],
+                   duration_ms=int((time.monotonic() - t0) * 1000),
+                   retention_deleted=len(cleanup["deleted"]))
         logger.info(
             f"[数据库备份] 定时备份完成 {res['name']}（{res['size_bytes']} 字节）；"
             f"清理过期 auto {len(cleanup['deleted'])} 个"
         )
     except Exception as e:
+        run.update(status="failed", error=str(e)[:500],
+                   duration_ms=int((time.monotonic() - t0) * 1000), verify_status="skipped")
+        async with async_session() as db:
+            with system_scope():
+                await record_run(db, **run)
         logger.error(f"[数据库备份] 定时备份失败: {e}")
         await _send_alert("数据库备份失败", f"定时 pg_dump 失败：{e}")
         return
@@ -73,6 +84,9 @@ async def _db_backup_job():
             vr = await verify_dump(path)
             _last_verify = {"name": res["name"], "ok": bool(vr["ok"]),
                             "at": time.time(), "error": vr.get("error")}
+            run["verify_status"] = "passed" if vr["ok"] else "failed"
+            run["verify_error"] = vr.get("error")
+            run["verify_checks"] = vr.get("checks")
             if not vr["ok"]:
                 reason = vr.get("error") or "校验未通过（隔离库恢复或关键表行数异常）"
                 logger.warning(f"[数据库备份] 自动校验未通过 {res['name']}: {reason}")
@@ -81,8 +95,17 @@ async def _db_backup_job():
                 logger.info(f"[数据库备份] 自动校验通过 {res['name']}")
         except Exception as e:
             _last_verify = {"name": res["name"], "ok": False, "at": time.time(), "error": str(e)}
+            run["verify_status"] = "error"
+            run["verify_error"] = str(e)[:500]
             logger.error(f"[数据库备份] 自动校验异常 {res['name']}: {e}")
             await _send_alert("数据库备份校验异常", f"{res['name']}：{e}")
+    else:
+        run["verify_status"] = "skipped"
+
+    # 3) 写运行台账
+    async with async_session() as db:
+        with system_scope():
+            await record_run(db, **run)
 
 
 def _parse_time(schedule_time: str) -> tuple[int, int]:

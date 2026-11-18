@@ -11,21 +11,23 @@
 import os
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings as app_config
 from ..database import get_db
 from ..models.audit_log import AuditLog
+from ..models.db_backup_run import DbBackupRun
 from ..api.dependencies import require_super_admin
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.logger import get_logger
 from ..services import db_backup_service as dbsvc
 from ..services.db_backup_service import (
     _safe_resolve, _dump_lock, _verify_lock,
-    run_pg_dump, list_dump_files, apply_retention, verify_dump, TRIGGER_MANUAL,
+    run_pg_dump, list_dump_files, apply_retention, verify_dump, record_run, TRIGGER_MANUAL,
 )
 from ..services.db_backup_store import (
     load_stored_config, save_stored_config, validate_config, get_effective_config, DEFAULTS,
@@ -100,24 +102,68 @@ async def create_backup(
         raise HTTPException(status_code=409, detail="已有备份正在进行，请稍后再试")
 
     _create_last_ts = time.time()
+    t0 = time.monotonic()
     try:
         res = await run_pg_dump(TRIGGER_MANUAL)
     except TimeoutError:
+        await record_run(db, trigger=TRIGGER_MANUAL, status="failed", operator=current_user.username,
+                         error=f"备份超时（>{dbsvc._DUMP_TIMEOUT}s）",
+                         duration_ms=int((time.monotonic() - t0) * 1000), verify_status="skipped")
         await _audit(db, request, current_user, "database_backup_create", "立即备份失败：超时")
         raise HTTPException(status_code=504, detail="备份超时")
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except (RuntimeError, ValueError) as e:
+        await record_run(db, trigger=TRIGGER_MANUAL, status="failed", operator=current_user.username,
+                         error=str(e)[:500], duration_ms=int((time.monotonic() - t0) * 1000),
+                         verify_status="skipped")
         await _audit(db, request, current_user, "database_backup_create", f"立即备份失败：{e}")
         raise HTTPException(status_code=500, detail=f"备份失败：{e}")
 
     cfg = get_effective_config(await load_stored_config(db))
     cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
+    await record_run(db, trigger=TRIGGER_MANUAL, status="success", operator=current_user.username,
+                     filename=res["name"], size_bytes=res["size_bytes"],
+                     duration_ms=int((time.monotonic() - t0) * 1000),
+                     retention_deleted=len(cleanup["deleted"]), verify_status="skipped")
     await _audit(db, request, current_user, "database_backup_create",
                  f"立即备份成功：{res['name']}（{res['size_bytes']} 字节）；"
                  f"自动清理过期 {len(cleanup['deleted'])} 个")
     return {"ok": True, "name": res["name"], "size_bytes": res["size_bytes"],
             "retention_deleted": cleanup["deleted"]}
+
+
+@router.get("/runs")
+async def list_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """数据库备份运行台账：最近 N 次备份/校验记录，按时间倒序（仅 super_admin）。"""
+    result = await db.execute(
+        select(DbBackupRun).order_by(DbBackupRun.created_at.desc(), DbBackupRun.id.desc()).limit(limit)
+    )
+    rows = result.scalars().all()
+    return {
+        "runs": [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "trigger": r.trigger,
+                "status": r.status,
+                "operator": r.operator,
+                "filename": r.filename,
+                "size_bytes": r.size_bytes,
+                "duration_ms": r.duration_ms,
+                "error": r.error,
+                "retention_deleted": r.retention_deleted,
+                "verify_status": r.verify_status,
+                "verify_error": r.verify_error,
+                "verify_checks": r.verify_checks,
+            }
+            for r in rows
+        ]
+    }
 
 
 @router.delete("/files/{filename}")
