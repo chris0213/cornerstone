@@ -5,6 +5,7 @@ import time
 import pytest
 
 import src.api.database_backup as dbmod
+import src.services.db_backup_service as dbsvc
 
 
 async def _login(client, username="admin", password="admin123"):
@@ -27,7 +28,7 @@ def backup_dir(tmp_path, monkeypatch):
     good = tmp_path / "cornerstone_www_20261117_033000.dump"
     good.write_bytes(b"DUMPDATA123")
     (tmp_path / "notes.txt").write_text("ignore me")
-    monkeypatch.setattr(dbmod, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
     return str(tmp_path)
 
 
@@ -65,7 +66,7 @@ async def test_download_rejects_traversal_and_badname(client, backup_dir):
 
 @pytest.mark.asyncio
 async def test_list_missing_dir(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(dbmod, "BACKUP_DIR", str(tmp_path / "nope"))
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path / "nope"))
     h = await _login(client)
     r = await client.get("/api/v1/database-backups/files", headers=h)
     assert r.status_code == 200
@@ -246,3 +247,136 @@ async def test_verify_requires_super_admin(client, db_session, backup_dir):
     r = await client.post("/api/v1/database-backups/verify",
                           json={"filename": "cornerstone_www_20261117_033000.dump"}, headers=h)
     assert r.status_code == 403
+
+
+# ==================== D：调度配置 + 保留策略 ====================
+
+@pytest.mark.asyncio
+async def test_get_config_defaults(client, backup_dir):
+    h = await _login(client)
+    r = await client.get("/api/v1/database-backups/config", headers=h)
+    assert r.status_code == 200
+    b = r.json()
+    assert b["enabled"] is False
+    assert b["schedule_time"] == "03:30"
+    assert b["retention_days"] == 30
+    assert b["keep_last"] == 7
+
+
+@pytest.mark.asyncio
+async def test_update_config_valid_and_persist(client, backup_dir):
+    h = await _login(client)
+    r = await client.put("/api/v1/database-backups/config",
+                         json={"enabled": True, "schedule_time": "02:15",
+                               "retention_days": 14, "keep_last": 5}, headers=h)
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["enabled"] is True and b["schedule_time"] == "02:15"
+    assert b["retention_days"] == 14 and b["keep_last"] == 5
+    g = (await client.get("/api/v1/database-backups/config", headers=h)).json()
+    assert g["retention_days"] == 14 and g["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_config_invalid_time_422(client, backup_dir):
+    h = await _login(client)
+    r = await client.put("/api/v1/database-backups/config",
+                         json={"enabled": True, "schedule_time": "25:00"}, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_config_negative_retention_422(client, backup_dir):
+    h = await _login(client)
+    r = await client.put("/api/v1/database-backups/config",
+                         json={"enabled": False, "schedule_time": "03:30",
+                               "retention_days": -1}, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_config_requires_super_admin(client, db_session, backup_dir):
+    from src.models import User, Role
+    from src.services.permission_service import pwd_context
+    from sqlalchemy import select
+    role = (await db_session.execute(select(Role).where(Role.name == "viewer"))).scalar_one()
+    u = User(username="viewer_cfg", display_name="viewer_cfg", email="vc@e.com",
+             hashed_password=pwd_context.hash("Passw0rd!"), role_id=role.id, is_active=True)
+    db_session.add(u)
+    await db_session.commit()
+    resp = await client.post("/api/v1/auth/token",
+                             data={"username": "viewer_cfg", "password": "Passw0rd!"},
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+    h = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    r = await client.put("/api/v1/database-backups/config",
+                         json={"enabled": True, "schedule_time": "02:15"}, headers=h)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_backup_marks_manual(client, backup_dir, monkeypatch):
+    import asyncio
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec_factory(rc=0))
+    h = await _login(client)
+    r = await client.post("/api/v1/database-backups/create", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"].endswith("__manual.dump")
+
+
+def test_dump_trigger_marks_auto_vs_manual():
+    assert dbsvc.dump_trigger("cornerstone_www_20261118_033000__auto.dump") == "auto"
+    assert dbsvc.dump_trigger("cornerstone_www_20261118_033000__manual.dump") == "manual"
+    # 历史无标记 → 保守当作 manual（受保护，永不自动删）
+    assert dbsvc.dump_trigger("cornerstone_www_20261117_033000.dump") == "manual"
+
+
+def test_apply_retention_only_touches_auto(tmp_path, monkeypatch):
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
+    now = time.time()
+
+    def mk(name, age_days):
+        p = tmp_path / name
+        p.write_bytes(b"x")
+        t = now - age_days * 86400
+        os.utime(p, (t, t))
+        return p
+
+    a1 = mk("cornerstone_h_a1__auto.dump", 1)     # 最近 auto
+    a2 = mk("cornerstone_h_a2__auto.dump", 40)    # 超期 auto
+    a3 = mk("cornerstone_h_a3__auto.dump", 45)    # 更超期 auto
+    m1 = mk("cornerstone_h_m1__manual.dump", 90)  # 很旧 manual
+    legacy = mk("cornerstone_h_legacy.dump", 90)  # 很旧、无标记（视为 manual）
+
+    # 保留 30 天 + 至少最近 1 个 auto：keep_last=1 保护 a1；a2/a3 超 30 天删除；manual/legacy 不删
+    res = dbsvc.apply_retention(retention_days=30, keep_last=1)
+    assert set(res["deleted"]) == {"cornerstone_h_a2__auto.dump", "cornerstone_h_a3__auto.dump"}
+    assert a1.exists()
+    assert m1.exists()
+    assert legacy.exists()
+    assert res["protected_manual"] == 2
+
+
+def test_apply_retention_keep_last_protects_old_auto(tmp_path, monkeypatch):
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
+    now = time.time()
+    p = tmp_path / "cornerstone_h_only__auto.dump"
+    p.write_bytes(b"x")
+    t = now - 100 * 86400
+    os.utime(p, (t, t))
+    # 只有 1 个 auto，keep_last=5 全部保底 → 即便超 30 天也不删
+    res = dbsvc.apply_retention(retention_days=30, keep_last=5)
+    assert res["deleted"] == []
+    assert p.exists()
+
+
+def test_apply_retention_days_zero_never_deletes(tmp_path, monkeypatch):
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
+    now = time.time()
+    p = tmp_path / "cornerstone_h_old__auto.dump"
+    p.write_bytes(b"x")
+    t = now - 999 * 86400
+    os.utime(p, (t, t))
+    # retention_days<=0 表示不按时间清理
+    res = dbsvc.apply_retention(retention_days=0, keep_last=0)
+    assert res["deleted"] == []
+    assert p.exists()

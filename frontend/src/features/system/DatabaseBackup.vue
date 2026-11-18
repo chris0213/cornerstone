@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import {
   listDatabaseBackups, downloadDatabaseBackup,
   createDatabaseBackup, deleteDatabaseBackup, verifyDatabaseBackup,
+  getBackupConfig, updateBackupConfig,
 } from '../../api/databaseBackup'
 import type { DatabaseBackupFile, VerifyResult } from '../../api/databaseBackup'
 
@@ -13,6 +14,17 @@ const creating = ref(false)
 const files = ref<DatabaseBackupFile[]>([])
 const dir = ref('')
 const exists = ref(true)
+
+// 本地备份调度配置
+const cfgLoading = ref(false)
+const cfgSaving = ref(false)
+const nextRun = ref<string | null>(null)
+const cfgForm = reactive({
+  enabled: false,
+  schedule_time: '03:30',
+  retention_days: 30,
+  keep_last: 7,
+})
 
 // 恢复校验
 const verifyingName = ref('')
@@ -106,18 +118,88 @@ const verify = async (f: DatabaseBackupFile) => {
   }
 }
 
-onMounted(load)
+const loadConfig = async () => {
+  cfgLoading.value = true
+  try {
+    const c = await getBackupConfig()
+    cfgForm.enabled = c.enabled
+    cfgForm.schedule_time = c.schedule_time
+    cfgForm.retention_days = c.retention_days
+    cfgForm.keep_last = c.keep_last
+    nextRun.value = c.next_run ?? null
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '加载备份调度配置失败')
+  } finally {
+    cfgLoading.value = false
+  }
+}
+
+const saveConfig = async () => {
+  cfgSaving.value = true
+  try {
+    const res = await updateBackupConfig({
+      enabled: cfgForm.enabled,
+      schedule_time: cfgForm.schedule_time,
+      retention_days: cfgForm.retention_days,
+      keep_last: cfgForm.keep_last,
+    })
+    nextRun.value = res.next_run ?? null
+    ElMessage.success('已保存备份调度配置')
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '保存失败')
+  } finally {
+    cfgSaving.value = false
+  }
+}
+
+onMounted(() => { load(); loadConfig() })
 </script>
 
 <template>
   <div class="dbbackup-page" v-loading="loading">
+    <div class="card cfg-card" v-loading="cfgLoading">
+      <div class="title">备份调度配置</div>
+      <p class="hint">
+        应用内每日定时整库备份（pg_dump）。停用宿主机 cron 后由这里接管；
+        手动「立即备份」产物标记为 <code>manual</code>，<b>永不被保留策略删除</b>，仅自动备份按下方策略清理。
+      </p>
+      <div class="cfg-row">
+        <div class="cfg-field">
+          <label>启用定时备份</label>
+          <el-switch v-model="cfgForm.enabled" />
+        </div>
+        <div class="cfg-field">
+          <label>每日备份时间</label>
+          <el-time-picker v-model="cfgForm.schedule_time" format="HH:mm" value-format="HH:mm"
+            placeholder="03:30" style="width: 140px" />
+        </div>
+        <div class="cfg-field">
+          <label>保留天数</label>
+          <el-input-number v-model="cfgForm.retention_days" :min="0" :max="3650" />
+          <span class="sub-hint">0 = 不按天数清理</span>
+        </div>
+        <div class="cfg-field">
+          <label>至少保留（个）</label>
+          <el-input-number v-model="cfgForm.keep_last" :min="0" :max="3650" />
+          <span class="sub-hint">保底最近 N 个自动备份不被删</span>
+        </div>
+        <div class="cfg-field">
+          <label>&nbsp;</label>
+          <el-button type="primary" :loading="cfgSaving" @click="saveConfig">保存配置</el-button>
+        </div>
+      </div>
+      <p class="hint">
+        下次自动备份：{{ nextRun ? new Date(nextRun).toLocaleString() : (cfgForm.enabled ? '（保存后由后端计算）' : '未启用') }}
+      </p>
+    </div>
+
     <div class="card">
       <div class="head">
         <div>
           <div class="title">数据库备份</div>
           <p class="hint">
-            目录：<code>{{ dir }}</code>（宿主机 cron 每日 pg_dump 产物）。下载后用
-            <code>pg_restore</code> 恢复，详见备份恢复手册。
+            目录：<code>{{ dir }}</code>（上方「备份调度配置」每日定时产出 + 手动「立即备份」）。
+            下载后用 <code>pg_restore</code> 恢复，详见备份恢复手册。
           </p>
         </div>
         <div class="head-actions">
@@ -128,13 +210,20 @@ onMounted(load)
 
       <el-alert v-if="!exists" type="warning" :closable="false" show-icon
         title="备份目录不存在或为空"
-        description="尚未生成每日备份，请先在服务器安装 db_backup.sh + cron（见部署手册）。" />
+        description="尚未有备份。可点「立即备份」手动生成一次，或在上方启用每日定时备份。" />
 
       <el-table v-else :data="files" style="width: 100%">
         <el-table-column prop="name" label="文件名" min-width="320" />
         <el-table-column prop="size_mb" label="大小(MB)" width="120" />
         <el-table-column label="修改时间" width="220">
           <template #default="{ row }">{{ fmtTime(row.modified_at) }}</template>
+        </el-table-column>
+        <el-table-column label="来源" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.trigger === 'auto' ? 'info' : 'success'">
+              {{ row.trigger === 'auto' ? '自动' : '手动' }}
+            </el-tag>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
@@ -188,4 +277,9 @@ onMounted(load)
 .title { font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .hint { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
 .hint code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; }
+.cfg-card { margin-bottom: 16px; }
+.cfg-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin-top: 8px; }
+.cfg-field { display: flex; flex-direction: column; min-width: 160px; }
+.cfg-field label { font-size: 13px; color: var(--text-primary); margin-bottom: 6px; }
+.cfg-field .sub-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
 </style>

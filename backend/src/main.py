@@ -175,6 +175,12 @@ async def startup_event():
         await reload_offsite_sync_job(session)
     logger.info("Offsite sync scheduler loaded")
 
+    # 加载数据库 dump 备份每日定时任务（按配置注册/移除）
+    async with async_session() as session:
+        from .tasks.db_backup_scheduler import reload_db_backup_job
+        await reload_db_backup_job(session)
+    logger.info("DB backup scheduler loaded")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

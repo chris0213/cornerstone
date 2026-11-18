@@ -1,21 +1,20 @@
-"""数据库备份文件管理 API（仅 super_admin）。
+"""数据库备份管理 API（仅 super_admin）。
 
-列出宿主机 cron 产出的 pg_dump 文件（容器内只读挂载于 DB_BACKUP_DIR），
-并提供安全下载。安全要点：
-- 文件名必须匹配 cornerstone_*.dump，禁止任何路径分隔符/..，realpath 必须落在允许目录内（防目录穿越）；
-- 仅 super_admin；下载写审计（属导出类敏感操作）。
+两条能力：
+1. 文件管理：列出/下载/删除宿主机挂载目录里的 pg_dump 文件，手动「立即备份」。
+2. 调度配置：每日定时备份频率 + 保留策略（天数 + 至少 N 个），存 settings.db_backup_config，
+   保存后重载应用内调度任务。安全要点：
+- 文件名必须匹配 cornerstone_*.dump，禁止路径分隔符/..，realpath 必须落在允许目录内（防穿越）；
+- 仅 super_admin；下载/备份/配置变更写审计；
+- 手动备份（__manual 与历史无标记）永不被保留策略删除，仅 __auto 受清理。
 """
 import asyncio
 import os
-import re
-import socket
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.engine import make_url
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings as app_config
@@ -24,19 +23,19 @@ from ..models.audit_log import AuditLog
 from ..api.dependencies import require_super_admin
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.logger import get_logger
+from ..services import db_backup_service as dbsvc
+from ..services.db_backup_service import (
+    _safe_resolve, _db_conn_parts, _run_cmd, _dump_lock,
+    run_pg_dump, list_dump_files, apply_retention, TRIGGER_MANUAL,
+)
+from ..services.db_backup_store import (
+    load_stored_config, save_stored_config, validate_config, get_effective_config, DEFAULTS,
+)
 
 router = APIRouter()
 logger = get_logger()
 
-# 容器内备份目录（compose 把宿主机 db_backups 读写挂到这里）；可用 env 覆盖
-BACKUP_DIR = os.environ.get("DB_BACKUP_DIR", "/opt/cornerstone/db_backups")
-# 仅允许该命名规则的 dump 文件
-_FILENAME_RE = re.compile(r"^cornerstone_[A-Za-z0-9._-]{1,120}\.dump$")
-
-# 同一时刻只允许一个 pg_dump，避免并发把库压垮
-_dump_lock = asyncio.Lock()
 _create_last_ts: float = 0.0
-_DUMP_TIMEOUT = 600
 
 # 恢复校验：固定隔离库名（非用户输入，防注入）；同一时刻只跑一个
 VERIFY_DB_NAME = "cornerstone_verify"
@@ -44,20 +43,6 @@ _verify_lock = asyncio.Lock()
 _VERIFY_TIMEOUT = 600
 # 校验时抽查的关键表（硬编码，非用户输入）
 _VERIFY_TABLES = ("devices", "users", "backups", "audit_logs", "sites", "circuits")
-
-
-def _safe_resolve(filename: str) -> str:
-    """把文件名解析为目录内的真实路径，越界/非法抛 400。"""
-    if not _FILENAME_RE.match(filename):
-        raise HTTPException(status_code=400, detail="非法的备份文件名")
-    base = os.path.realpath(BACKUP_DIR)
-    target = os.path.realpath(os.path.join(base, filename))
-    # 必须仍在 base 目录内（防符号链接/穿越）
-    if target != base and not target.startswith(base + os.sep):
-        raise HTTPException(status_code=400, detail="路径越界，已拒绝")
-    if not os.path.isfile(target):
-        raise HTTPException(status_code=404, detail="备份文件不存在")
-    return target
 
 
 async def _audit(db, request, user, action, detail):
@@ -73,25 +58,9 @@ async def list_files(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_super_admin),
 ):
-    """列出数据库备份文件（名称/大小/修改时间），按时间倒序。"""
-    if not os.path.isdir(BACKUP_DIR):
-        return {"dir": BACKUP_DIR, "exists": False, "files": []}
-    items = []
-    for name in os.listdir(BACKUP_DIR):
-        if not _FILENAME_RE.match(name):
-            continue
-        full = os.path.join(BACKUP_DIR, name)
-        if not os.path.isfile(full):
-            continue
-        st = os.stat(full)
-        items.append({
-            "name": name,
-            "size_bytes": st.st_size,
-            "size_mb": round(st.st_size / 1024 / 1024, 2),
-            "modified_at": st.st_mtime,
-        })
-    items.sort(key=lambda x: x["modified_at"], reverse=True)
-    return {"dir": BACKUP_DIR, "exists": True, "files": items}
+    """列出数据库备份文件（名称/大小/修改时间/来源），按时间倒序。"""
+    exists = os.path.isdir(dbsvc.BACKUP_DIR)
+    return {"dir": dbsvc.BACKUP_DIR, "exists": exists, "files": list_dump_files()}
 
 
 @router.get("/files/{filename}/download")
@@ -102,7 +71,12 @@ async def download_file(
     current_user=Depends(require_super_admin),
 ):
     """下载指定备份文件（仅 super_admin，写审计）。"""
-    path = _safe_resolve(filename)
+    try:
+        path = _safe_resolve(filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="备份文件不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await _audit(db, request, current_user, "database_backup_download",
                  f"下载数据库备份文件：{filename}")
     return FileResponse(
@@ -113,25 +87,16 @@ async def download_file(
     )
 
 
-def _db_conn_parts() -> dict:
-    """从 database_url_sync 解析 pg_dump 所需连接参数（密码单独走 env）。"""
-    u = make_url(app_config.database_url_sync)
-    return {
-        "host": u.host or "localhost",
-        "port": str(u.port or 5432),
-        "user": u.username or "",
-        "dbname": u.database or "",
-        "password": u.password or "",
-    }
-
-
 @router.post("/create")
 async def create_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_super_admin),
 ):
-    """立即执行一次 pg_dump 生成备份（仅 super_admin，串行 + 限频 + 审计）。"""
+    """立即执行一次 pg_dump 生成手动备份（仅 super_admin，串行 + 限频 + 审计）。
+
+    产出的文件标记为 __manual，永不被保留策略删除；备份后按当前配置清理 __auto。
+    """
     global _create_last_ts
     limit = app_config.credential_test_rate_limit_seconds or 10
     now = time.time()
@@ -142,60 +107,25 @@ async def create_backup(
     if _dump_lock.locked():
         raise HTTPException(status_code=409, detail="已有备份正在进行，请稍后再试")
 
-    if not os.path.isdir(BACKUP_DIR):
-        try:
-            os.makedirs(BACKUP_DIR, exist_ok=True)
-        except OSError as e:
-            raise HTTPException(status_code=500, detail=f"备份目录不可写：{e}")
+    _create_last_ts = time.time()
+    try:
+        res = await run_pg_dump(TRIGGER_MANUAL)
+    except TimeoutError:
+        await _audit(db, request, current_user, "database_backup_create", "立即备份失败：超时")
+        raise HTTPException(status_code=504, detail="备份超时")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except (RuntimeError, ValueError) as e:
+        await _audit(db, request, current_user, "database_backup_create", f"立即备份失败：{e}")
+        raise HTTPException(status_code=500, detail=f"备份失败：{e}")
 
-    parts = _db_conn_parts()
-    if not parts["dbname"]:
-        raise HTTPException(status_code=500, detail="数据库名解析失败")
-
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    host = re.sub(r"[^A-Za-z0-9._-]", "_", socket.gethostname())[:60]
-    filename = f"cornerstone_{host}_{stamp}.dump"
-    outpath = os.path.join(BACKUP_DIR, filename)
-
-    # argv 化执行 pg_dump，密码走 PGPASSWORD env，绝不进 argv、绝不 shell=True
-    argv = [
-        "pg_dump",
-        "-h", parts["host"], "-p", parts["port"],
-        "-U", parts["user"], "-d", parts["dbname"],
-        "--format=custom", "--compress=6", "--file", outpath,
-    ]
-    env = {**os.environ, "PGPASSWORD": parts["password"]}
-
-    async with _dump_lock:
-        _create_last_ts = time.time()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
-            try:
-                _, err = await asyncio.wait_for(proc.communicate(), timeout=_DUMP_TIMEOUT)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                if os.path.exists(outpath):
-                    os.remove(outpath)
-                await _audit(db, request, current_user, "database_backup_create",
-                             f"立即备份失败：超时（>{_DUMP_TIMEOUT}s）")
-                raise HTTPException(status_code=504, detail="备份超时")
-            if proc.returncode != 0 or not os.path.isfile(outpath):
-                msg = err.decode("utf-8", "replace")[:500] if err else "pg_dump 失败"
-                if os.path.exists(outpath):
-                    os.remove(outpath)
-                await _audit(db, request, current_user, "database_backup_create",
-                             f"立即备份失败：{msg}")
-                raise HTTPException(status_code=500, detail=f"备份失败：{msg}")
-            size = os.path.getsize(outpath)
-            await _audit(db, request, current_user, "database_backup_create",
-                         f"立即备份成功：{filename}（{size} 字节）")
-            return {"ok": True, "name": filename, "size_bytes": size}
-        except FileNotFoundError:
-            raise HTTPException(status_code=500, detail="pg_dump 不可用：后端镜像未安装 postgresql-client")
+    cfg = get_effective_config(await load_stored_config(db))
+    cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
+    await _audit(db, request, current_user, "database_backup_create",
+                 f"立即备份成功：{res['name']}（{res['size_bytes']} 字节）；"
+                 f"自动清理过期 {len(cleanup['deleted'])} 个")
+    return {"ok": True, "name": res["name"], "size_bytes": res["size_bytes"],
+            "retention_deleted": cleanup["deleted"]}
 
 
 @router.delete("/files/{filename}")
@@ -206,7 +136,12 @@ async def delete_file(
     current_user=Depends(require_super_admin),
 ):
     """删除指定备份文件（仅 super_admin，realpath 防穿越，写审计）。"""
-    path = _safe_resolve(filename)
+    try:
+        path = _safe_resolve(filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="备份文件不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         os.remove(path)
     except OSError as e:
@@ -216,20 +151,61 @@ async def delete_file(
     return {"ok": True, "name": filename}
 
 
-async def _run_cmd(argv: list[str], env: dict, timeout: int) -> tuple[int, str, str]:
-    """无 shell 执行 argv，返回 (rc, stdout, stderr)；超时抛 TimeoutError。"""
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        raise
-    return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+class BackupConfigRequest(BaseModel):
+    enabled: bool = False
+    schedule_time: str = Field(default="03:30")
+    retention_days: int = Field(default=30)
+    keep_last: int = Field(default=7)
 
+
+@router.get("/config")
+async def get_config(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """读取数据库备份调度配置（含默认值合并 + 下次执行时间）。"""
+    cfg = get_effective_config(await load_stored_config(db))
+    next_run = None
+    try:
+        from ..tasks.backup_scheduler import scheduler
+        from ..tasks.db_backup_scheduler import JOB_ID
+        job = scheduler.get_job(JOB_ID)
+        if job is not None and getattr(job, "next_run_time", None):
+            next_run = job.next_run_time.isoformat()
+    except Exception as e:
+        logger.warning(f"[数据库备份] 读取下次执行时间失败: {e}")
+    return {**cfg, "next_run": next_run}
+
+
+@router.put("/config")
+async def update_config(
+    req: BackupConfigRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """保存数据库备份调度配置：校验 + 落库 + 重载调度任务 + 审计。"""
+    try:
+        validated = validate_config(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    await save_stored_config(db, validated)
+
+    try:
+        from ..tasks.db_backup_scheduler import reload_db_backup_job
+        await reload_db_backup_job(db)
+    except Exception as e:
+        logger.warning(f"[数据库备份] 调度重载失败（配置已保存）: {e}")
+
+    await _audit(db, http_request, current_user, "database_backup_config_update",
+                 f"更新数据库备份调度配置：启用={'是' if validated['enabled'] else '否'}，"
+                 f"每日={validated['schedule_time']}，保留={validated['retention_days']}天，"
+                 f"至少保留={validated['keep_last']}个")
+    return validated
+
+
+# ===== 恢复校验（隔离临时库，绝不触碰生产库）=====
 
 class VerifyRequest(BaseModel):
     filename: str
@@ -247,7 +223,12 @@ async def verify_backup(
     全程不触碰生产库 cornerstone；仅 super_admin；串行 + 审计。
     返回 {ok, restored, checks:[{table,count}], error}。
     """
-    path = _safe_resolve(req.filename)
+    try:
+        path = _safe_resolve(req.filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="备份文件不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     parts = _db_conn_parts()
     base = ["-h", parts["host"], "-p", parts["port"], "-U", parts["user"]]
     env = {**os.environ, "PGPASSWORD": parts["password"]}
