@@ -35,10 +35,23 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 运行时所需系统包（不含编译器）
-# rsync/rclone：异地备份同步用；postgresql-client：页面「立即备份」调 pg_dump；openssh-client 提供 ssh/scp
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# rsync/rclone：异地备份同步用；openssh-client 提供 ssh/scp
+# postgresql-client-16：页面「立即备份/恢复校验」调 pg_dump/pg_restore/psql。
+#   必须与生产服务器(postgres:16-alpine)同主版本：trixie 默认 PG17 客户端连 PG16 服务器时，
+#   pg_restore 会发出 PG17 专有 `SET transaction_timeout = 0;`，PG16 不认 → 恢复整库回滚、校验必失败。
+#   故加 PGDG 源显式安装 16 版客户端。
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    install -d --mode=0755 /usr/share/postgresql-common/pgdg; \
+    curl -fsSL --retry 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo ${VERSION_CODENAME})-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         libpq5 \
-        postgresql-client \
+        postgresql-client-16 \
         iputils-ping \
         openssh-client \
         rsync \
