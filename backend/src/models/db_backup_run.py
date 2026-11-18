@@ -22,6 +22,7 @@ class DbBackupRun(Base):
 
     filename = Column(String(255), nullable=True)       # 产出的 dump 文件名（失败可能为空）
     size_bytes = Column(BigInteger, nullable=True)
+    sha256 = Column(String(64), nullable=True)          # 产出时文件内容指纹（校验时重算比对，防静默损坏）
     duration_ms = Column(Integer, nullable=True)        # pg_dump 耗时
     error = Column(Text, nullable=True)                 # 备份失败原因
     retention_deleted = Column(Integer, nullable=True)  # 本次清理掉的过期 auto 文件数

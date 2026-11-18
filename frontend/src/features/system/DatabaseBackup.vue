@@ -178,6 +178,10 @@ const verifyLabel = (s?: string | null) =>
   ({ passed: '通过', failed: '未通过', error: '异常', skipped: '未校验' } as Record<string, string>)[s || ''] || '—'
 const verifyTagType = (s?: string | null) =>
   ({ passed: 'success', failed: 'danger', error: 'warning', skipped: 'info' } as Record<string, string>)[s || ''] || 'info'
+const integrityLabel = (s?: string | null) =>
+  ({ ok: '一致', mismatch: '不一致(疑似损坏)', unknown: '无指纹可比', error: '读取失败' } as Record<string, string>)[s || ''] || '—'
+const integrityTagType = (s?: string | null) =>
+  ({ ok: 'success', mismatch: 'danger', unknown: 'info', error: 'warning' } as Record<string, string>)[s || ''] || 'info'
 
 onMounted(() => { load(); loadConfig(); loadRuns() })
 </script>
@@ -287,6 +291,12 @@ onMounted(() => { load(); loadConfig(); loadRuns() })
             :title="verifyResult.ok ? '校验通过：该备份可正常恢复' : '校验未通过'"
             :description="'文件：' + verifyName"
           />
+          <p class="hint" style="margin-top:8px">
+            完整性指纹：
+            <el-tag size="small" :type="integrityTagType(verifyResult.integrity?.status)">
+              {{ integrityLabel(verifyResult.integrity?.status) }}
+            </el-tag>
+          </p>
           <p v-if="verifyResult.error" class="verify-err">错误：{{ verifyResult.error }}</p>
           <el-table :data="verifyResult.checks" style="width: 100%; margin-top: 12px">
             <el-table-column prop="table" label="抽查表" />
@@ -339,6 +349,9 @@ onMounted(() => { load(); loadConfig(); loadRuns() })
         <el-table-column label="大小" width="100">
           <template #default="{ row }">{{ row.size_bytes != null ? (row.size_bytes / 1048576).toFixed(1) + ' MB' : '—' }}</template>
         </el-table-column>
+        <el-table-column label="SHA-256" width="140" show-overflow-tooltip>
+          <template #default="{ row }"><code class="sha">{{ row.sha256 ? row.sha256.slice(0, 12) + '…' : '—' }}</code></template>
+        </el-table-column>
         <el-table-column label="耗时" width="90">
           <template #default="{ row }">{{ row.duration_ms != null ? Math.round(row.duration_ms / 1000) + 's' : '—' }}</template>
         </el-table-column>
@@ -376,4 +389,5 @@ onMounted(() => { load(); loadConfig(); loadRuns() })
 .cfg-field { display: flex; flex-direction: column; min-width: 160px; }
 .cfg-field label { font-size: 13px; color: var(--text-primary); margin-bottom: 6px; }
 .cfg-field .sub-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+.sha { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-secondary); }
 </style>

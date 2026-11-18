@@ -47,7 +47,8 @@ async def _db_backup_job():
     from ..database import async_session
     from ..services.db_backup_store import load_stored_config, get_effective_config
     from ..services.db_backup_service import (
-        run_pg_dump, apply_retention, verify_dump, _safe_resolve, record_run, TRIGGER_AUTO,
+        run_pg_dump, apply_retention, verify_dump, _safe_resolve, record_run,
+        compute_file_sha256, TRIGGER_AUTO,
     )
 
     async with async_session() as db:
@@ -65,6 +66,7 @@ async def _db_backup_job():
         res = await run_pg_dump(TRIGGER_AUTO)
         cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
         run.update(status="success", filename=res["name"], size_bytes=res["size_bytes"],
+                   sha256=res.get("sha256"),
                    duration_ms=int((time.monotonic() - t0) * 1000),
                    retention_deleted=len(cleanup["deleted"]))
         logger.info(
@@ -81,21 +83,38 @@ async def _db_backup_job():
         await _send_alert("数据库备份失败", f"定时 pg_dump 失败：{e}")
         return
 
-    # 2) 自动校验（可选）：对刚产出的 dump 跑隔离库恢复，失败/异常告警
+    # 2) 自动校验（可选）：先比对完整性指纹，再跑隔离库恢复；任一异常则告警
     if cfg.get("auto_verify"):
         try:
             path = _safe_resolve(res["name"])
+            # 完整性：重算 vs 建库时指纹（res 里刚算的），命中损坏直接判失败
+            integrity_status = "unknown"
+            try:
+                actual_sha = compute_file_sha256(path)
+            except OSError:
+                actual_sha = None
+            if res.get("sha256") and actual_sha:
+                integrity_status = "ok" if actual_sha == res["sha256"] else "mismatch"
+
             vr = await verify_dump(path)
-            _last_verify = {"name": res["name"], "ok": bool(vr["ok"]),
-                            "at": time.time(), "error": vr.get("error")}
-            run["verify_status"] = "passed" if vr["ok"] else "failed"
-            run["verify_error"] = vr.get("error")
+            ok = bool(vr["ok"]) and integrity_status != "mismatch"
+            _last_verify = {"name": res["name"], "ok": ok,
+                            "at": time.time(), "error": vr.get("error"),
+                            "integrity": integrity_status}
+            run["verify_status"] = "passed" if ok else "failed"
             run["verify_checks"] = vr.get("checks")
-            if not vr["ok"]:
+            if integrity_status == "mismatch":
+                reason = "文件内容与建库时 SHA-256 不一致（疑似损坏/被改动）"
+                run["verify_error"] = reason
+                logger.error(f"[数据库备份] 完整性异常 {res['name']}: {reason}")
+                await _send_alert("数据库备份完整性异常", f"{res['name']}：{reason}")
+            elif not vr["ok"]:
                 reason = vr.get("error") or "校验未通过（隔离库恢复或关键表行数异常）"
+                run["verify_error"] = vr.get("error")
                 logger.warning(f"[数据库备份] 自动校验未通过 {res['name']}: {reason}")
                 await _send_alert("数据库备份校验未通过", f"{res['name']}：{reason}")
             else:
+                run["verify_error"] = None
                 logger.info(f"[数据库备份] 自动校验通过 {res['name']}")
         except Exception as e:
             _last_verify = {"name": res["name"], "ok": False, "at": time.time(), "error": str(e)}

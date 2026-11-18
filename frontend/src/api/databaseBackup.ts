@@ -52,6 +52,7 @@ export interface VerifyResult {
   restored: boolean
   checks: VerifyCheck[]
   error?: string | null
+  integrity?: { status: string; expected?: string | null; actual?: string | null } | null
 }
 
 export const verifyDatabaseBackup = async (name: string): Promise<VerifyResult> => {
@@ -101,6 +102,7 @@ export interface BackupRun {
   operator?: string | null
   filename?: string | null
   size_bytes?: number | null
+  sha256?: string | null
   duration_ms?: number | null
   error?: string | null
   retention_deleted?: number | null

@@ -27,7 +27,8 @@ from ..utils.logger import get_logger
 from ..services import db_backup_service as dbsvc
 from ..services.db_backup_service import (
     _safe_resolve, _dump_lock, _verify_lock,
-    run_pg_dump, list_dump_files, apply_retention, verify_dump, record_run, TRIGGER_MANUAL,
+    run_pg_dump, list_dump_files, apply_retention, verify_dump, record_run,
+    check_integrity, TRIGGER_MANUAL,
 )
 from ..services.db_backup_store import (
     load_stored_config, save_stored_config, validate_config, get_effective_config, DEFAULTS,
@@ -123,7 +124,7 @@ async def create_backup(
     cfg = get_effective_config(await load_stored_config(db))
     cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
     await record_run(db, trigger=TRIGGER_MANUAL, status="success", operator=current_user.username,
-                     filename=res["name"], size_bytes=res["size_bytes"],
+                     filename=res["name"], size_bytes=res["size_bytes"], sha256=res.get("sha256"),
                      duration_ms=int((time.monotonic() - t0) * 1000),
                      retention_deleted=len(cleanup["deleted"]), verify_status="skipped")
     await _audit(db, request, current_user, "database_backup_create",
@@ -154,6 +155,7 @@ async def list_runs(
                 "operator": r.operator,
                 "filename": r.filename,
                 "size_bytes": r.size_bytes,
+                "sha256": r.sha256,
                 "duration_ms": r.duration_ms,
                 "error": r.error,
                 "retention_deleted": r.retention_deleted,
@@ -278,6 +280,9 @@ async def verify_backup(
     if _verify_lock.locked():
         raise HTTPException(status_code=409, detail="已有恢复校验正在进行，请稍后再试")
 
+    # 完整性指纹比对（先于恢复，命中损坏可快速判定；旧文件无记录则 unknown）
+    integrity = await check_integrity(db, path, req.filename)
+
     try:
         result = await verify_dump(path)
     except TimeoutError:
@@ -292,7 +297,12 @@ async def verify_backup(
         raise HTTPException(status_code=500,
                             detail="psql/pg_restore 不可用：后端镜像未安装 postgresql-client")
 
+    result["integrity"] = integrity
+    if integrity["status"] == "mismatch":
+        result["ok"] = False
+        result["error"] = (result.get("error") or "") + "；文件内容与建库时指纹不一致（疑似损坏/被改动）"
+
     detail = (f"恢复校验 {'通过' if result['ok'] else '未通过'}：{req.filename}；"
-              f"抽查 {result['checks']}")
+              f"完整性 {integrity['status']}；抽查 {result['checks']}")
     await _audit(db, request, current_user, "database_backup_verify", detail)
     return result

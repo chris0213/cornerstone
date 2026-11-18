@@ -599,3 +599,88 @@ async def test_has_auto_run_since_ignores_manual(db_session):
     assert await has_auto_run_since(db_session, now - timedelta(days=1)) is False
     await record_run(db_session, trigger="auto", status="success", filename="a.dump")
     assert await has_auto_run_since(db_session, now - timedelta(days=1)) is True
+
+
+# ==================== H：完整性指纹（SHA-256） ====================
+
+def test_compute_file_sha256(tmp_path):
+    import hashlib
+    from src.services.db_backup_service import compute_file_sha256
+    p = tmp_path / "a.dump"
+    p.write_bytes(b"hello")
+    assert compute_file_sha256(str(p)) == hashlib.sha256(b"hello").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_check_integrity_ok(db_session, tmp_path):
+    from src.services.db_backup_service import check_integrity, record_run, compute_file_sha256
+    p = tmp_path / "dump2.dump"
+    p.write_bytes(b"DATA")
+    sha = compute_file_sha256(str(p))
+    await record_run(db_session, trigger="auto", status="success", filename="dump2.dump", sha256=sha)
+    res = await check_integrity(db_session, str(p), "dump2.dump")
+    assert res["status"] == "ok" and res["expected"] == sha
+
+
+@pytest.mark.asyncio
+async def test_check_integrity_mismatch(db_session, tmp_path):
+    from src.services.db_backup_service import check_integrity, record_run
+    p = tmp_path / "dump1.dump"
+    p.write_bytes(b"ORIGINAL")
+    await record_run(db_session, trigger="auto", status="success", filename="dump1.dump",
+                     sha256="0" * 64)
+    res = await check_integrity(db_session, str(p), "dump1.dump")
+    assert res["status"] == "mismatch"
+
+
+@pytest.mark.asyncio
+async def test_check_integrity_unknown_without_record(db_session, tmp_path):
+    from src.services.db_backup_service import check_integrity
+    p = tmp_path / "legacy.dump"
+    p.write_bytes(b"X")
+    res = await check_integrity(db_session, str(p), "legacy.dump")  # 台账无记录
+    assert res["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_db_backup_job_integrity_mismatch_alerts(monkeypatch):
+    import src.services.db_backup_store as store
+    import src.tasks.db_backup_scheduler as sched
+
+    async def _fake_load(db):
+        return {"enabled": True, "schedule_time": "03:30",
+                "retention_days": 30, "keep_last": 7, "auto_verify": True}
+
+    async def _fake_dump(trigger):
+        return {"name": "x__auto.dump", "size_bytes": 10, "sha256": "A" * 64}
+
+    async def _fake_verify(path):
+        return {"ok": True, "restored": True, "checks": [{"table": "devices", "count": 1}], "error": None}
+
+    def _fake_resolve(name):
+        return "/tmp/x.dump"
+
+    def _sha_mismatch(path):
+        return "B" * 64  # 与建库 A*64 不一致
+
+    alerts, runs = [], []
+
+    async def _cap_alert(t, s):
+        alerts.append((t, s))
+
+    async def _cap_record(db, **f):
+        runs.append(f)
+
+    monkeypatch.setattr(store, "load_stored_config", _fake_load)
+    monkeypatch.setattr(dbsvc, "run_pg_dump", _fake_dump)
+    monkeypatch.setattr(dbsvc, "apply_retention", lambda d, k: {"deleted": []})
+    monkeypatch.setattr(dbsvc, "verify_dump", _fake_verify)
+    monkeypatch.setattr(dbsvc, "_safe_resolve", _fake_resolve)
+    monkeypatch.setattr(dbsvc, "compute_file_sha256", _sha_mismatch)
+    monkeypatch.setattr(dbsvc, "record_run", _cap_record)
+    monkeypatch.setattr(sched, "_send_alert", _cap_alert)
+
+    await sched._db_backup_job()
+    assert alerts and "完整性异常" in alerts[0][0]
+    assert runs[0]["verify_status"] == "failed"
+    assert runs[0]["sha256"] == "A" * 64

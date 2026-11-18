@@ -11,6 +11,7 @@
 - 无标记的历史文件保守视为 manual（受保护）。保留清理只作用于 __auto。
 """
 import asyncio
+import hashlib
 import os
 import re
 import socket
@@ -123,6 +124,15 @@ def list_dump_files() -> list[dict]:
     return items
 
 
+def compute_file_sha256(path: str) -> str:
+    """流式计算文件 SHA-256（分块读，避免大文件占内存）。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 async def run_pg_dump(trigger: str = TRIGGER_MANUAL) -> dict:
     """执行一次整库 pg_dump 产出 custom 格式 dump，返回 {name, size_bytes}。
 
@@ -173,7 +183,9 @@ async def run_pg_dump(trigger: str = TRIGGER_MANUAL) -> dict:
                 if os.path.exists(outpath):
                     os.remove(outpath)
                 raise RuntimeError(msg)
-            return {"name": filename, "size_bytes": os.path.getsize(outpath)}
+            size = os.path.getsize(outpath)
+            sha = compute_file_sha256(outpath)
+            return {"name": filename, "size_bytes": size, "sha256": sha}
         except FileNotFoundError:
             raise FileNotFoundError("pg_dump 不可用：后端镜像未安装 postgresql-client")
 
@@ -276,6 +288,7 @@ async def verify_dump(path: str) -> dict:
 
 async def record_run(db, *, trigger: str, status: str, operator: str | None = None,
                      filename: str | None = None, size_bytes: int | None = None,
+                     sha256: str | None = None,
                      duration_ms: int | None = None, error: str | None = None,
                      retention_deleted: int | None = None, verify_status: str | None = None,
                      verify_error: str | None = None, verify_checks: list | None = None) -> None:
@@ -287,7 +300,7 @@ async def record_run(db, *, trigger: str, status: str, operator: str | None = No
     try:
         db.add(DbBackupRun(
             trigger=trigger, status=status, operator=operator, filename=filename,
-            size_bytes=size_bytes, duration_ms=duration_ms, error=error,
+            size_bytes=size_bytes, sha256=sha256, duration_ms=duration_ms, error=error,
             retention_deleted=retention_deleted, verify_status=verify_status,
             verify_error=verify_error, verify_checks=verify_checks,
         ))
@@ -335,3 +348,33 @@ async def has_auto_run_since(db, since) -> bool:
         .limit(1)
     )
     return result.first() is not None
+
+
+async def lookup_run_sha256(db, filename: str) -> str | None:
+    """查台账里该文件名最近一次记录的 sha256（建库时指纹）。无记录返回 None。"""
+    from sqlalchemy import select
+    from ..models.db_backup_run import DbBackupRun
+    result = await db.execute(
+        select(DbBackupRun.sha256)
+        .where(DbBackupRun.filename == filename, DbBackupRun.sha256.isnot(None))
+        .order_by(DbBackupRun.created_at.desc(), DbBackupRun.id.desc())
+        .limit(1)
+    )
+    row = result.first()
+    return row[0] if row else None
+
+
+async def check_integrity(db, path: str, filename: str, expected: str | None = None) -> dict:
+    """重算文件 SHA-256 并与建库时记录的指纹比对，检测静默损坏。
+
+    expected 为空则回查台账里该文件名的记录；都拿不到 → unknown（旧文件无指纹可比）。
+    返回 {status: ok|mismatch|unknown|error, expected, actual}。
+    """
+    try:
+        actual = compute_file_sha256(path)
+    except OSError:
+        return {"status": "error", "expected": expected, "actual": None}
+    exp = expected or await lookup_run_sha256(db, filename)
+    if not exp:
+        return {"status": "unknown", "expected": None, "actual": actual}
+    return {"status": "ok" if exp == actual else "mismatch", "expected": exp, "actual": actual}
