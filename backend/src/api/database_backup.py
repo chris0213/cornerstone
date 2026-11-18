@@ -253,6 +253,8 @@ async def verify_backup(
     env = {**os.environ, "PGPASSWORD": parts["password"]}
     # 维护库用 postgres（连它来做 CREATE/DROP，避免连到目标库自身）
     psql_admin = ["psql", *base, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc"]
+    # 抽查计数必须连隔离库本身（cornerstone_verify），不能连 postgres 维护库
+    psql_verify = ["psql", *base, "-d", VERIFY_DB_NAME, "-v", "ON_ERROR_STOP=1", "-tAc"]
 
     if _verify_lock.locked():
         raise HTTPException(status_code=409, detail="已有恢复校验正在进行，请稍后再试")
@@ -279,10 +281,10 @@ async def verify_backup(
             if prc != 0:
                 logger.warning(f"[恢复校验] pg_restore rc={prc}: {perr[:500]}")
 
-            # 3) 抽查关键表行数（逐表，缺表记 N/A 不影响其它）
+            # 3) 抽查关键表行数（逐表，连隔离库 cornerstone_verify；缺表记 N/A 不影响其它）
             for t in _VERIFY_TABLES:
                 crc, cout, cerr = await _run_cmd(
-                    [*psql_admin, f"SELECT count(*) FROM {t};"], env, 60)
+                    [*psql_verify, f"SELECT count(*) FROM {t};"], env, 60)
                 if crc == 0 and cout.strip().isdigit():
                     checks.append({"table": t, "count": int(cout.strip())})
                 else:

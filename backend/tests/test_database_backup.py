@@ -196,6 +196,10 @@ def _fake_verify_exec(*argv, **kwargs):
     if "CREATE DATABASE" in joined or "DROP DATABASE" in joined:
         return _FakeVerifyProc(0)
     if "SELECT count(*) FROM" in joined:
+        # 计数必须连隔离库 cornerstone_verify；若误连 postgres 维护库则模拟"表不存在"失败，
+        # 防止回归（曾因复用 psql_admin 连 -d postgres 导致各表全 N-A）。
+        if "-d cornerstone_verify" not in joined:
+            return _FakeVerifyProc(1)
         if "audit_logs" in joined:
             return _FakeVerifyProc(0, b"1234\n")
         return _FakeVerifyProc(0, b"42\n")
