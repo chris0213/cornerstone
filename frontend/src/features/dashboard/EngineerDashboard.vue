@@ -819,23 +819,33 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 4px 8px;
+  flex-wrap: wrap;
   margin-bottom: 4px;
 }
 
 .activity-header strong {
   font-size: 14px;
   color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .activity-resource {
   font-size: 12px;
   color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .activity-detail {
   font-size: 12px;
   color: var(--color-text-2);
   margin-bottom: 4px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .activity-meta {
