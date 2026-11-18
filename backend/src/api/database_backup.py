@@ -8,7 +8,6 @@
 - 仅 super_admin；下载/备份/配置变更写审计；
 - 手动备份（__manual 与历史无标记）永不被保留策略删除，仅 __auto 受清理。
 """
-import asyncio
 import os
 import time
 
@@ -25,8 +24,8 @@ from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.logger import get_logger
 from ..services import db_backup_service as dbsvc
 from ..services.db_backup_service import (
-    _safe_resolve, _db_conn_parts, _run_cmd, _dump_lock,
-    run_pg_dump, list_dump_files, apply_retention, TRIGGER_MANUAL,
+    _safe_resolve, _dump_lock, _verify_lock,
+    run_pg_dump, list_dump_files, apply_retention, verify_dump, TRIGGER_MANUAL,
 )
 from ..services.db_backup_store import (
     load_stored_config, save_stored_config, validate_config, get_effective_config, DEFAULTS,
@@ -36,13 +35,6 @@ router = APIRouter()
 logger = get_logger()
 
 _create_last_ts: float = 0.0
-
-# 恢复校验：固定隔离库名（非用户输入，防注入）；同一时刻只跑一个
-VERIFY_DB_NAME = "cornerstone_verify"
-_verify_lock = asyncio.Lock()
-_VERIFY_TIMEOUT = 600
-# 校验时抽查的关键表（硬编码，非用户输入）
-_VERIFY_TABLES = ("devices", "users", "backups", "audit_logs", "sites", "circuits")
 
 
 async def _audit(db, request, user, action, detail):
@@ -156,6 +148,7 @@ class BackupConfigRequest(BaseModel):
     schedule_time: str = Field(default="03:30")
     retention_days: int = Field(default=30)
     keep_last: int = Field(default=7)
+    auto_verify: bool = False
 
 
 @router.get("/config")
@@ -174,7 +167,13 @@ async def get_config(
             next_run = job.next_run_time.isoformat()
     except Exception as e:
         logger.warning(f"[数据库备份] 读取下次执行时间失败: {e}")
-    return {**cfg, "next_run": next_run}
+    last_verify = None
+    try:
+        from ..tasks.db_backup_scheduler import get_last_verify
+        last_verify = get_last_verify() or None
+    except Exception:
+        pass
+    return {**cfg, "next_run": next_run, "last_verify": last_verify}
 
 
 @router.put("/config")
@@ -201,7 +200,7 @@ async def update_config(
     await _audit(db, http_request, current_user, "database_backup_config_update",
                  f"更新数据库备份调度配置：启用={'是' if validated['enabled'] else '否'}，"
                  f"每日={validated['schedule_time']}，保留={validated['retention_days']}天，"
-                 f"至少保留={validated['keep_last']}个")
+                 f"至少保留={validated['keep_last']}个，自动校验={'是' if validated['auto_verify'] else '否'}")
     return validated
 
 
@@ -229,70 +228,25 @@ async def verify_backup(
         raise HTTPException(status_code=404, detail="备份文件不存在")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    parts = _db_conn_parts()
-    base = ["-h", parts["host"], "-p", parts["port"], "-U", parts["user"]]
-    env = {**os.environ, "PGPASSWORD": parts["password"]}
-    # 维护库用 postgres（连它来做 CREATE/DROP，避免连到目标库自身）
-    psql_admin = ["psql", *base, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc"]
-    # 抽查计数必须连隔离库本身（cornerstone_verify），不能连 postgres 维护库
-    psql_verify = ["psql", *base, "-d", VERIFY_DB_NAME, "-v", "ON_ERROR_STOP=1", "-tAc"]
 
     if _verify_lock.locked():
         raise HTTPException(status_code=409, detail="已有恢复校验正在进行，请稍后再试")
 
-    async with _verify_lock:
-        checks: list[dict] = []
-        try:
-            # 1) 重建隔离库（FORCE 断开残留连接）
-            await _run_cmd([*psql_admin,
-                            f"DROP DATABASE IF EXISTS {VERIFY_DB_NAME} WITH (FORCE);"],
-                           env, 60)
-            rc, out, err = await _run_cmd([*psql_admin,
-                                           f"CREATE DATABASE {VERIFY_DB_NAME} OWNER {parts['user']};"],
-                                          env, 60)
-            if rc != 0:
-                raise RuntimeError(f"创建隔离库失败：{err[:300]}")
+    try:
+        result = await verify_dump(path)
+    except TimeoutError:
+        await _audit(db, request, current_user, "database_backup_verify",
+                     f"恢复校验超时：{req.filename}")
+        raise HTTPException(status_code=504, detail="恢复校验超时")
+    except RuntimeError as e:
+        await _audit(db, request, current_user, "database_backup_verify",
+                     f"恢复校验失败：{e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=500,
+                            detail="psql/pg_restore 不可用：后端镜像未安装 postgresql-client")
 
-            # 2) 把 dump 恢复到隔离库（pg_restore 连隔离库）
-            prc, pout, perr = await _run_cmd(
-                ["pg_restore", *base, "-d", VERIFY_DB_NAME, "--no-owner", path],
-                env, _VERIFY_TIMEOUT)
-            # pg_restore 对某些对象可能返回非 0 但数据可用；记录但据此判断
-            restored = (prc == 0)
-            if prc != 0:
-                logger.warning(f"[恢复校验] pg_restore rc={prc}: {perr[:500]}")
-
-            # 3) 抽查关键表行数（逐表，连隔离库 cornerstone_verify；缺表记 N/A 不影响其它）
-            for t in _VERIFY_TABLES:
-                crc, cout, cerr = await _run_cmd(
-                    [*psql_verify, f"SELECT count(*) FROM {t};"], env, 60)
-                if crc == 0 and cout.strip().isdigit():
-                    checks.append({"table": t, "count": int(cout.strip())})
-                else:
-                    checks.append({"table": t, "count": None})
-
-            ok = restored and any(c["count"] and c["count"] > 0 for c in checks)
-            detail = (f"恢复校验 {'通过' if ok else '未通过'}：{req.filename}；"
-                      f"抽查 {checks}")
-            await _audit(db, request, current_user, "database_backup_verify", detail)
-            return {"ok": ok, "restored": restored, "checks": checks,
-                    "error": None if restored else (perr[:300] or None)}
-        except asyncio.TimeoutError:
-            await _audit(db, request, current_user, "database_backup_verify",
-                         f"恢复校验超时：{req.filename}")
-            raise HTTPException(status_code=504, detail="恢复校验超时")
-        except RuntimeError as e:
-            await _audit(db, request, current_user, "database_backup_verify",
-                         f"恢复校验失败：{e}")
-            raise HTTPException(status_code=500, detail=str(e))
-        except FileNotFoundError:
-            raise HTTPException(status_code=500,
-                                detail="psql/pg_restore 不可用：后端镜像未安装 postgresql-client")
-        finally:
-            # 4) 无论成败，清理隔离库
-            try:
-                await _run_cmd([*psql_admin,
-                                f"DROP DATABASE IF EXISTS {VERIFY_DB_NAME} WITH (FORCE);"],
-                               env, 60)
-            except Exception as e:
-                logger.warning(f"[恢复校验] 清理隔离库失败（请手动 DROP {VERIFY_DB_NAME}）：{e}")
+    detail = (f"恢复校验 {'通过' if result['ok'] else '未通过'}：{req.filename}；"
+              f"抽查 {result['checks']}")
+    await _audit(db, request, current_user, "database_backup_verify", detail)
+    return result

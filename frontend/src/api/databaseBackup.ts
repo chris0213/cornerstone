@@ -62,12 +62,21 @@ export const verifyDatabaseBackup = async (name: string): Promise<VerifyResult> 
 
 // ==================== 本地备份调度配置 ====================
 
+export interface BackupVerifyInfo {
+  name: string
+  ok: boolean
+  at: number
+  error?: string | null
+}
+
 export interface BackupConfig {
   enabled: boolean
   schedule_time: string
   retention_days: number
   keep_last: number
+  auto_verify: boolean
   next_run?: string | null
+  last_verify?: BackupVerifyInfo | null
 }
 
 export const getBackupConfig = async (): Promise<BackupConfig> => {
@@ -76,7 +85,7 @@ export const getBackupConfig = async (): Promise<BackupConfig> => {
 }
 
 export const updateBackupConfig = async (
-  payload: Pick<BackupConfig, 'enabled' | 'schedule_time' | 'retention_days' | 'keep_last'>,
+  payload: Pick<BackupConfig, 'enabled' | 'schedule_time' | 'retention_days' | 'keep_last' | 'auto_verify'>,
 ): Promise<BackupConfig> => {
   const { data } = await api.put('/database-backups/config', payload)
   return data

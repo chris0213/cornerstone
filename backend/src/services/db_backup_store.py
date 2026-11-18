@@ -4,7 +4,8 @@
 - enabled: 是否启用应用内每日定时备份（默认 False，避免装上即跑）；
 - schedule_time: 每日执行时刻 HH:MM（Asia/Shanghai，与异地同步/设备备份一致）；
 - retention_days: __auto 备份保留天数（<=0 表示不按时间清理）；
-- keep_last: 至少保留最近 N 个 __auto 文件（<=0 表示不保底）。
+- keep_last: 至少保留最近 N 个 __auto 文件（<=0 表示不保底）；
+- auto_verify: 每次定时备份成功后，自动对刚产出的 dump 跑一次隔离库校验，失败则告警。
 
 注意：手动备份（__manual 及历史无标记文件）永不被保留策略删除，故此处无需 manual 开关。
 """
@@ -26,6 +27,7 @@ DEFAULTS = {
     "schedule_time": "03:30",
     "retention_days": 30,
     "keep_last": 7,
+    "auto_verify": False,
 }
 
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -52,6 +54,7 @@ def validate_config(config: dict) -> dict:
         "schedule_time": schedule_time,
         "retention_days": _non_neg_int(config.get("retention_days", DEFAULTS["retention_days"]), "保留天数"),
         "keep_last": _non_neg_int(config.get("keep_last", DEFAULTS["keep_last"]), "至少保留个数"),
+        "auto_verify": bool(config.get("auto_verify", False)),
     }
     return out
 
@@ -89,4 +92,5 @@ def get_effective_config(db_config: dict) -> dict:
         "schedule_time": merged.get("schedule_time") or DEFAULTS["schedule_time"],
         "retention_days": merged.get("retention_days", DEFAULTS["retention_days"]),
         "keep_last": merged.get("keep_last", DEFAULTS["keep_last"]),
+        "auto_verify": bool(merged.get("auto_verify", False)),
     }

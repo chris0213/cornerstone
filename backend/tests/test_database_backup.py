@@ -149,7 +149,7 @@ async def test_create_backup_pgdump_failure(client, backup_dir, monkeypatch):
 async def test_create_backup_pgdump_missing(client, backup_dir, monkeypatch):
     async def _raise(*a, **k):
         raise FileNotFoundError("pg_dump")
-    monkeypatch.setattr("src.api.database_backup.asyncio.create_subprocess_exec", _raise)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _raise)
     h = await _login(client)
     r = await client.post("/api/v1/database-backups/create", headers=h)
     assert r.status_code == 500
@@ -261,6 +261,7 @@ async def test_get_config_defaults(client, backup_dir):
     assert b["schedule_time"] == "03:30"
     assert b["retention_days"] == 30
     assert b["keep_last"] == 7
+    assert b["auto_verify"] is False
 
 
 @pytest.mark.asyncio
@@ -268,13 +269,15 @@ async def test_update_config_valid_and_persist(client, backup_dir):
     h = await _login(client)
     r = await client.put("/api/v1/database-backups/config",
                          json={"enabled": True, "schedule_time": "02:15",
-                               "retention_days": 14, "keep_last": 5}, headers=h)
+                               "retention_days": 14, "keep_last": 5,
+                               "auto_verify": True}, headers=h)
     assert r.status_code == 200, r.text
     b = r.json()
     assert b["enabled"] is True and b["schedule_time"] == "02:15"
     assert b["retention_days"] == 14 and b["keep_last"] == 5
+    assert b["auto_verify"] is True
     g = (await client.get("/api/v1/database-backups/config", headers=h)).json()
-    assert g["retention_days"] == 14 and g["enabled"] is True
+    assert g["retention_days"] == 14 and g["enabled"] is True and g["auto_verify"] is True
 
 
 @pytest.mark.asyncio
@@ -380,3 +383,80 @@ def test_apply_retention_days_zero_never_deletes(tmp_path, monkeypatch):
     res = dbsvc.apply_retention(retention_days=0, keep_last=0)
     assert res["deleted"] == []
     assert p.exists()
+
+
+# ==================== E：定时任务自动校验 + 告警 ====================
+
+def _patch_backup_job(monkeypatch, verify_result):
+    import src.services.db_backup_store as store
+    import src.tasks.db_backup_scheduler as sched
+
+    async def _fake_load(db):
+        return {"enabled": True, "schedule_time": "03:30",
+                "retention_days": 30, "keep_last": 7, "auto_verify": True}
+
+    async def _fake_dump(trigger):
+        return {"name": "cornerstone_h_t__auto.dump", "size_bytes": 10}
+
+    async def _fake_verify(path):
+        return verify_result
+
+    def _fake_resolve(name):
+        return "/tmp/x.dump"
+
+    alerts: list[tuple[str, str]] = []
+
+    async def _capture_alert(title, summary):
+        alerts.append((title, summary))
+
+    monkeypatch.setattr(store, "load_stored_config", _fake_load)
+    monkeypatch.setattr(dbsvc, "run_pg_dump", _fake_dump)
+    monkeypatch.setattr(dbsvc, "apply_retention", lambda d, k: {"deleted": []})
+    monkeypatch.setattr(dbsvc, "verify_dump", _fake_verify)
+    monkeypatch.setattr(dbsvc, "_safe_resolve", _fake_resolve)
+    monkeypatch.setattr(sched, "_send_alert", _capture_alert)
+    return sched, alerts
+
+
+@pytest.mark.asyncio
+async def test_db_backup_job_auto_verify_failure_alerts(monkeypatch):
+    sched, alerts = _patch_backup_job(
+        monkeypatch, {"ok": False, "restored": True, "checks": [], "error": "表行数异常"})
+    await sched._db_backup_job()
+    assert alerts, "校验未通过应触发告警"
+    assert "校验未通过" in alerts[0][0]
+    assert "表行数异常" in alerts[0][1]
+
+
+@pytest.mark.asyncio
+async def test_db_backup_job_auto_verify_success_no_alert(monkeypatch):
+    sched, alerts = _patch_backup_job(
+        monkeypatch, {"ok": True, "restored": True,
+                      "checks": [{"table": "devices", "count": 4}], "error": None})
+    await sched._db_backup_job()
+    assert alerts == []
+
+
+@pytest.mark.asyncio
+async def test_db_backup_job_backup_failure_alerts(monkeypatch):
+    import src.services.db_backup_store as store
+    import src.tasks.db_backup_scheduler as sched
+
+    async def _fake_load(db):
+        return {"enabled": True, "schedule_time": "03:30",
+                "retention_days": 30, "keep_last": 7, "auto_verify": True}
+
+    async def _boom(trigger):
+        raise RuntimeError("pg_dump 连接失败")
+
+    alerts = []
+
+    async def _capture_alert(title, summary):
+        alerts.append((title, summary))
+
+    monkeypatch.setattr(store, "load_stored_config", _fake_load)
+    monkeypatch.setattr(dbsvc, "run_pg_dump", _boom)
+    monkeypatch.setattr(sched, "_send_alert", _capture_alert)
+
+    await sched._db_backup_job()
+    assert alerts and "数据库备份失败" in alerts[0][0]

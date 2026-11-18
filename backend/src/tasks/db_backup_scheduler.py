@@ -2,9 +2,11 @@
 
 每日按配置的 schedule_time（HH:MM，Asia/Shanghai）执行一次 pg_dump（标记 __auto），
 随后按 retention_days + keep_last 清理过期 __auto 文件；手动备份（__manual/历史）不受影响。
+若 auto_verify 开启，备份成功后立即对刚产出的 dump 跑一次隔离库校验，失败/异常则告警。
 配置变更后由 API 调用 reload_db_backup_job 重新注册。
 """
 import logging
+import time
 
 from apscheduler.triggers.cron import CronTrigger
 
@@ -15,12 +17,34 @@ logger = logging.getLogger("cornerstone")
 
 JOB_ID = "db_backup_daily"
 
+# 进程内最近一次自动校验结果（重启即清，足够展示用）
+_last_verify: dict = {}
+
+
+def get_last_verify() -> dict:
+    return dict(_last_verify)
+
+
+async def _send_alert(title: str, summary: str) -> None:
+    """独立短会话发送告警，避免长时间持有备份/校验期间的连接。"""
+    from ..database import async_session
+    from ..services.alert_service import AlertService
+    try:
+        async with async_session() as db:
+            with system_scope():
+                await AlertService.send_db_backup_alert(db, title, summary)
+    except Exception as e:
+        logger.error(f"[数据库备份] 告警发送失败: {e}")
+
 
 async def _db_backup_job():
-    """定时入口：读配置→若启用则 pg_dump(auto) + 清理过期 auto。"""
+    """定时入口：备份 → 清理 → （可选）自动校验 → 失败告警。"""
+    global _last_verify
     from ..database import async_session
     from ..services.db_backup_store import load_stored_config, get_effective_config
-    from ..services.db_backup_service import run_pg_dump, apply_retention, TRIGGER_AUTO
+    from ..services.db_backup_service import (
+        run_pg_dump, apply_retention, verify_dump, _safe_resolve, TRIGGER_AUTO,
+    )
 
     async with async_session() as db:
         with system_scope():
@@ -28,6 +52,8 @@ async def _db_backup_job():
     if not cfg["enabled"]:
         logger.info("[数据库备份] 定时任务触发但未启用，跳过")
         return
+
+    # 1) 备份 + 保留清理
     try:
         res = await run_pg_dump(TRIGGER_AUTO)
         cleanup = apply_retention(cfg["retention_days"], cfg["keep_last"])
@@ -36,8 +62,27 @@ async def _db_backup_job():
             f"清理过期 auto {len(cleanup['deleted'])} 个"
         )
     except Exception as e:
-        # 定时任务异常只记录，不抛出（避免污染调度器）
         logger.error(f"[数据库备份] 定时备份失败: {e}")
+        await _send_alert("数据库备份失败", f"定时 pg_dump 失败：{e}")
+        return
+
+    # 2) 自动校验（可选）：对刚产出的 dump 跑隔离库恢复，失败/异常告警
+    if cfg.get("auto_verify"):
+        try:
+            path = _safe_resolve(res["name"])
+            vr = await verify_dump(path)
+            _last_verify = {"name": res["name"], "ok": bool(vr["ok"]),
+                            "at": time.time(), "error": vr.get("error")}
+            if not vr["ok"]:
+                reason = vr.get("error") or "校验未通过（隔离库恢复或关键表行数异常）"
+                logger.warning(f"[数据库备份] 自动校验未通过 {res['name']}: {reason}")
+                await _send_alert("数据库备份校验未通过", f"{res['name']}：{reason}")
+            else:
+                logger.info(f"[数据库备份] 自动校验通过 {res['name']}")
+        except Exception as e:
+            _last_verify = {"name": res["name"], "ok": False, "at": time.time(), "error": str(e)}
+            logger.error(f"[数据库备份] 自动校验异常 {res['name']}: {e}")
+            await _send_alert("数据库备份校验异常", f"{res['name']}：{e}")
 
 
 def _parse_time(schedule_time: str) -> tuple[int, int]:

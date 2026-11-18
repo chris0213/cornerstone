@@ -19,6 +19,9 @@ import time
 from sqlalchemy.engine import make_url
 
 from ..config import settings as app_config
+from ..utils.logger import get_logger
+
+logger = get_logger()
 
 # 容器内备份目录（compose 把宿主机 db_backups 读写挂到这里）；可用 env 覆盖
 BACKUP_DIR = os.environ.get("DB_BACKUP_DIR", "/opt/cornerstone/db_backups")
@@ -31,6 +34,13 @@ _DUMP_TIMEOUT = 600
 
 TRIGGER_AUTO = "auto"
 TRIGGER_MANUAL = "manual"
+
+# 恢复校验：固定隔离库名（非用户输入，防注入）；同一时刻只跑一个（手动与定时共用一把锁）
+VERIFY_DB_NAME = "cornerstone_verify"
+_verify_lock = asyncio.Lock()
+_VERIFY_TIMEOUT = 600
+# 校验时抽查的关键表（硬编码，非用户输入）
+_VERIFY_TABLES = ("devices", "users", "backups", "audit_logs", "sites", "circuits")
 
 
 def _safe_resolve(filename: str) -> str:
@@ -197,3 +207,57 @@ def apply_retention(retention_days: int, keep_last: int) -> dict:
         "auto_total": len(autos),
         "protected_manual": sum(1 for e in entries if e[3] != TRIGGER_AUTO),
     }
+
+
+async def verify_dump(path: str) -> dict:
+    """把已解析好的 dump 绝对路径恢复到隔离库 cornerstone_verify，抽查关键表行数后清理。
+
+    绝不触碰生产库 cornerstone；与手动校验共用 _verify_lock 串行。
+    返回 {ok, restored, checks:[{table,count}], error}；
+    抛错语义：TimeoutError（超时）/ RuntimeError（建库失败）/ FileNotFoundError（psql/pg_restore 不可用）。
+    """
+    parts = _db_conn_parts()
+    base = ["-h", parts["host"], "-p", parts["port"], "-U", parts["user"]]
+    env = {**os.environ, "PGPASSWORD": parts["password"]}
+    # 维护库用 postgres（连它来做 CREATE/DROP，避免连到目标库自身）
+    psql_admin = ["psql", *base, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc"]
+    # 抽查计数必须连隔离库本身（cornerstone_verify），不能连 postgres 维护库
+    psql_verify = ["psql", *base, "-d", VERIFY_DB_NAME, "-v", "ON_ERROR_STOP=1", "-tAc"]
+
+    async with _verify_lock:
+        checks: list[dict] = []
+        perr = ""
+        try:
+            # 1) 重建隔离库（FORCE 断开残留连接）
+            await _run_cmd([*psql_admin,
+                            f"DROP DATABASE IF EXISTS {VERIFY_DB_NAME} WITH (FORCE);"], env, 60)
+            rc, out, err = await _run_cmd([*psql_admin,
+                                           f"CREATE DATABASE {VERIFY_DB_NAME} OWNER {parts['user']};"], env, 60)
+            if rc != 0:
+                raise RuntimeError(f"创建隔离库失败：{err[:300]}")
+
+            # 2) 把 dump 恢复到隔离库（pg_restore 连隔离库）
+            prc, pout, perr = await _run_cmd(
+                ["pg_restore", *base, "-d", VERIFY_DB_NAME, "--no-owner", path], env, _VERIFY_TIMEOUT)
+            restored = (prc == 0)
+            if prc != 0:
+                logger.warning(f"[恢复校验] pg_restore rc={prc}: {perr[:500]}")
+
+            # 3) 抽查关键表行数（逐表，连隔离库；缺表记 N/A 不影响其它）
+            for t in _VERIFY_TABLES:
+                crc, cout, cerr = await _run_cmd([*psql_verify, f"SELECT count(*) FROM {t};"], env, 60)
+                if crc == 0 and cout.strip().isdigit():
+                    checks.append({"table": t, "count": int(cout.strip())})
+                else:
+                    checks.append({"table": t, "count": None})
+
+            ok = restored and any(c["count"] and c["count"] > 0 for c in checks)
+            return {"ok": ok, "restored": restored, "checks": checks,
+                    "error": None if restored else (perr[:300] or None)}
+        finally:
+            # 4) 无论成败，清理隔离库
+            try:
+                await _run_cmd([*psql_admin,
+                                f"DROP DATABASE IF EXISTS {VERIFY_DB_NAME} WITH (FORCE);"], env, 60)
+            except Exception as e:
+                logger.warning(f"[恢复校验] 清理隔离库失败（请手动 DROP {VERIFY_DB_NAME}）：{e}")

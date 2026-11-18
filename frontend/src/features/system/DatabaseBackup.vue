@@ -19,11 +19,13 @@ const exists = ref(true)
 const cfgLoading = ref(false)
 const cfgSaving = ref(false)
 const nextRun = ref<string | null>(null)
+const lastVerify = ref<{ name: string; ok: boolean; at: number; error?: string | null } | null>(null)
 const cfgForm = reactive({
   enabled: false,
   schedule_time: '03:30',
   retention_days: 30,
   keep_last: 7,
+  auto_verify: false,
 })
 
 // 恢复校验
@@ -126,7 +128,9 @@ const loadConfig = async () => {
     cfgForm.schedule_time = c.schedule_time
     cfgForm.retention_days = c.retention_days
     cfgForm.keep_last = c.keep_last
+    cfgForm.auto_verify = c.auto_verify
     nextRun.value = c.next_run ?? null
+    lastVerify.value = c.last_verify ?? null
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '加载备份调度配置失败')
   } finally {
@@ -142,6 +146,7 @@ const saveConfig = async () => {
       schedule_time: cfgForm.schedule_time,
       retention_days: cfgForm.retention_days,
       keep_last: cfgForm.keep_last,
+      auto_verify: cfgForm.auto_verify,
     })
     nextRun.value = res.next_run ?? null
     ElMessage.success('已保存备份调度配置')
@@ -169,6 +174,11 @@ onMounted(() => { load(); loadConfig() })
           <el-switch v-model="cfgForm.enabled" />
         </div>
         <div class="cfg-field">
+          <label>备份后自动校验</label>
+          <el-switch v-model="cfgForm.auto_verify" />
+          <span class="sub-hint">每次定时备份后自动恢复到隔离库校验，失败即告警</span>
+        </div>
+        <div class="cfg-field">
           <label>每日备份时间</label>
           <el-time-picker v-model="cfgForm.schedule_time" format="HH:mm" value-format="HH:mm"
             placeholder="03:30" style="width: 140px" />
@@ -190,6 +200,15 @@ onMounted(() => { load(); loadConfig() })
       </div>
       <p class="hint">
         下次自动备份：{{ nextRun ? new Date(nextRun).toLocaleString() : (cfgForm.enabled ? '（保存后由后端计算）' : '未启用') }}
+      </p>
+      <p class="hint">
+        最近自动校验：
+        <template v-if="lastVerify">
+          <el-tag size="small" :type="lastVerify.ok ? 'success' : 'danger'">{{ lastVerify.ok ? '通过' : '未通过' }}</el-tag>
+          {{ lastVerify.name }} · {{ new Date(lastVerify.at * 1000).toLocaleString() }}
+          <span v-if="lastVerify.error" class="verify-err">· {{ lastVerify.error }}</span>
+        </template>
+        <template v-else>{{ cfgForm.auto_verify ? '暂无记录（重启后清空）' : '未开启自动校验' }}</template>
       </p>
     </div>
 

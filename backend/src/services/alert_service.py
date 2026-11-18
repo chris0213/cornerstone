@@ -710,20 +710,16 @@ class AlertService:
         logger.info(f"自定义Webhook通知: {message}")
     
     @staticmethod
-    async def send_backup_notification(
-        db: AsyncSession, task_id: int, task_name: str, title: str, summary: str
-    ):
-        """备份任务通知统一入口（钉钉/企业微信/飞书/邮件）
+    async def _dispatch_backup_message(db: AsyncSession, message: str, channel_prefix: str):
+        """把一条消息扇出到已启用的通知渠道（钉钉/企业微信/飞书/邮件）。
 
-        逐渠道隔离异常，单渠道失败不影响其他渠道，且不向调用方抛出异常。
-        发送结果落 alert_notifications（record_id=None, channel='backup:<id>'）。
-        title 例：备份失败 / 配置变更。
+        逐渠道隔离异常，单渠道失败不影响其他渠道，且不向调用方抛出。
+        发送结果落 alert_notifications（record_id=None, channel='<prefix>:<channel>'）。
         """
         from src.utils.notification_store import get_notification_config, is_channel_enabled, is_email_ready
 
         try:
             config = await get_notification_config(db)
-            message = f"【{title}】任务 {task_id}（{task_name}）：{summary}"
             errors = []
             sent = False
 
@@ -740,7 +736,7 @@ class AlertService:
             for channel, coro in plans:
                 notification = AlertNotification(
                     record_id=None,
-                    channel=f"backup:{task_id}:{channel}",
+                    channel=f"{channel_prefix}:{channel}",
                     target="",
                     status="pending",
                 )
@@ -757,13 +753,24 @@ class AlertService:
             await db.commit()
 
             if sent:
-                logger.info(f"[备份通知] 任务 {task_id} {title}通知已发送: {summary}")
+                logger.info(f"[备份通知] 已发送（{channel_prefix}）: {message}")
             elif not errors:
-                logger.warning("[备份通知] 未配置任何通知渠道（钉钉/企业微信/飞书/邮件），跳过通知")
+                logger.warning(f"[备份通知]（{channel_prefix}）未配置任何通知渠道，跳过通知")
             if errors:
-                logger.error(f"[备份通知] 任务 {task_id} 部分渠道发送失败: {'; '.join(errors)}")
+                logger.error(f"[备份通知]（{channel_prefix}）部分渠道发送失败: {'; '.join(errors)}")
         except Exception as e:
-            logger.error(f"[备份通知] 任务 {task_id} {title}通知发送异常（不影响备份流程）: {e}")
+            logger.error(f"[备份通知]（{channel_prefix}）发送异常（不影响主流程）: {e}")
+
+    @staticmethod
+    async def send_backup_notification(
+        db: AsyncSession, task_id: int, task_name: str, title: str, summary: str
+    ):
+        """备份任务通知统一入口（钉钉/企业微信/飞书/邮件）
+
+        title 例：备份失败 / 配置变更。
+        """
+        message = f"【{title}】任务 {task_id}（{task_name}）：{summary}"
+        await AlertService._dispatch_backup_message(db, message, f"backup:{task_id}")
 
     @staticmethod
     async def send_backup_failure_notification(
@@ -771,6 +778,12 @@ class AlertService:
     ):
         """备份任务失败时推送通知（保留原签名，内部复用统一入口）"""
         await AlertService.send_backup_notification(db, task_id, task_name, "备份失败", summary)
+
+    @staticmethod
+    async def send_db_backup_alert(db: AsyncSession, title: str, summary: str):
+        """数据库整库备份线（备份/定时校验）的系统级告警，复用通知渠道扇出。"""
+        message = f"【{title}】{summary}"
+        await AlertService._dispatch_backup_message(db, message, "db_backup")
 
     @staticmethod
     async def send_backup_change_notification(
