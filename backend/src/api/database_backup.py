@@ -272,7 +272,7 @@ async def verify_backup(
 
             # 2) 把 dump 恢复到隔离库（pg_restore 连隔离库）
             prc, pout, perr = await _run_cmd(
-                ["pg_restore", *base, "-d", VERIFY_DB_NAME, "--no-owner", "--quiet", path],
+                ["pg_restore", *base, "-d", VERIFY_DB_NAME, "--no-owner", path],
                 env, _VERIFY_TIMEOUT)
             # pg_restore 对某些对象可能返回非 0 但数据可用；记录但据此判断
             restored = (prc == 0)

@@ -15,7 +15,7 @@ const dir = ref('')
 const exists = ref(true)
 
 // 恢复校验
-const verifying = ref(false)
+const verifyingName = ref('')
 const verifyDialog = ref(false)
 const verifyResult = ref<VerifyResult | null>(null)
 const verifyName = ref('')
@@ -94,7 +94,7 @@ const verify = async (f: DatabaseBackupFile) => {
   } catch {
     return
   }
-  verifying.value = true
+  verifyingName.value = f.name
   verifyName.value = f.name
   try {
     verifyResult.value = await verifyDatabaseBackup(f.name)
@@ -102,7 +102,7 @@ const verify = async (f: DatabaseBackupFile) => {
   } catch (e: any) {
     ElMessage.error('校验失败：' + (e.response?.data?.detail || e?.message || '未知错误'))
   } finally {
-    verifying.value = false
+    verifyingName.value = ''
   }
 }
 
@@ -139,7 +139,10 @@ onMounted(load)
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="download(row)">下载</el-button>
-            <el-button link type="primary" size="small" :loading="verifying" @click="verify(row)">校验</el-button>
+            <el-button link type="primary" size="small"
+              :loading="verifyingName === row.name"
+              :disabled="!!verifyingName && verifyingName !== row.name"
+              @click="verify(row)">校验</el-button>
             <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
