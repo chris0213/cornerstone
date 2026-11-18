@@ -43,6 +43,17 @@ _VERIFY_TIMEOUT = 600
 _VERIFY_TABLES = ("devices", "users", "backups", "audit_logs", "sites", "circuits")
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# 运行台账 db_backup_runs 只保留最近 N 条（默认 30，可用环境变量覆盖）
+RUNS_RETENTION_KEEP = _env_int("DB_BACKUP_RUNS_KEEP", 30)
+
+
 def _safe_resolve(filename: str) -> str:
     """把文件名解析为目录内的真实路径，越界/非法抛 ValueError。"""
     if not _FILENAME_RE.match(filename):
@@ -268,7 +279,10 @@ async def record_run(db, *, trigger: str, status: str, operator: str | None = No
                      duration_ms: int | None = None, error: str | None = None,
                      retention_deleted: int | None = None, verify_status: str | None = None,
                      verify_error: str | None = None, verify_checks: list | None = None) -> None:
-    """写一行数据库备份运行台账（系统级，不挂租户）。失败不抛出，仅记日志，避免影响主流程。"""
+    """写一行数据库备份运行台账（系统级，不挂租户），随后裁剪只保留最近 RUNS_RETENTION_KEEP 条。
+
+    失败不抛出，仅记日志，避免影响备份主流程。
+    """
     from ..models.db_backup_run import DbBackupRun
     try:
         db.add(DbBackupRun(
@@ -281,3 +295,31 @@ async def record_run(db, *, trigger: str, status: str, operator: str | None = No
     except Exception as e:
         await db.rollback()
         logger.error(f"[数据库备份] 写入运行台账失败（不影响备份主流程）: {e}")
+        return
+    await prune_runs(db)
+
+
+async def prune_runs(db, keep: int | None = None) -> int:
+    """裁剪 db_backup_runs 只保留最近 keep 条（默认 RUNS_RETENTION_KEEP）。keep<=0 不裁剪。
+
+    返回删除条数；失败只记日志不外抛。
+    """
+    from sqlalchemy import delete, select
+    from ..models.db_backup_run import DbBackupRun
+    if keep is None:
+        keep = RUNS_RETENTION_KEEP
+    if keep <= 0:
+        return 0
+    try:
+        keep_ids = select(DbBackupRun.id).order_by(
+            DbBackupRun.created_at.desc(), DbBackupRun.id.desc()).limit(keep)
+        result = await db.execute(delete(DbBackupRun).where(DbBackupRun.id.notin_(keep_ids)))
+        await db.commit()
+        deleted = result.rowcount or 0
+        if deleted:
+            logger.info(f"[数据库备份] 运行台账裁剪：删除 {deleted} 条，保留最近 {keep} 条")
+        return deleted
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[数据库备份] 裁剪运行台账失败（不影响主流程）: {e}")
+        return 0

@@ -540,3 +540,31 @@ async def test_list_runs_requires_super_admin(client, db_session, backup_dir):
     h = {"Authorization": f"Bearer {resp.json()['access_token']}"}
     r = await client.get("/api/v1/database-backups/runs", headers=h)
     assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prune_runs_keeps_last_n(db_session):
+    from src.models.db_backup_run import DbBackupRun
+    from src.services.db_backup_service import prune_runs
+    from sqlalchemy import select
+    for i in range(35):
+        db_session.add(DbBackupRun(trigger="auto", status="success", filename=f"f_{i}.dump"))
+    await db_session.commit()
+    deleted = await prune_runs(db_session, keep=30)
+    assert deleted == 5
+    rows = (await db_session.execute(select(DbBackupRun).order_by(DbBackupRun.id))).scalars().all()
+    assert len(rows) == 30
+    # 保留 id 最大的 30 条（最后插入的），删掉最早的 5 条
+    assert rows[0].filename == "f_5.dump"
+    assert rows[-1].filename == "f_34.dump"
+
+
+@pytest.mark.asyncio
+async def test_record_run_auto_prunes_to_cap(db_session):
+    from src.models.db_backup_run import DbBackupRun
+    from src.services.db_backup_service import record_run, RUNS_RETENTION_KEEP
+    from sqlalchemy import select, func
+    for i in range(RUNS_RETENTION_KEEP + 5):
+        await record_run(db_session, trigger="auto", status="success", filename=f"g_{i}.dump")
+    cnt = (await db_session.execute(select(func.count()).select_from(DbBackupRun))).scalar()
+    assert cnt == RUNS_RETENTION_KEEP
