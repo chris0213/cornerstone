@@ -568,3 +568,34 @@ async def test_record_run_auto_prunes_to_cap(db_session):
         await record_run(db_session, trigger="auto", status="success", filename=f"g_{i}.dump")
     cnt = (await db_session.execute(select(func.count()).select_from(DbBackupRun))).scalar()
     assert cnt == RUNS_RETENTION_KEEP
+
+
+# ==================== G：错过补跑（宕机兜底） ====================
+
+def test_compute_catchup_due():
+    from datetime import datetime
+    from src.tasks.db_backup_scheduler import compute_catchup_due, SCHED_TZ
+
+    cfg_off = {"enabled": False, "schedule_time": "03:30"}
+    assert compute_catchup_due(cfg_off, datetime(2026, 11, 18, 9, 0, tzinfo=SCHED_TZ)) == (False, None)
+
+    cfg = {"enabled": True, "schedule_time": "03:30"}
+    # 今天还没到点 → 不补（等 cron）
+    assert compute_catchup_due(cfg, datetime(2026, 11, 18, 2, 0, tzinfo=SCHED_TZ))[0] is False
+    # 已过点 → 需补，since 为 UTC
+    due, since = compute_catchup_due(cfg, datetime(2026, 11, 18, 9, 0, tzinfo=SCHED_TZ))
+    assert due is True
+    assert since.utcoffset().total_seconds() == 0
+    # since 应为今天 03:30（上海）= 09-18 19:30 UTC 前一天? 03:30 CST = 19:30 UTC(前一日)
+    assert since.hour == 19 and since.day == 17
+
+
+@pytest.mark.asyncio
+async def test_has_auto_run_since_ignores_manual(db_session):
+    from datetime import datetime, timezone, timedelta
+    from src.services.db_backup_service import record_run, has_auto_run_since
+    await record_run(db_session, trigger="manual", status="success", filename="m.dump")
+    now = datetime.now(timezone.utc)
+    assert await has_auto_run_since(db_session, now - timedelta(days=1)) is False
+    await record_run(db_session, trigger="auto", status="success", filename="a.dump")
+    assert await has_auto_run_since(db_session, now - timedelta(days=1)) is True

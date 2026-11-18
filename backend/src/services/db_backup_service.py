@@ -323,3 +323,15 @@ async def prune_runs(db, keep: int | None = None) -> int:
         await db.rollback()
         logger.error(f"[数据库备份] 裁剪运行台账失败（不影响主流程）: {e}")
         return 0
+
+
+async def has_auto_run_since(db, since) -> bool:
+    """台账里是否已有 since（含）之后触发的自动备份记录，用于判断今天是否已跑过。"""
+    from sqlalchemy import select
+    from ..models.db_backup_run import DbBackupRun
+    result = await db.execute(
+        select(DbBackupRun.id)
+        .where(DbBackupRun.trigger == TRIGGER_AUTO, DbBackupRun.created_at >= since)
+        .limit(1)
+    )
+    return result.first() is not None

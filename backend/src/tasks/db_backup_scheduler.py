@@ -7,6 +7,8 @@
 """
 import logging
 import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.triggers.cron import CronTrigger
 
@@ -16,6 +18,8 @@ from .backup_scheduler import scheduler
 logger = logging.getLogger("cornerstone")
 
 JOB_ID = "db_backup_daily"
+CATCHUP_JOB_ID = "db_backup_catchup"
+SCHED_TZ = ZoneInfo("Asia/Shanghai")  # 与 CronTrigger 调度同一时区
 
 # 进程内最近一次自动校验结果（重启即清，足够展示用）
 _last_verify: dict = {}
@@ -139,12 +143,42 @@ def remove_job() -> None:
         pass
 
 
+def compute_catchup_due(cfg: dict, now: datetime) -> tuple[bool, object]:
+    """判断是否需要补跑：启用 + 今天到点已过（今天没跑过由调用方查库确认）。
+
+    返回 (due, since_utc)；due=False 时 since_utc=None。now 须为带 Asia/Shanghai 的当前时间。
+    """
+    if not cfg.get("enabled"):
+        return False, None
+    h, m = _parse_time(cfg.get("schedule_time") or "03:30")
+    today_fire = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now < today_fire:
+        return False, None  # 今天还没到点，等 cron 正常触发
+    return True, today_fire.astimezone(timezone.utc)
+
+
+async def _maybe_catchup(db, cfg: dict) -> None:
+    """启动兜底：今天到点已过且台账里今天没有自动备份记录（宕机错过），补跑一次。"""
+    from ..services.db_backup_service import has_auto_run_since
+    due, since_utc = compute_catchup_due(cfg, datetime.now(SCHED_TZ))
+    if not due:
+        return
+    if await has_auto_run_since(db, since_utc):
+        return
+    logger.info("[数据库备份] 今天到点未跑（可能宕机错过），启动补跑一次")
+    scheduler.add_job(_db_backup_job, id=CATCHUP_JOB_ID, replace_existing=True)
+
+
 async def reload_db_backup_job(db) -> None:
-    """按当前配置重载定时任务（启用则注册，禁用则移除）。"""
-    from ..services.db_backup_store import load_stored_config
+    """按当前配置重载定时任务（启用则注册并检查补跑，禁用则移除）。"""
+    from ..services.db_backup_store import load_stored_config, get_effective_config
     with system_scope():
-        cfg = await load_stored_config(db)
-    if cfg and cfg.get("enabled"):
+        cfg = get_effective_config(await load_stored_config(db))
+    if cfg.get("enabled"):
         register_job(cfg.get("schedule_time") or "03:30")
+        try:
+            await _maybe_catchup(db, cfg)
+        except Exception as e:
+            logger.warning(f"[数据库备份] 补跑检查失败（不影响正常调度）: {e}")
     else:
         remove_job()
