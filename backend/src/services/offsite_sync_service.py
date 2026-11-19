@@ -84,12 +84,18 @@ def _normalize_source(config: dict) -> str:
     return src
 
 
+def _rclone_dest(config: dict) -> str:
+    """rclone 目标 remote:path（copy 与 check 共用，保证校验对象与传输对象一致）。"""
+    bucket = (config.get("rclone_bucket") or "").strip()
+    prefix = (config.get("rclone_prefix") or "").strip()
+    return f"offsite:{bucket}" + (f"/{prefix}" if prefix else "")
+
+
 def _build_rclone_argv(config: dict, tmpdir: str, *, test: bool) -> tuple[list[str], dict]:
     provider = config.get("rclone_provider") or "minio"
     endpoint = (config.get("rclone_endpoint") or "").strip()
     region = (config.get("rclone_region") or "").strip()
     bucket = (config.get("rclone_bucket") or "").strip()
-    prefix = (config.get("rclone_prefix") or "").strip()
 
     # 用 env 传密钥，避免写入配置文件与 argv
     env = dict(os.environ)
@@ -108,12 +114,11 @@ def _build_rclone_argv(config: dict, tmpdir: str, *, test: bool) -> tuple[list[s
     env["RCLONE_CONFIG"] = "/dev/null"
     env["RCLONE_NO_STATS"] = "1"
 
-    target = f"offsite:{bucket}" + (f"/{prefix}" if prefix and not test else "")
     if test:
         argv = ["rclone", "lsf", f"offsite:{bucket}", "--max-items", "1"]
     else:
         src = _normalize_source(config)
-        argv = ["rclone", "copy", src, target,
+        argv = ["rclone", "copy", src, _rclone_dest(config),
                 "--max-transfers", "4", "--timeout", "120s", "--contimeout", "30s"]
     return argv, env
 
@@ -185,6 +190,77 @@ def _build_command(config: dict, tmpdir: str, *, test: bool) -> tuple[list[str],
     raise SyncError(f"不支持的同步类型: {ttype}")
 
 
+async def _verify_sftp_sizes(config: dict, tmpdir: str, src: str) -> tuple[bool, str]:
+    """scp 无内置校验：传输后比对本地与远端每个文件的 size（防缺文件/截断）。
+
+    远端路径 = 已校验的 remote_path（仅 [A-Za-z0-9._/-]）+ 受控文件名（dump 命名，无空格/元字符），
+    故 ssh 远端命令 `stat -c %s %n <files>` 无注入、输出按空格切分安全。
+    """
+    host = config["sftp_host"]
+    port = int(config.get("sftp_port") or 22)
+    user = (config.get("sftp_user") or "").strip()
+    remote_path = config["sftp_remote_path"]
+    ssh_key = config.get("sftp_ssh_key") or ""
+    if not ssh_key:
+        return False, "缺少 SSH 私钥，无法校验"
+    names = sorted(f for f in os.listdir(src) if os.path.isfile(os.path.join(src, f)))
+    if not names:
+        return True, "无文件需校验"
+    keyfile = _write_secret_file(tmpdir, "id_ed25519", ssh_key)
+    remote_args = [f"{remote_path}/{n}" for n in names]
+    argv = ["ssh", *_ssh_common_opts(keyfile, port), "-p", str(port),
+            f"{user}@{host}", "stat", "-c", "%s %n", *remote_args]
+    rc, out, err = await _run(argv, dict(os.environ), _SYNC_TIMEOUT)
+    if rc != 0:
+        return False, f"远端 stat 失败（可能文件缺失）: {_mask(err or out)}"
+    remote: dict[str, int] = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        sp = line.split(" ", 1)
+        if len(sp) == 2 and sp[0].isdigit():
+            remote[os.path.basename(sp[1])] = int(sp[0])
+    mism: list[str] = []
+    for n in names:
+        try:
+            lsize = os.path.getsize(os.path.join(src, n))
+        except OSError:
+            continue
+        rsize = remote.get(n)
+        if rsize is None:
+            mism.append(f"{n}: 远端缺失")
+        elif rsize != lsize:
+            mism.append(f"{n}: 大小不符 本地{lsize} 远端{rsize}")
+    if mism:
+        return False, "落地大小不一致: " + "；".join(mism[:10])
+    return True, f"sftp size 校验通过（{len(names)} 文件）"
+
+
+async def _verify_landing(config: dict, tmpdir: str, env: dict) -> tuple[bool, str]:
+    """同步成功后的落地完整性校验，按类型返回 (ok, detail)。
+
+    - rclone：`rclone check --one-way`（源文件在目标存在且 size/hash 一致），纯 argv、不经远端 shell；
+    - rsync：rsync 协议在传输阶段已逐文件校验，rc=0 即代表远端与本地一致；
+    - sftp/scp：无内置校验，传输后比对本地/远端 size。
+    """
+    ttype = config["target_type"]
+    if ttype == "rsync":
+        return True, "rsync 协议内置一致性校验"
+    src = _normalize_source(config)
+    if ttype == "rclone":
+        dest = _rclone_dest(config)
+        argv = ["rclone", "check", src, dest, "--one-way",
+                "--max-transfers", "4", "--timeout", "120s", "--contimeout", "30s"]
+        rc, out, err = await _run(argv, env, _SYNC_TIMEOUT)
+        if rc == 0:
+            return True, "rclone check 通过"
+        return False, f"rclone check 不一致: {_mask(err or out)}"
+    if ttype == "sftp":
+        return await _verify_sftp_sizes(config, tmpdir, src)
+    return True, "无落地校验"
+
+
 async def run_sync(db_config: dict) -> dict:
     """执行一次异地同步。返回 {ok, message, target_type, duration_ms, error}。"""
     start = time.monotonic()
@@ -209,8 +285,16 @@ async def run_sync(db_config: dict) -> dict:
         rc, out, err = await _run(argv, env, _SYNC_TIMEOUT)
         dur = int((time.monotonic() - start) * 1000)
         if rc == 0:
-            logger.info(f"[异地同步] 成功 type={config['target_type']} 耗时={dur}ms")
-            return {"ok": True, "message": "同步成功", "target_type": config["target_type"],
+            # 传输成功后做落地完整性校验：不一致视为同步失败（触发台账失败 + 定时告警）
+            ok_v, detail_v = await _verify_landing(config, tmpdir, env)
+            if not ok_v:
+                logger.warning(f"[异地同步] 落地校验不一致 type={config['target_type']}: {detail_v}")
+                return {"ok": False, "message": "传输完成但落地校验不一致",
+                        "target_type": config["target_type"], "verify": "mismatch",
+                        "duration_ms": dur, "error": _mask(detail_v)}
+            logger.info(f"[异地同步] 成功 type={config['target_type']} 耗时={dur}ms 校验={detail_v}")
+            return {"ok": True, "message": f"同步成功（{detail_v}）",
+                    "target_type": config["target_type"], "verify": "passed",
                     "duration_ms": dur, "error": None}
         msg = _mask(err or out)
         logger.warning(f"[异地同步] 失败 type={config['target_type']} rc={rc}: {msg}")

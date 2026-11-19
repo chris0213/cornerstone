@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import os
 import re
+import shutil
 import socket
 import time
 
@@ -53,6 +54,11 @@ def _env_int(name: str, default: int) -> int:
 
 # 运行台账 db_backup_runs 只保留最近 N 条（默认 30，可用环境变量覆盖）
 RUNS_RETENTION_KEEP = _env_int("DB_BACKUP_RUNS_KEEP", 30)
+
+# pg_dump 前要求备份目录所在磁盘至少剩余的空闲空间（MB，默认 1024，可用环境变量覆盖）。
+# 目的：在快写满的盘上提前拒绝、给出明确原因，避免 dump 失败加剧磁盘压力、产出半成品。
+_MIN_FREE_MB = _env_int("DB_BACKUP_MIN_FREE_MB", 1024)
+MIN_FREE_BYTES = _MIN_FREE_MB * 1024 * 1024
 
 
 def _safe_resolve(filename: str) -> str:
@@ -145,6 +151,17 @@ async def run_pg_dump(trigger: str = TRIGGER_MANUAL) -> dict:
         raise ValueError(f"非法 trigger: {trigger}")
     if not os.path.isdir(BACKUP_DIR):
         os.makedirs(BACKUP_DIR, exist_ok=True)
+
+    # 磁盘空间预检：剩余不足则提前拒绝并给出明确原因（避免在快满的盘上产出半成品）。
+    # 检查本身异常时保守放行，绝不因预检逻辑阻断正常备份。
+    try:
+        free = shutil.disk_usage(BACKUP_DIR).free
+    except OSError as e:
+        logger.warning(f"[数据库备份] 磁盘空间检查失败，跳过预检：{e}")
+        free = None
+    if free is not None and free < MIN_FREE_BYTES:
+        raise RuntimeError(
+            f"磁盘剩余空间不足：{free // (1024 * 1024)}MB < 下限 {_MIN_FREE_MB}MB，已拒绝备份")
 
     parts = _db_conn_parts()
     if not parts["dbname"]:

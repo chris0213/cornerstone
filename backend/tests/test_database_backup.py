@@ -684,3 +684,27 @@ async def test_db_backup_job_integrity_mismatch_alerts(monkeypatch):
     assert alerts and "完整性异常" in alerts[0][0]
     assert runs[0]["verify_status"] == "failed"
     assert runs[0]["sha256"] == "A" * 64
+
+
+# ==================== 磁盘空间预检（C） ====================
+
+@pytest.mark.asyncio
+async def test_run_pg_dump_rejects_low_disk(monkeypatch, tmp_path):
+    """备份盘剩余不足 → 提前拒绝并抛明确 RuntimeError（不产出半成品、不加剧磁盘压力）。"""
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(dbsvc.shutil, "disk_usage", lambda p: type("DU", (), {"free": 100})())
+    with pytest.raises(RuntimeError) as ei:
+        await dbsvc.run_pg_dump("manual")
+    assert "磁盘剩余空间不足" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_run_pg_dump_proceeds_when_disk_sufficient(monkeypatch, tmp_path):
+    """磁盘充足 → 预检放行，进到后续步骤（以库名解析失败证明已越过预检）。"""
+    monkeypatch.setattr(dbsvc, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(dbsvc.shutil, "disk_usage", lambda p: type("DU", (), {"free": 10**12})())
+    monkeypatch.setattr(dbsvc, "_db_conn_parts",
+                        lambda: {"host": "h", "port": "5432", "user": "u", "dbname": "", "password": ""})
+    with pytest.raises(RuntimeError) as ei:
+        await dbsvc.run_pg_dump("manual")
+    assert "数据库名解析失败" in str(ei.value)

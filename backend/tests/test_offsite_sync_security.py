@@ -15,6 +15,7 @@ from src.services.offsite_sync_store import (
     OFFSITE_SYNC_KEY,
 )
 from src.services.offsite_sync_service import _build_command, run_sync, SyncError
+import src.services.offsite_sync_service as o
 
 
 # ==================== 校验层：拒绝外泄与注入 ====================
@@ -228,3 +229,92 @@ async def test_api_status_reports_tools(client, db_session):
     assert resp.status_code == 200
     body = resp.json()
     assert "tools" in body and "last_sync" in body
+
+
+# ==================== 落地完整性校验（B） ====================
+
+@pytest.mark.asyncio
+async def test_rclone_landing_check_pass(monkeypatch, tmp_path):
+    """rclone 传输成功后追加 rclone check，一致则 verify=passed。"""
+    src = tmp_path / "bk"; src.mkdir()
+    (src / "cornerstone_h_1__auto.dump").write_bytes(b"abc")
+    monkeypatch.setenv("OFFSITE_SYNC_ALLOWED_DIRS", str(src))
+    calls = []
+    async def fake_run(argv, env, timeout):
+        calls.append(argv[:2]); return (0, "", "")
+    monkeypatch.setattr(o, "_run", fake_run)
+    res = await o.run_sync({"enabled": True, "target_type": "rclone", "source_dir": str(src),
+                            "rclone_bucket": "bk", "rclone_access_key_id": "k",
+                            "rclone_secret_access_key": "s"})
+    assert res["ok"] is True and res["verify"] == "passed"
+    assert ["rclone", "check"] in calls
+
+
+@pytest.mark.asyncio
+async def test_rclone_landing_check_mismatch(monkeypatch, tmp_path):
+    """rclone check 不一致 → 整体判失败、verify=mismatch。"""
+    src = tmp_path / "bk"; src.mkdir()
+    (src / "cornerstone_h_1__auto.dump").write_bytes(b"abc")
+    monkeypatch.setenv("OFFSITE_SYNC_ALLOWED_DIRS", str(src))
+    async def fake_run(argv, env, timeout):
+        if argv[:2] == ["rclone", "check"]:
+            return (1, "", "ERROR : cornerstone_h_1__auto.dump: sizes differ")
+        return (0, "", "")
+    monkeypatch.setattr(o, "_run", fake_run)
+    res = await o.run_sync({"enabled": True, "target_type": "rclone", "source_dir": str(src),
+                            "rclone_bucket": "bk", "rclone_access_key_id": "k",
+                            "rclone_secret_access_key": "s"})
+    assert res["ok"] is False and res["verify"] == "mismatch"
+
+
+@pytest.mark.asyncio
+async def test_rsync_landing_relies_on_protocol_single_call(monkeypatch, tmp_path):
+    """rsync 依赖协议内置一致性，不额外发起校验命令（仅一次 rsync）。"""
+    src = tmp_path / "bk"; src.mkdir()
+    (src / "cornerstone_h_1__auto.dump").write_bytes(b"abc")
+    monkeypatch.setenv("OFFSITE_SYNC_ALLOWED_DIRS", str(src))
+    seen = []
+    async def fake_run(argv, env, timeout):
+        seen.append(argv[0]); return (0, "", "")
+    monkeypatch.setattr(o, "_run", fake_run)
+    res = await o.run_sync({"enabled": True, "target_type": "rsync", "source_dir": str(src),
+                            "rsync_host": "b.example.com", "rsync_port": 22, "rsync_user": "op",
+                            "rsync_remote_path": "db", "rsync_ssh_key": "PRIVKEY"})
+    assert res["ok"] is True and res["verify"] == "passed"
+    assert seen == ["rsync"]
+
+
+@pytest.mark.asyncio
+async def test_sftp_landing_size_match_pass(monkeypatch, tmp_path):
+    """scp 无内置校验：ssh stat 比对本地/远端 size 一致则通过。"""
+    src = tmp_path / "bk"; src.mkdir()
+    (src / "a.dump").write_bytes(b"123")
+    (src / "b.dump").write_bytes(b"45678")
+    monkeypatch.setenv("OFFSITE_SYNC_ALLOWED_DIRS", str(src))
+    async def fake_run(argv, env, timeout):
+        if argv[0] == "ssh" and "stat" in argv:
+            return (0, "3 /remote/a.dump\n5 /remote/b.dump\n", "")
+        return (0, "", "")
+    monkeypatch.setattr(o, "_run", fake_run)
+    res = await o.run_sync({"enabled": True, "target_type": "sftp", "source_dir": str(src),
+                            "sftp_host": "b.example.com", "sftp_port": 22, "sftp_user": "op",
+                            "sftp_remote_path": "remote", "sftp_ssh_key": "PRIVKEY"})
+    assert res["ok"] is True and res["verify"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_sftp_landing_size_mismatch_fail(monkeypatch, tmp_path):
+    """远端 size 与本地不符 → 落地校验失败。"""
+    src = tmp_path / "bk"; src.mkdir()
+    (src / "a.dump").write_bytes(b"123")
+    (src / "b.dump").write_bytes(b"45678")
+    monkeypatch.setenv("OFFSITE_SYNC_ALLOWED_DIRS", str(src))
+    async def fake_run(argv, env, timeout):
+        if argv[0] == "ssh" and "stat" in argv:
+            return (0, "3 /remote/a.dump\n4 /remote/b.dump\n", "")
+        return (0, "", "")
+    monkeypatch.setattr(o, "_run", fake_run)
+    res = await o.run_sync({"enabled": True, "target_type": "sftp", "source_dir": str(src),
+                            "sftp_host": "b.example.com", "sftp_port": 22, "sftp_user": "op",
+                            "sftp_remote_path": "remote", "sftp_ssh_key": "PRIVKEY"})
+    assert res["ok"] is False and res["verify"] == "mismatch"
