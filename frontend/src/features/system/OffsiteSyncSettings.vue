@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import {
   getOffsiteSyncConfig, updateOffsiteSyncConfig,
-  testOffsiteSync, runOffsiteSync, getOffsiteSyncStatus,
+  testOffsiteSync, runOffsiteSync, getOffsiteSyncStatus, listOffsiteSyncRuns,
 } from '../../api/offsiteSync'
-import type { OffsiteSyncView, OffsiteSyncPayload, OffsiteSyncResult, OffsiteSyncStatus } from '../../api/offsiteSync'
+import type { OffsiteSyncView, OffsiteSyncPayload, OffsiteSyncResult, OffsiteSyncStatus, OffsiteSyncRun } from '../../api/offsiteSync'
 
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const running = ref(false)
 const status = ref<OffsiteSyncStatus | null>(null)
+const runs = ref<OffsiteSyncRun[]>([])
+const runsLoading = ref(false)
 
 // 表单：非敏感字段直接编辑；敏感字段单独用 local 变量（留空=不修改）
 const form = reactive({
@@ -116,6 +119,7 @@ const run = async () => {
     if (r.ok) ElMessage.success('同步完成')
     else ElMessage.error(r.message + (r.error ? `：${r.error}` : ''))
     status.value = await getOffsiteSyncStatus()
+    loadRuns()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '同步失败')
   } finally {
@@ -130,7 +134,21 @@ const lastSyncText = computed(() => {
   return `${ls.ok ? '成功' : '失败'} · ${when} · ${ls.trigger || ''}${ls.error ? ' · ' + ls.error : ''}`
 })
 
-onMounted(load)
+const loadRuns = async () => {
+  runsLoading.value = true
+  try {
+    runs.value = await listOffsiteSyncRuns(50)
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '加载同步运行记录失败')
+  } finally {
+    runsLoading.value = false
+  }
+}
+
+const fmtRunTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—')
+const triggerLabel = (t?: string | null) => (t === 'auto' ? '自动' : '手动')
+
+onMounted(() => { load(); loadRuns() })
 </script>
 
 <template>
@@ -294,6 +312,44 @@ onMounted(load)
         </div>
       </div>
     </div>
+
+    <div class="card runs-card" v-loading="runsLoading">
+      <div class="head">
+        <div>
+          <div class="card-title">最近同步运行</div>
+          <p class="hint">每次异地同步（自动/手动）的运行台账，便于回溯对账与排查失败。仅保留最近若干条。</p>
+        </div>
+        <div class="head-actions">
+          <el-button :icon="Refresh" @click="loadRuns">刷新</el-button>
+        </div>
+      </div>
+      <el-table :data="runs" style="width: 100%">
+        <el-table-column label="时间" width="180">
+          <template #default="{ row }">{{ fmtRunTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="触发" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.trigger === 'auto' ? 'info' : 'success'">{{ triggerLabel(row.trigger) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="结果" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.status === 'success' ? 'success' : 'danger'">
+              {{ row.status === 'success' ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="target_type" label="类型" width="100" />
+        <el-table-column prop="operator" label="操作人" width="120" show-overflow-tooltip />
+        <el-table-column label="耗时" width="100">
+          <template #default="{ row }">{{ row.duration_ms != null ? row.duration_ms + ' ms' : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="说明 / 错误" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.error || row.message || '—' }}</template>
+        </el-table-column>
+        <template #empty>暂无同步运行记录</template>
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -316,4 +372,7 @@ onMounted(load)
 .actions { margin-top: 16px; display: flex; gap: 12px; }
 .status { margin-top: 16px; font-size: 13px; color: var(--text-secondary); }
 .tools { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+.runs-card { margin-top: 20px; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.head-actions { flex-shrink: 0; }
 </style>

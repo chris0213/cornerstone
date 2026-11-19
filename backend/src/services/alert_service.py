@@ -786,6 +786,12 @@ class AlertService:
         await AlertService._dispatch_backup_message(db, message, "db_backup")
 
     @staticmethod
+    async def send_offsite_sync_alert(db: AsyncSession, title: str, summary: str):
+        """异地备份同步线的系统级告警（同步失败等），复用通知渠道扇出。"""
+        message = f"【{title}】{summary}"
+        await AlertService._dispatch_backup_message(db, message, "offsite_sync")
+
+    @staticmethod
     async def send_backup_change_notification(
         db: AsyncSession, task_id: int, task_name: str, summary: str
     ):

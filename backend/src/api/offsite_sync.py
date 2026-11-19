@@ -8,13 +8,15 @@
 """
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings as app_config
 from ..database import get_db
 from ..models.audit_log import AuditLog
+from ..models.offsite_sync_run import OffsiteSyncRun
 from ..api.dependencies import require_super_admin
 from ..utils.ip_whitelist import get_client_ip_from_request
 from ..utils.logger import get_logger
@@ -22,7 +24,7 @@ from ..services.offsite_sync_store import (
     load_stored_config, save_stored_config, validate_config,
     mask_config_for_display, TARGET_TYPES,
 )
-from ..services.offsite_sync_service import run_sync, test_connection
+from ..services.offsite_sync_service import perform_sync, test_connection
 
 router = APIRouter()
 logger = get_logger()
@@ -191,7 +193,7 @@ async def run_now(
     if not stored:
         raise HTTPException(status_code=400, detail="尚未配置异地同步")
     global _last_sync_result
-    result = await run_sync(stored)
+    result = await perform_sync(db, stored, trigger="manual", operator=current_user.username)
     _last_sync_result = {**result, "at": time.time(), "trigger": "manual",
                         "operator": current_user.username}
     await _audit(db, http_request, current_user, "offsite_sync_run",
@@ -215,4 +217,35 @@ async def status(
             "rsync": bool(shutil.which("rsync")),
             "scp": bool(shutil.which("scp")),
         },
+    }
+
+
+@router.get("/runs")
+async def list_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_super_admin),
+):
+    """异地同步运行台账：最近 N 次同步记录，按时间倒序（仅 super_admin）。"""
+    result = await db.execute(
+        select(OffsiteSyncRun)
+        .order_by(OffsiteSyncRun.created_at.desc(), OffsiteSyncRun.id.desc()).limit(limit)
+    )
+    rows = result.scalars().all()
+    return {
+        "runs": [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "trigger": r.trigger,
+                "status": r.status,
+                "operator": r.operator,
+                "target_type": r.target_type,
+                "source_dir": r.source_dir,
+                "duration_ms": r.duration_ms,
+                "message": r.message,
+                "error": r.error,
+            }
+            for r in rows
+        ]
     }

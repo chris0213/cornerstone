@@ -27,6 +27,7 @@ from .report import MonthlyReport
 from .ai_chat_log import AIChatLog
 from .knowledge import KnowledgeArticle, KnowledgeCategory
 from .db_backup_run import DbBackupRun
+from .offsite_sync_run import OffsiteSyncRun
 
 __all__ = [
     'Tenant',
@@ -42,5 +43,6 @@ __all__ = [
     'AIChatLog',
     'KnowledgeArticle',
     'KnowledgeCategory',
-    'DbBackupRun'
+    'DbBackupRun',
+    'OffsiteSyncRun'
 ]

@@ -16,10 +16,11 @@ JOB_ID = "offsite_sync_daily"
 
 
 async def _offsite_sync_job():
-    """定时任务入口：读配置→若启用则执行同步。"""
+    """定时任务入口：读配置→若启用则执行同步→写台账→失败告警。"""
     from ..database import async_session
     from ..services.offsite_sync_store import load_stored_config
-    from ..services.offsite_sync_service import run_sync
+    from ..services.offsite_sync_service import perform_sync
+    from ..services.alert_service import AlertService
 
     async with async_session() as db:
         with system_scope():
@@ -27,8 +28,19 @@ async def _offsite_sync_job():
         if not cfg or not cfg.get("enabled"):
             logger.info("[异地同步] 定时任务触发但未启用，跳过")
             return
-        result = await run_sync(cfg)
+        result = await perform_sync(db, cfg, trigger="auto", operator="system")
         logger.info(f"[异地同步] 定时任务完成 ok={result.get('ok')} msg={result.get('message')}")
+        if not result.get("ok"):
+            # 定时同步静默失败是容灾盲区，主动告警（手动失败用户当场可见，不告警）
+            try:
+                with system_scope():
+                    await AlertService.send_offsite_sync_alert(
+                        db, "异地备份同步失败",
+                        f"定时异地同步失败（type={result.get('target_type')}）："
+                        f"{result.get('error') or result.get('message') or '未知原因'}",
+                    )
+            except Exception as e:
+                logger.error(f"[异地同步] 失败告警发送异常: {e}")
 
 
 def _parse_time(schedule_time: str) -> tuple[int, int]:

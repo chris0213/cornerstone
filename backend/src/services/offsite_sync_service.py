@@ -25,6 +25,17 @@ _SYNC_TIMEOUT = 600
 _TEST_TIMEOUT = 30
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# 运行台账 offsite_sync_runs 只保留最近 N 条（默认 30，可用环境变量覆盖）
+RUNS_RETENTION_KEEP = _env_int("OFFSITE_SYNC_RUNS_KEEP", 30)
+
+
 class SyncError(Exception):
     pass
 
@@ -240,3 +251,75 @@ async def test_connection(db_config: dict) -> dict:
     finally:
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ===== 运行台账（写库 + 裁剪）：仿 db_backup_service，系统级不挂租户 =====
+
+async def record_run(db, *, trigger: str, status: str, operator: str | None = None,
+                     target_type: str | None = None, source_dir: str | None = None,
+                     duration_ms: int | None = None, message: str | None = None,
+                     error: str | None = None) -> None:
+    """写一行异地同步运行台账，随后裁剪只保留最近 RUNS_RETENTION_KEEP 条。
+
+    失败不抛出，仅记日志，避免影响同步主流程。
+    """
+    from ..models.offsite_sync_run import OffsiteSyncRun
+    try:
+        db.add(OffsiteSyncRun(
+            trigger=trigger, status=status, operator=operator, target_type=target_type,
+            source_dir=source_dir, duration_ms=duration_ms,
+            message=(message or "")[:200] or None, error=error,
+        ))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[异地同步] 写入运行台账失败（不影响同步主流程）: {e}")
+        return
+    await prune_runs(db)
+
+
+async def prune_runs(db, keep: int | None = None) -> int:
+    """裁剪 offsite_sync_runs 只保留最近 keep 条（默认 RUNS_RETENTION_KEEP）。keep<=0 不裁剪。
+
+    返回删除条数；失败只记日志不外抛。
+    """
+    from sqlalchemy import delete, select
+    from ..models.offsite_sync_run import OffsiteSyncRun
+    if keep is None:
+        keep = RUNS_RETENTION_KEEP
+    if keep <= 0:
+        return 0
+    try:
+        keep_ids = select(OffsiteSyncRun.id).order_by(
+            OffsiteSyncRun.created_at.desc(), OffsiteSyncRun.id.desc()).limit(keep)
+        result = await db.execute(delete(OffsiteSyncRun).where(OffsiteSyncRun.id.notin_(keep_ids)))
+        await db.commit()
+        deleted = result.rowcount or 0
+        if deleted:
+            logger.info(f"[异地同步] 运行台账裁剪：删除 {deleted} 条，保留最近 {keep} 条")
+        return deleted
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[异地同步] 裁剪运行台账失败（不影响主流程）: {e}")
+        return 0
+
+
+async def perform_sync(db, cfg: dict, *, trigger: str, operator: str | None = None) -> dict:
+    """同步 + 写台账的统一入口：手动/定时两条路径都经此，确保每次同步都留痕。
+
+    仅负责「执行 + 记台账」，是否告警由调用方决定（定时失败需告警，手动失败用户当场可见）。
+    返回 run_sync 的原始结果 {ok, message, target_type, duration_ms, error}。
+    """
+    result = await run_sync(cfg)
+    await record_run(
+        db,
+        trigger=trigger,
+        status="success" if result.get("ok") else "failed",
+        operator=operator,
+        target_type=result.get("target_type") or cfg.get("target_type"),
+        source_dir=cfg.get("source_dir"),
+        duration_ms=result.get("duration_ms"),
+        message=result.get("message"),
+        error=result.get("error"),
+    )
+    return result

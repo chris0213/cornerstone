@@ -82,3 +82,23 @@ export const getOffsiteSyncStatus = async (): Promise<OffsiteSyncStatus> => {
   const { data } = await api.get('/offsite-sync/status')
   return data
 }
+
+// ==================== 运行台账 ====================
+
+export interface OffsiteSyncRun {
+  id: number
+  created_at: string | null
+  trigger: 'auto' | 'manual'
+  status: 'success' | 'failed'
+  operator?: string | null
+  target_type?: string | null
+  source_dir?: string | null
+  duration_ms?: number | null
+  message?: string | null
+  error?: string | null
+}
+
+export const listOffsiteSyncRuns = async (limit = 50): Promise<OffsiteSyncRun[]> => {
+  const { data } = await api.get('/offsite-sync/runs', { params: { limit } })
+  return data.runs
+}
