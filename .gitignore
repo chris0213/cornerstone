@@ -53,6 +53,8 @@ frontend/.env.*
 docs/*.md
 
 # 生成的报告、临时数据
+# 根目录的开发过程报告（验收 / 修复总结等），不入库
+/*报告.md
 backend/data/
 test*.pdf
 quick_test.py
