@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -168,13 +168,29 @@ function costLastValue(type: string): number {
   return arr[arr.length - 1] || 0
 }
 
+// 图表实例集中管理：复用已有实例，卸载时统一 dispose，防止路由反复进入累积泄漏
+const chartInstances: echarts.ECharts[] = []
+
+function getChartInstance(dom: HTMLElement): echarts.ECharts {
+  // 复用已有实例，避免重复 init 导致旧实例泄漏
+  const existing = echarts.getInstanceByDom(dom)
+  if (existing) return existing
+  const instance = echarts.init(dom)
+  chartInstances.push(instance)
+  return instance
+}
+
+function handleChartResize() {
+  chartInstances.forEach(c => c.resize())
+}
+
 function initCostChart() {
   if (!costTrendData.value) return
 
   const chartDom = document.getElementById('cost-trend-chart')
   if (!chartDom) return
 
-  const myChart = echarts.init(chartDom)
+  const myChart = getChartInstance(chartDom)
 
   const months = costTrendData.value.months.map(m => m.slice(5) + '月')
 
@@ -256,11 +272,8 @@ function initLifecycleChart() {
   if (!chartDom) return
   
   // 确保DOM存在再初始化图表
-  const myChart = echarts.init(chartDom);
-  
-  // 添加窗口大小变化监听，自动适配图表大小
-  window.addEventListener('resize', () => myChart.resize());
-  
+  const myChart = getChartInstance(chartDom)
+
   const raw = lifecycleData.value.age_distribution || []
   // 从数据中剔除未设置项用于绘图
   const unsetEntry = raw.find(d => d.range && d.range.includes('未设置'))
@@ -483,6 +496,13 @@ function getExpiringTrendText(): string {
 
 onMounted(() => {
   loadData()
+  window.addEventListener('resize', handleChartResize)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleChartResize)
+  chartInstances.forEach(c => c.dispose())
+  chartInstances.length = 0
 })
 </script>
 

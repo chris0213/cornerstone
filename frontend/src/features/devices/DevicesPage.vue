@@ -331,13 +331,7 @@ function getIpAddress(id: string | number | null | undefined): string {
   return ipAddresses.value.find(ip => String(ip.id) === String(id))?.address || '-'
 }
 
-onMounted(async () => {
-  try {
-    ipAddresses.value = await getIPAddresses()
-  } catch (error) {
-    console.error('Failed to load IP addresses:', error)
-  }
-})
+// 注：IP 基础列表由下方主 onMounted 统一加载，此处不再单独请求（历史上曾双份并发请求）
 
 function getWarrantyDays(endDate: string) {
   if (!endDate) return null

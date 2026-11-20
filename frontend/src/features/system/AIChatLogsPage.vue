@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '../../store/auth'
 import { getChatLogs, exportChatLogsCsv, type ChatLogItem } from '../../api/ai'
@@ -102,6 +102,10 @@ let keywordTimer: ReturnType<typeof setTimeout> | undefined
 watch(keyword, () => {
   if (keywordTimer) clearTimeout(keywordTimer)
   keywordTimer = setTimeout(onSearch, 300)
+})
+// 卸载时清掉待触发的防抖查询，避免离开页面后仍发起多余 API 调用
+onBeforeUnmount(() => {
+  if (keywordTimer) clearTimeout(keywordTimer)
 })
 
 function onPageChange() {

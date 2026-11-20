@@ -174,7 +174,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Search, Clock, Loading, WarningFilled, MagicStick } from '@element-plus/icons-vue'
@@ -194,6 +194,11 @@ const suggestions = ref<string[]>([])
 const history = ref<string[]>(loadHistory())
 const inputRef = ref<HTMLInputElement | null>(null)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// 卸载时清掉待触发的防抖请求，避免离开页面后仍发起多余 API 调用
+onBeforeUnmount(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+})
 
 const isAiMode = ref(false)
 
