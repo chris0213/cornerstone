@@ -466,6 +466,7 @@ cornerstone/
 │   │   └── App.vue
 │   └── package.json
 ├── docs/                         # 文档
+│   └── audit/                    # 安全审计报告（SECURITY_AUDIT.md）
 ├── LICENSE
 └── README.md
 ```
